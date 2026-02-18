@@ -8,5 +8,5 @@ export interface ChatMessage {
 export interface AIProvider {
   readonly name: string;
   readonly toolRegistry: ToolRegistry;
-  chat(messages: ChatMessage[], systemPrompt?: string): Promise<string>;
+  chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<string>;
 }

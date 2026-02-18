@@ -93,6 +93,10 @@ export const configSchema = z.object({
   log: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }),
+  skills: z.record(z.string(), z.object({
+    description: z.string().optional(),
+    alwaysActive: z.boolean().optional(),
+  })).default({}),
   mcpServers: z.record(z.string(), z.object({
     command: z.string().optional(),
     args: z.array(z.string()).default([]),

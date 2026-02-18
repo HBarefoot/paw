@@ -3,6 +3,7 @@ import type { MessageParam, ContentBlockParam, ToolUseBlock, ToolResultBlockPara
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import type { AIProvider, ChatMessage } from "./base-provider.js";
+import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
 
 export interface ClaudeProviderConfig {
@@ -20,9 +21,10 @@ export class ClaudeProvider implements AIProvider {
   private maxTokens: number;
   private maxToolRoundtrips: number;
   readonly toolRegistry: ToolRegistry;
+  private skillManager: SkillManager | null;
   private logger: Logger;
 
-  constructor(config: ClaudeProviderConfig, toolRegistry: ToolRegistry, logger: Logger) {
+  constructor(config: ClaudeProviderConfig, toolRegistry: ToolRegistry, logger: Logger, skillManager?: SkillManager) {
     if (config.authMethod === "oauth") {
       this.client = new Anthropic({ authToken: config.apiKey, apiKey: null });
     } else {
@@ -33,6 +35,7 @@ export class ClaudeProvider implements AIProvider {
     this.maxTokens = config.maxTokens;
     this.maxToolRoundtrips = config.maxToolRoundtrips;
     this.toolRegistry = toolRegistry;
+    this.skillManager = skillManager ?? null;
     this.logger = logger;
 
     this.logger.info("Claude provider initialized", { authMethod: config.authMethod, model: config.model });
@@ -57,8 +60,16 @@ export class ClaudeProvider implements AIProvider {
     throw lastError;
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
-    const tools = this.toolRegistry.toAnthropicTools();
+  private getTools(sessionId?: string) {
+    if (!this.skillManager || !sessionId) {
+      return this.toolRegistry.toAnthropicTools();
+    }
+    const allowed = this.skillManager.getActiveToolNames(sessionId);
+    allowed.add("activate_skill");
+    return this.toolRegistry.toAnthropicToolsFiltered(allowed);
+  }
+
+  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<string> {
     let roundtrips = 0;
     const conversation: MessageParam[] = messages.map((m) => ({
       role: m.role,
@@ -66,7 +77,8 @@ export class ClaudeProvider implements AIProvider {
     }));
 
     while (roundtrips < this.maxToolRoundtrips) {
-      this.logger.debug("Sending request to Claude", { roundtrip: roundtrips, messageCount: conversation.length });
+      const tools = this.getTools(sessionId);
+      this.logger.debug("Sending request to Claude", { roundtrip: roundtrips, messageCount: conversation.length, toolCount: tools.length });
 
       const response = await this.withRetry(() =>
         this.client.messages.stream({
@@ -91,6 +103,20 @@ export class ClaudeProvider implements AIProvider {
 
       const toolResults: ToolResultBlockParam[] = [];
       for (const block of toolUseBlocks) {
+        if (block.name === "activate_skill" && this.skillManager && sessionId) {
+          const skillName = (block.input as Record<string, unknown>).skill as string;
+          const entry = this.skillManager.activateSkill(sessionId, skillName);
+          if (entry) {
+            this.logger.info("Skill activated", { skill: skillName, tools: entry.toolNames });
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: `Skill "${skillName}" activated. You now have access to: ${entry.toolNames.join(", ")}`,
+            });
+            continue;
+          }
+        }
+
         this.logger.info("Executing tool", { tool: block.name, id: block.id });
         const result = await this.toolRegistry.execute(block.name, block.input as Record<string, unknown>);
         toolResults.push({

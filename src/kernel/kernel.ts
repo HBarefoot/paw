@@ -22,6 +22,7 @@ import { RateLimiter } from "../security/rate-limiter.js";
 import { createWebApp } from "../web/app.js";
 import { startWebServer } from "../web/server.js";
 import { MCPClientManager } from "../mcp/client-manager.js";
+import { SkillManager } from "../ai/skills.js";
 import { createFileTools } from "../tools/file-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
 import { createLogger, setLogLevel } from "../observability/logger.js";
@@ -45,6 +46,7 @@ export class Kernel {
   private rateLimiter: RateLimiter | null = null;
   private webServer: { stop: () => void } | null = null;
   private mcpClientManager: MCPClientManager;
+  private skillManager: SkillManager;
   private logger = createLogger("kernel");
 
   constructor(config: PawConfig) {
@@ -69,6 +71,7 @@ export class Kernel {
     }
 
     const aiLogger = createLogger("ai");
+    this.skillManager = new SkillManager();
 
     // Connect sandbox to tool registry for permission enforcement
     if (config.security.enforcePermissions) {
@@ -76,13 +79,13 @@ export class Kernel {
     }
 
     if (config.provider === "ollama") {
-      this.provider = new OllamaProvider(config.ollama, this.toolRegistry, aiLogger);
+      this.provider = new OllamaProvider(config.ollama, this.toolRegistry, aiLogger, this.skillManager);
     } else if (config.provider === "openai") {
-      this.provider = new OpenAIProvider(config.openai, this.toolRegistry, aiLogger);
+      this.provider = new OpenAIProvider(config.openai, this.toolRegistry, aiLogger, this.skillManager);
     } else if (config.provider === "gemini") {
-      this.provider = new GeminiProvider(config.gemini, this.toolRegistry, aiLogger);
+      this.provider = new GeminiProvider(config.gemini, this.toolRegistry, aiLogger, this.skillManager);
     } else {
-      this.provider = new ClaudeProvider(config.ai, this.toolRegistry, aiLogger);
+      this.provider = new ClaudeProvider(config.ai, this.toolRegistry, aiLogger, this.skillManager);
     }
 
     // Initialize memory system
@@ -177,6 +180,18 @@ export class Kernel {
         }
       }
     }
+
+    // Build skill catalog from all registered tools
+    this.skillManager.buildFromRegistry(this.toolRegistry);
+    try {
+      const { readConfigOverrides } = await import("../config/writer.js");
+      const overrides = readConfigOverrides();
+      if (overrides.skills) {
+        this.skillManager.applyOverrides(overrides.skills as Record<string, { description?: string; alwaysActive?: boolean }>);
+      }
+    } catch { /* no overrides */ }
+    this.toolRegistry.register([this.skillManager.createActivateSkillTool()]);
+    this.logger.info("Skills initialized", { skills: this.skillManager.skillNames });
 
     // Start cron scheduler after plugins
     this.cronScheduler?.start();
@@ -310,6 +325,7 @@ export class Kernel {
       agentName,
       customPrompt: agentPrompt || undefined,
       memoryContext,
+      skillCatalog: this.skillManager.getCatalogPrompt(),
     });
 
     this.logger.info("System prompt built", {
@@ -320,7 +336,7 @@ export class Kernel {
     });
 
     try {
-      const response = await this.provider.chat(messages, systemPrompt);
+      const response = await this.provider.chat(messages, systemPrompt, msg.sessionId);
       appendMessage(this.db, msg.sessionId, "assistant", response);
 
       await this.bus.emit("message:outbound", {
@@ -456,6 +472,10 @@ export class Kernel {
 
   get pluginNames(): string[] {
     return this.plugins.map((p) => p.name);
+  }
+
+  get skills(): SkillManager {
+    return this.skillManager;
   }
 
   get eventBus(): EventBus {

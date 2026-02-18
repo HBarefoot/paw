@@ -1,6 +1,7 @@
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import type { AIProvider, ChatMessage } from "./base-provider.js";
+import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
 
 export interface OpenAIProviderConfig {
@@ -52,22 +53,42 @@ export class OpenAIProvider implements AIProvider {
   private maxToolRoundtrips: number;
   private baseUrl: string;
   readonly toolRegistry: ToolRegistry;
+  private skillManager: SkillManager | null;
   private logger: Logger;
 
-  constructor(config: OpenAIProviderConfig, toolRegistry: ToolRegistry, logger: Logger) {
+  constructor(config: OpenAIProviderConfig, toolRegistry: ToolRegistry, logger: Logger, skillManager?: SkillManager) {
     this.apiKey = config.apiKey;
     this.model = config.model;
     this.maxTokens = config.maxTokens;
     this.maxToolRoundtrips = config.maxToolRoundtrips;
     this.baseUrl = (config.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
     this.toolRegistry = toolRegistry;
+    this.skillManager = skillManager ?? null;
     this.logger = logger;
 
     this.logger.info("OpenAI provider initialized", { model: this.model, baseUrl: this.baseUrl });
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
-    const tools = this.buildTools();
+  private getTools(sessionId?: string): OpenAITool[] {
+    const raw = (!this.skillManager || !sessionId)
+      ? this.toolRegistry.toAnthropicTools()
+      : (() => {
+          const allowed = this.skillManager.getActiveToolNames(sessionId);
+          allowed.add("activate_skill");
+          return this.toolRegistry.toAnthropicToolsFiltered(allowed);
+        })();
+
+    return raw.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.input_schema,
+      },
+    }));
+  }
+
+  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<string> {
     let roundtrips = 0;
 
     const conversation: OpenAIMessage[] = [
@@ -76,7 +97,8 @@ export class OpenAIProvider implements AIProvider {
     ];
 
     while (roundtrips < this.maxToolRoundtrips) {
-      this.logger.debug("Sending request to OpenAI", { roundtrip: roundtrips, model: this.model });
+      const tools = this.getTools(sessionId);
+      this.logger.debug("Sending request to OpenAI", { roundtrip: roundtrips, model: this.model, toolCount: tools.length });
 
       const body: Record<string, unknown> = {
         model: this.model,
@@ -122,13 +144,28 @@ export class OpenAIProvider implements AIProvider {
 
       // Execute each tool call and add results
       for (const call of toolCalls) {
-        this.logger.info("Executing tool", { tool: call.function.name, id: call.id });
         let args: Record<string, unknown>;
         try {
           args = JSON.parse(call.function.arguments);
         } catch {
           args = {};
         }
+
+        if (call.function.name === "activate_skill" && this.skillManager && sessionId) {
+          const skillName = args.skill as string;
+          const entry = this.skillManager.activateSkill(sessionId, skillName);
+          if (entry) {
+            this.logger.info("Skill activated", { skill: skillName, tools: entry.toolNames });
+            conversation.push({
+              role: "tool",
+              content: `Skill "${skillName}" activated. You now have access to: ${entry.toolNames.join(", ")}`,
+              tool_call_id: call.id,
+            });
+            continue;
+          }
+        }
+
+        this.logger.info("Executing tool", { tool: call.function.name, id: call.id });
         const result = await this.toolRegistry.execute(call.function.name, args);
         conversation.push({
           role: "tool",
@@ -141,16 +178,5 @@ export class OpenAIProvider implements AIProvider {
     }
 
     return "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.";
-  }
-
-  private buildTools(): OpenAITool[] {
-    return this.toolRegistry.toAnthropicTools().map((t) => ({
-      type: "function" as const,
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.input_schema,
-      },
-    }));
   }
 }

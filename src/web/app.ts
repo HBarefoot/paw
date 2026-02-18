@@ -6,6 +6,7 @@ import { CronPage } from "./views/cron-page.js";
 import { MemoryPage } from "./views/memory-page.js";
 import { SessionsListPage, SessionDetailPage } from "./views/sessions-page.js";
 import { MCPPage } from "./views/mcp-page.js";
+import { SkillsPage } from "./views/skills-page.js";
 import { readConfigOverrides, saveConfigOverrides } from "../config/writer.js";
 import { listRecentSessions, getSessionWithMessages, deleteSession, updateSessionTitle } from "../store/sessions.js";
 import { isValidCron } from "../cron/parser.js";
@@ -174,6 +175,15 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
     return c.html(SessionDetailPage({ session: data.session, messages: data.messages }));
   });
 
+  // --- Skills Page ---
+
+  app.get("/skills", (c) => {
+    const skills = kernel.skills.getAllSkills();
+    const totalTools = skills.reduce((sum, s) => sum + s.toolNames.length, 0);
+    const success = c.req.query("success") ? "Skill updated successfully." : undefined;
+    return c.html(SkillsPage({ skills, totalTools, success }));
+  });
+
   // --- MCP Page ---
 
   app.get("/mcp", (c) => {
@@ -184,6 +194,31 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
   });
 
   // --- API ---
+
+  // Skills API
+  app.get("/api/skills", (c) => {
+    return c.json({ skills: kernel.skills.getAllSkills() });
+  });
+
+  app.post("/api/skills/:name/toggle", async (c) => {
+    const name = decodeURIComponent(c.req.param("name"));
+    const body = await c.req.json<{ alwaysActive: boolean }>();
+    const skill = kernel.skills.getSkill(name);
+    if (!skill) return c.json({ error: "Skill not found" }, 404);
+    kernel.skills.setAlwaysActive(name, body.alwaysActive);
+    saveConfigOverrides({ skills: kernel.skills.toOverrides() });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/skills/:name/description", async (c) => {
+    const name = decodeURIComponent(c.req.param("name"));
+    const body = await c.req.json<{ description: string }>();
+    const skill = kernel.skills.getSkill(name);
+    if (!skill) return c.json({ error: "Skill not found" }, 404);
+    kernel.skills.setDescription(name, body.description);
+    saveConfigOverrides({ skills: kernel.skills.toOverrides() });
+    return c.json({ ok: true });
+  });
 
   app.get("/api/status", async (c) => {
     const health = await kernel.healthCheck();

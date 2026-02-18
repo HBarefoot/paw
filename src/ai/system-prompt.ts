@@ -19,6 +19,7 @@ export function buildSystemPrompt(opts?: {
   agentName?: string;
   customPrompt?: string;
   memoryContext?: string;
+  skillCatalog?: string;
 }): string {
   let prompt: string;
 
@@ -31,6 +32,10 @@ export function buildSystemPrompt(opts?: {
     prompt = `${DEFAULT_INTRO.replace("Paw", opts.agentName)}\n${GUIDELINES}\n`;
   } else {
     prompt = DEFAULT_SYSTEM_PROMPT;
+  }
+
+  if (opts?.skillCatalog) {
+    prompt += opts.skillCatalog;
   }
 
   if (opts?.memoryContext) {

@@ -64,12 +64,26 @@ export class ToolRegistry {
     return tool.plugin;
   }
 
+  allTools(): IterableIterator<ToolDefinition> {
+    return this.tools.values();
+  }
+
   toAnthropicTools(): Array<{ name: string; description: string; input_schema: Record<string, unknown> }> {
     return Array.from(this.tools.values()).map((t) => ({
       name: t.name,
       description: t.description,
       input_schema: t.input_schema,
     }));
+  }
+
+  toAnthropicToolsFiltered(allowedNames: Set<string>): Array<{ name: string; description: string; input_schema: Record<string, unknown> }> {
+    return Array.from(this.tools.values())
+      .filter((t) => allowedNames.has(t.name))
+      .map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.input_schema,
+      }));
   }
 
   get size(): number {

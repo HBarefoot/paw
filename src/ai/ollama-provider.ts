@@ -1,6 +1,7 @@
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import type { AIProvider, ChatMessage } from "./base-provider.js";
+import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
 
 export interface OllamaProviderConfig {
@@ -46,20 +47,40 @@ export class OllamaProvider implements AIProvider {
   private model: string;
   private maxToolRoundtrips: number;
   readonly toolRegistry: ToolRegistry;
+  private skillManager: SkillManager | null;
   private logger: Logger;
 
-  constructor(config: OllamaProviderConfig, toolRegistry: ToolRegistry, logger: Logger) {
+  constructor(config: OllamaProviderConfig, toolRegistry: ToolRegistry, logger: Logger, skillManager?: SkillManager) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.model = config.model;
     this.maxToolRoundtrips = config.maxToolRoundtrips;
     this.toolRegistry = toolRegistry;
+    this.skillManager = skillManager ?? null;
     this.logger = logger;
 
     this.logger.info("Ollama provider initialized", { baseUrl: this.baseUrl, model: this.model });
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
-    const tools = this.buildTools();
+  private getTools(sessionId?: string): OllamaTool[] {
+    const raw = (!this.skillManager || !sessionId)
+      ? this.toolRegistry.toAnthropicTools()
+      : (() => {
+          const allowed = this.skillManager.getActiveToolNames(sessionId);
+          allowed.add("activate_skill");
+          return this.toolRegistry.toAnthropicToolsFiltered(allowed);
+        })();
+
+    return raw.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.input_schema,
+      },
+    }));
+  }
+
+  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<string> {
     let roundtrips = 0;
 
     const actualSystemPrompt = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
@@ -75,7 +96,8 @@ export class OllamaProvider implements AIProvider {
     });
 
     while (roundtrips < this.maxToolRoundtrips) {
-      this.logger.debug("Sending request to Ollama", { roundtrip: roundtrips, model: this.model });
+      const tools = this.getTools(sessionId);
+      this.logger.debug("Sending request to Ollama", { roundtrip: roundtrips, model: this.model, toolCount: tools.length });
 
       const body: Record<string, unknown> = {
         model: this.model,
@@ -115,6 +137,19 @@ export class OllamaProvider implements AIProvider {
 
       // Execute each tool call and add results
       for (const call of toolCalls) {
+        if (call.function.name === "activate_skill" && this.skillManager && sessionId) {
+          const skillName = call.function.arguments.skill as string;
+          const entry = this.skillManager.activateSkill(sessionId, skillName);
+          if (entry) {
+            this.logger.info("Skill activated", { skill: skillName, tools: entry.toolNames });
+            conversation.push({
+              role: "tool",
+              content: `Skill "${skillName}" activated. You now have access to: ${entry.toolNames.join(", ")}`,
+            });
+            continue;
+          }
+        }
+
         this.logger.info("Executing tool", { tool: call.function.name });
         const result = await this.toolRegistry.execute(call.function.name, call.function.arguments);
         conversation.push({
@@ -127,17 +162,6 @@ export class OllamaProvider implements AIProvider {
     }
 
     return "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.";
-  }
-
-  private buildTools(): OllamaTool[] {
-    return this.toolRegistry.toAnthropicTools().map((t) => ({
-      type: "function" as const,
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.input_schema,
-      },
-    }));
   }
 
   async healthCheck(): Promise<{ ok: boolean; details?: string }> {
