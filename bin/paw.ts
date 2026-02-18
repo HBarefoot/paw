@@ -14,6 +14,7 @@ const USAGE = `
     auth login     Sign in with Anthropic account or API key
     auth logout    Clear stored credentials
     auth status    Show current authentication status
+    auth web       Create a web UI admin account
     config         Show current configuration
     status         Check plugin health status
     cron list      List all cron jobs
@@ -37,8 +38,13 @@ async function main(): Promise<void> {
       break;
     }
     case "auth": {
-      const { authCommand } = await import("../src/cli/commands/auth.js");
-      await authCommand(subcommand);
+      if (subcommand === "web") {
+        const { webAuthCommand } = await import("../src/cli/commands/web-auth.js");
+        await webAuthCommand();
+      } else {
+        const { authCommand } = await import("../src/cli/commands/auth.js");
+        await authCommand(subcommand);
+      }
       break;
     }
     case "config": {
