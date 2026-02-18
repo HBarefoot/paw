@@ -11,10 +11,11 @@ const sendIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"
 export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
   return (
     <Layout title="Chat" currentPath="/chat">
-      <div style="margin-bottom:8px">
+      <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center">
         <select id="session-selector" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;min-width:250px">
           <option value="">New conversation</option>
         </select>
+        {raw(`<button id="new-chat-btn" onclick="newChat()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--accent);color:#fff;font-size:13px;cursor:pointer;white-space:nowrap">New Chat</button>`)}
       </div>
       <div class="card chat-container" id="chat-container" data-session-id={sessionId}>
         <div class="chat-messages" id="messages">
@@ -42,7 +43,10 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 /** Returns the chat page JavaScript as a plain string, served via /js/chat.js */
 export function getChatScript(): string {
   return `(function() {
-  var sessionId = document.getElementById("chat-container").dataset.sessionId;
+  var STORAGE_KEY = "paw-session-id";
+  var savedSession = localStorage.getItem(STORAGE_KEY);
+  var sessionId = savedSession || document.getElementById("chat-container").dataset.sessionId;
+  document.getElementById("chat-container").dataset.sessionId = sessionId;
   var messagesDiv = document.getElementById("messages");
   var input = document.getElementById("chat-input");
   var typingDiv = document.getElementById("typing");
@@ -80,6 +84,7 @@ export function getChatScript(): string {
     if (!val) {
       sessionId = "web-" + Date.now();
       document.getElementById("chat-container").dataset.sessionId = sessionId;
+      localStorage.removeItem(STORAGE_KEY);
       clearMessages();
       return;
     }
@@ -88,6 +93,7 @@ export function getChatScript(): string {
       .then(function(data) {
         sessionId = val;
         document.getElementById("chat-container").dataset.sessionId = val;
+        localStorage.setItem(STORAGE_KEY, val);
         clearMessages();
         var welcome = messagesDiv.querySelector(".chat-welcome");
         if (welcome) welcome.remove();
@@ -99,8 +105,8 @@ export function getChatScript(): string {
 
   loadSessions();
 
-  // If page loaded with a session ID that matches an existing one, load its messages
-  if (sessionId && !sessionId.startsWith("web-")) {
+  // If page loaded with a saved session, load its messages
+  if (savedSession) {
     fetch("/api/sessions/" + sessionId + "/messages")
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -143,6 +149,8 @@ export function getChatScript(): string {
     .then(function(res) { return res.json(); })
     .then(function(data) {
       appendMsg("assistant", data.response || data.error || "No response");
+      localStorage.setItem(STORAGE_KEY, sessionId);
+      loadSessions();
     })
     .catch(function(err) {
       appendMsg("assistant", "Error: " + err.message);
@@ -151,6 +159,15 @@ export function getChatScript(): string {
       sendBtn.disabled = false;
       typingDiv.style.display = "none";
     });
+  };
+
+  window.newChat = function newChat() {
+    sessionId = "web-" + Date.now();
+    document.getElementById("chat-container").dataset.sessionId = sessionId;
+    localStorage.removeItem(STORAGE_KEY);
+    selector.value = "";
+    clearMessages();
+    input.focus();
   };
 
   function appendMsg(role, text) {
