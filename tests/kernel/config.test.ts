@@ -27,4 +27,9 @@ describe("Config Loader", () => {
     expect(config.ai.authMethod).toBe("oauth");
     expect(typeof config.ai.apiKey).toBe("string");
   });
+
+  test("store.messageHistoryLimit defaults to 20", () => {
+    const config = loadConfig({});
+    expect(config.store.messageHistoryLimit).toBe(20);
+  });
 });

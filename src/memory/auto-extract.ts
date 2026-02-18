@@ -30,7 +30,7 @@ export async function extractMemories(
     const lines = response
       .split("\n")
       .map((l) => l.trim())
-      .filter((l) => l.length > 0 && l.toUpperCase() !== "NONE" && !l.startsWith("-") === false);
+      .filter((l) => l.length > 0 && l.toUpperCase() !== "NONE");
 
     // Clean up lines - remove leading bullets/dashes/numbers
     return lines

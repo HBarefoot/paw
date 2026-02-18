@@ -88,6 +88,7 @@ export const configSchema = z.object({
   store: z.object({
     dbPath: z.string().default("./data/paw.db"),
     customSqlitePath: z.string().optional(),
+    messageHistoryLimit: z.number().int().positive().default(20),
   }),
   log: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),

@@ -32,7 +32,7 @@ export class HeartbeatChecker {
   private healthCheckFn: () => Promise<Record<string, { ok: boolean; details?: string }>>;
   private memoryStore: MemoryStore | null;
   private dbPath: string;
-  private cronJobId: string | null = null;
+  private _timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: {
     bus: EventBus;
@@ -53,34 +53,14 @@ export class HeartbeatChecker {
   }
 
   start(): void {
-    // Register a cron job for the heartbeat interval
     const minutes = this.config.intervalMinutes;
-    const expression = `*/${minutes} * * * *`;
-
-    this.cronJobId = this.cronScheduler.addJob({
-      name: "__heartbeat__",
-      expression,
-      action: { type: "event", event: "heartbeat:run" as any, payload: undefined },
-    });
-
-    // Listen for the heartbeat event and run check
-    this.bus.on("heartbeat:completed" as any, () => {}); // type placeholder
-    // Actually listen via a custom mechanism: the cron will fire the event,
-    // but since we can't easily listen on arbitrary events, let's use a direct approach
-    // Override: just use setInterval directly for simplicity
-    this.cronScheduler.removeJob(this.cronJobId);
-    this.cronJobId = null;
-
-    // Use direct interval instead
     const intervalMs = minutes * 60 * 1000;
-    const timer = setInterval(() => {
+
+    this._timer = setInterval(() => {
       this.runCheck().catch((err) => {
         this.logger.error("Heartbeat check failed", { error: String(err) });
       });
     }, intervalMs);
-
-    // Store the timer for cleanup
-    (this as any)._timer = timer;
 
     this.logger.info("Heartbeat started", { intervalMinutes: minutes });
 
@@ -89,10 +69,9 @@ export class HeartbeatChecker {
   }
 
   stop(): void {
-    const timer = (this as any)._timer;
-    if (timer) {
-      clearInterval(timer);
-      (this as any)._timer = null;
+    if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = null;
     }
     this.logger.info("Heartbeat stopped");
   }
