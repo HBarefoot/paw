@@ -2,7 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam, ContentBlockParam, ToolUseBlock, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/messages";
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
-import type { AIProvider, ChatMessage } from "./base-provider.js";
+import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
+import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
 
@@ -69,12 +70,29 @@ export class ClaudeProvider implements AIProvider {
     return this.toolRegistry.toAnthropicToolsFiltered(allowed);
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<string> {
+  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<ChatResponse> {
     let roundtrips = 0;
-    const conversation: MessageParam[] = messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const collectedImages: ToolResultImage[] = [];
+    const conversation: MessageParam[] = messages.map((m) => {
+      if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+        const contentParts: ContentBlockParam[] = [];
+        for (const att of m.attachments) {
+          if (att.type === "image" && att.data && att.mimeType) {
+            contentParts.push({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: att.mimeType as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+                data: att.data.toString("base64"),
+              },
+            } as ContentBlockParam);
+          }
+        }
+        contentParts.push({ type: "text", text: m.content } as ContentBlockParam);
+        return { role: m.role, content: contentParts };
+      }
+      return { role: m.role, content: m.content };
+    });
 
     while (roundtrips < this.maxToolRoundtrips) {
       const tools = this.getTools(sessionId);
@@ -96,7 +114,10 @@ export class ClaudeProvider implements AIProvider {
         const textParts = response.content
           .filter((b) => b.type === "text")
           .map((b) => (b as { type: "text"; text: string }).text);
-        return textParts.join("\n");
+        return {
+          text: textParts.join("\n"),
+          images: collectedImages.length > 0 ? collectedImages : undefined,
+        };
       }
 
       conversation.push({ role: "assistant", content: response.content as ContentBlockParam[] });
@@ -119,18 +140,46 @@ export class ClaudeProvider implements AIProvider {
 
         this.logger.info("Executing tool", { tool: block.name, id: block.id });
         const result = await this.toolRegistry.execute(block.name, block.input as Record<string, unknown>);
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: result.content,
-          is_error: result.is_error,
-        });
+
+        if (result.images && result.images.length > 0) {
+          collectedImages.push(...result.images);
+          // Build a multi-part content array with text + image blocks
+          const contentParts: Array<
+            | { type: "text"; text: string }
+            | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+          > = [];
+          if (result.content) {
+            contentParts.push({ type: "text", text: result.content });
+          }
+          for (const img of result.images) {
+            contentParts.push({
+              type: "image",
+              source: { type: "base64", media_type: img.media_type, data: img.base64 },
+            });
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: contentParts as any,
+            is_error: result.is_error,
+          });
+        } else {
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: result.content,
+            is_error: result.is_error,
+          });
+        }
       }
 
       conversation.push({ role: "user", content: toolResults });
       roundtrips++;
     }
 
-    return "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.";
+    return {
+      text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
+      images: collectedImages.length > 0 ? collectedImages : undefined,
+    };
   }
 }

@@ -594,6 +594,63 @@ const cssDesignSystem = `
     flex-shrink: 0;
   }
 
+  .chat-attachments {
+    display: flex;
+    gap: 8px;
+    padding: 8px 24px 0;
+    flex-wrap: wrap;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-secondary);
+  }
+
+  .attachment-thumb {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    border: 1px solid var(--border-primary);
+  }
+  .attachment-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .attachment-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .attachment-remove:hover { background: rgba(0,0,0,0.8); }
+
+  .attach-btn {
+    border-radius: 50%;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-primary);
+  }
+  .attach-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
   .typing-indicator {
     display: flex;
     gap: 4px;

@@ -1,6 +1,7 @@
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
-import type { AIProvider, ChatMessage } from "./base-provider.js";
+import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
+import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
 
@@ -14,6 +15,7 @@ interface OllamaMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   tool_calls?: OllamaToolCall[];
+  images?: string[];
 }
 
 interface OllamaToolCall {
@@ -80,13 +82,22 @@ export class OllamaProvider implements AIProvider {
     }));
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<string> {
+  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<ChatResponse> {
     let roundtrips = 0;
+    const collectedImages: ToolResultImage[] = [];
 
     const actualSystemPrompt = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
     const conversation: OllamaMessage[] = [
       { role: "system", content: actualSystemPrompt },
-      ...messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+      ...messages.map((m) => {
+        const msg: OllamaMessage = { role: m.role as "user" | "assistant", content: m.content };
+        if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+          msg.images = m.attachments
+            .filter((a) => a.type === "image" && a.data)
+            .map((a) => a.data!.toString("base64"));
+        }
+        return msg;
+      }),
     ];
 
     this.logger.info("Ollama system prompt", {
@@ -125,7 +136,10 @@ export class OllamaProvider implements AIProvider {
 
       // No tool calls — return the text response
       if (!toolCalls || toolCalls.length === 0) {
-        return data.message.content || "";
+        return {
+          text: data.message.content || "",
+          images: collectedImages.length > 0 ? collectedImages : undefined,
+        };
       }
 
       // Add assistant message with tool calls
@@ -152,6 +166,9 @@ export class OllamaProvider implements AIProvider {
 
         this.logger.info("Executing tool", { tool: call.function.name });
         const result = await this.toolRegistry.execute(call.function.name, call.function.arguments);
+        if (result.images) {
+          collectedImages.push(...result.images);
+        }
         conversation.push({
           role: "tool",
           content: result.content,
@@ -161,7 +178,10 @@ export class OllamaProvider implements AIProvider {
       roundtrips++;
     }
 
-    return "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.";
+    return {
+      text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
+      images: collectedImages.length > 0 ? collectedImages : undefined,
+    };
   }
 
   async healthCheck(): Promise<{ ok: boolean; details?: string }> {

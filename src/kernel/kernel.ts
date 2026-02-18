@@ -175,7 +175,7 @@ export class Kernel {
         await this.mcpClientManager.connectServer(name, serverConfig);
         const tools = await this.mcpClientManager.discoverTools(name);
         if (tools.length > 0) {
-          this.toolRegistry.register(tools);
+          this.registerTools(tools);
           this.logger.info("MCP tools registered", { server: name, count: tools.length });
         }
       }
@@ -281,6 +281,14 @@ export class Kernel {
       content: m.content,
     }));
 
+    // Attach images from the current inbound message to the last user message
+    if (msg.attachments && msg.attachments.length > 0 && messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === "user") {
+        lastMsg.attachments = msg.attachments;
+      }
+    }
+
     // Recall relevant memories and build system prompt
     let memoryContext: string | undefined;
     if (this.memoryStore) {
@@ -337,18 +345,23 @@ export class Kernel {
 
     try {
       const response = await this.provider.chat(messages, systemPrompt, msg.sessionId);
-      appendMessage(this.db, msg.sessionId, "assistant", response);
+      appendMessage(this.db, msg.sessionId, "assistant", response.text);
 
       await this.bus.emit("message:outbound", {
         sessionId: msg.sessionId,
         channel: msg.channel,
-        content: response,
+        content: response.text,
+        attachments: response.images?.map((img) => ({
+          type: "image" as const,
+          data: Buffer.from(img.base64, "base64"),
+          mimeType: img.media_type,
+        })),
         metadata: msg.metadata,
       });
 
       // Auto-extract memories from conversation
       if (this.memoryStore && this.config.memory.autoExtract) {
-        this.autoExtractMemories(msg, response).catch((err) => {
+        this.autoExtractMemories(msg, response.text).catch((err) => {
           this.logger.warn("Auto-extract failed", { error: String(err) });
         });
       }
@@ -503,6 +516,21 @@ export class Kernel {
   }
 
   registerTools(tools: ToolDefinition[]): void {
+    // Auto-register sandbox manifests for MCP plugins so permission checks pass
+    const seen = new Set<string>();
+    for (const tool of tools) {
+      if (tool.plugin.startsWith("mcp:") && !seen.has(tool.plugin)) {
+        seen.add(tool.plugin);
+        if (!this.sandbox.getManifest(tool.plugin)) {
+          this.sandbox.registerManifest({
+            name: tool.plugin,
+            version: "1.0.0",
+            description: `MCP server: ${tool.plugin.slice(4)}`,
+            permissions: [tool.plugin],
+          });
+        }
+      }
+    }
     this.toolRegistry.register(tools);
   }
 }

@@ -7,6 +7,7 @@ interface ChatPageProps {
 }
 
 const sendIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
+const attachIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>`;
 
 export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
   return (
@@ -30,7 +31,10 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
             </div>
           </div>
         </div>
+        {raw(`<div class="chat-attachments" id="chat-attachments" style="display:none"></div>`)}
         <div class="chat-input">
+          {raw(`<input type="file" id="file-input" accept="image/*" multiple style="display:none" />`)}
+          {raw(`<button class="attach-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach images">${attachIconSvg}</button>`)}
           <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off" />
           {raw(`<button class="send-btn" id="send-btn" onclick="sendMessage()">${sendIconSvg}</button>`)}
         </div>
@@ -51,6 +55,49 @@ export function getChatScript(): string {
   var input = document.getElementById("chat-input");
   var typingDiv = document.getElementById("typing");
   var selector = document.getElementById("session-selector");
+  var fileInput = document.getElementById("file-input");
+  var attachmentsDiv = document.getElementById("chat-attachments");
+  var pendingImages = [];
+
+  fileInput.addEventListener("change", function() {
+    var files = fileInput.files;
+    for (var i = 0; i < files.length; i++) {
+      (function(file) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          var dataUrl = e.target.result;
+          var base64 = dataUrl.split(",")[1];
+          var mimeType = dataUrl.split(":")[1].split(";")[0];
+          pendingImages.push({ data: base64, mimeType: mimeType, dataUrl: dataUrl });
+          renderPendingImages();
+        };
+        reader.readAsDataURL(file);
+      })(files[i]);
+    }
+    fileInput.value = "";
+  });
+
+  function renderPendingImages() {
+    if (pendingImages.length === 0) {
+      attachmentsDiv.style.display = "none";
+      attachmentsDiv.innerHTML = "";
+      return;
+    }
+    attachmentsDiv.style.display = "flex";
+    var html = "";
+    for (var i = 0; i < pendingImages.length; i++) {
+      html += '<div class="attachment-thumb" data-index="' + i + '">' +
+        '<img src="' + pendingImages[i].dataUrl + '" alt="Preview" />' +
+        '<button class="attachment-remove" onclick="removePendingImage(' + i + ')">\\u00d7</button>' +
+        '</div>';
+    }
+    attachmentsDiv.innerHTML = html;
+  }
+
+  window.removePendingImage = function(index) {
+    pendingImages.splice(index, 1);
+    renderPendingImages();
+  };
 
   // Load session list
   function loadSessions() {
@@ -126,14 +173,21 @@ export function getChatScript(): string {
 
   window.sendMessage = function sendMessage() {
     var text = input.value.trim();
-    if (!text) return;
+    if (!text && pendingImages.length === 0) return;
+    if (!text) text = "(image)";
     input.value = "";
+
+    // Capture pending images for this message
+    var imagesToSend = pendingImages.slice();
+    var userImageUrls = imagesToSend.map(function(img) { return img.dataUrl; });
+    pendingImages = [];
+    renderPendingImages();
 
     // Remove welcome state if present
     var welcome = messagesDiv.querySelector(".chat-welcome");
     if (welcome) welcome.remove();
 
-    appendMsg("user", text);
+    appendMsg("user", text, userImageUrls);
     var sendBtn = document.getElementById("send-btn");
     sendBtn.disabled = true;
 
@@ -141,14 +195,19 @@ export function getChatScript(): string {
     typingDiv.style.display = "flex";
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
+    var payload = { sessionId: sessionId, message: text };
+    if (imagesToSend.length > 0) {
+      payload.images = imagesToSend.map(function(img) { return { data: img.data, mimeType: img.mimeType }; });
+    }
+
     fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: sessionId, message: text }),
+      body: JSON.stringify(payload),
     })
     .then(function(res) { return res.json(); })
     .then(function(data) {
-      appendMsg("assistant", data.response || data.error || "No response");
+      appendMsg("assistant", data.response || data.error || "No response", data.images);
       localStorage.setItem(STORAGE_KEY, sessionId);
       loadSessions();
     })
@@ -170,7 +229,7 @@ export function getChatScript(): string {
     input.focus();
   };
 
-  function appendMsg(role, text) {
+  function appendMsg(role, text, images) {
     var wrapper = document.createElement("div");
     wrapper.className = "msg-wrapper" + (role === "user" ? " user-msg" : "");
 
@@ -189,6 +248,18 @@ export function getChatScript(): string {
       bubble.appendChild(mdDiv);
     } else {
       bubble.innerHTML = '<div class="role">' + role + '</div>' + escapeHtml(text);
+    }
+
+    // Render any attached images (works for both user and assistant)
+    if (images && images.length > 0) {
+      for (var idx = 0; idx < images.length; idx++) {
+        var img = document.createElement("img");
+        img.src = images[idx];
+        img.alt = role === "user" ? "Attached image" : "Screenshot";
+        img.style.cssText = "max-width:100%;border-radius:8px;margin-top:8px;cursor:pointer";
+        img.onclick = function() { window.open(this.src, "_blank"); };
+        bubble.appendChild(img);
+      }
     }
 
     wrapper.appendChild(avatar);

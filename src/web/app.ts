@@ -210,6 +210,17 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
     return c.json({ ok: true });
   });
 
+  app.post("/api/skills/:name/tools/:tool/toggle", async (c) => {
+    const skillName = decodeURIComponent(c.req.param("name"));
+    const toolName = decodeURIComponent(c.req.param("tool"));
+    const { enabled } = await c.req.json<{ enabled: boolean }>();
+    const skill = kernel.skills.getSkill(skillName);
+    if (!skill) return c.json({ error: "Skill not found" }, 404);
+    kernel.skills.setToolEnabled(skillName, toolName, enabled);
+    saveConfigOverrides({ skills: kernel.skills.toOverrides() });
+    return c.json({ ok: true });
+  });
+
   app.post("/api/skills/:name/description", async (c) => {
     const name = decodeURIComponent(c.req.param("name"));
     const body = await c.req.json<{ description: string }>();
@@ -396,24 +407,38 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
 
   app.post("/api/chat", async (c) => {
     try {
-      const body = await c.req.json<{ sessionId: string; message: string }>();
+      const body = await c.req.json<{ sessionId: string; message: string; images?: Array<{ data: string; mimeType: string }> }>();
       if (!body.message?.trim()) {
         return c.json({ error: "Message is required" }, 400);
       }
 
       const sessionId = body.sessionId || `web-${Date.now()}`;
 
+      // Convert uploaded images to Attachment[]
+      const attachments = body.images?.map((img) => ({
+        type: "image" as const,
+        data: Buffer.from(img.data, "base64"),
+        mimeType: img.mimeType,
+      }));
+
+      // Build base64 data URIs for the user images so the UI can render them
+      const userImages = body.images?.map((img) => `data:${img.mimeType};base64,${img.data}`);
+
       // Create a promise that resolves when the outbound message arrives
-      const responsePromise = new Promise<string>((resolve, reject) => {
+      const responsePromise = new Promise<{ content: string; images?: string[] }>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("Response timeout"));
         }, 120_000);
 
-        const handler = (outbound: { sessionId: string; content: string }) => {
+        const handler = (outbound: { sessionId: string; content: string; attachments?: Array<{ type: string; data?: Buffer; mimeType?: string }> }) => {
           if (outbound.sessionId === sessionId) {
             clearTimeout(timeout);
             kernel.eventBus.off("message:outbound", handler);
-            resolve(outbound.content);
+            // Convert image attachments to base64 data URIs for the web UI
+            const images = outbound.attachments
+              ?.filter((a) => a.type === "image" && a.data && a.mimeType)
+              .map((a) => `data:${a.mimeType};base64,${a.data!.toString("base64")}`);
+            resolve({ content: outbound.content, images: images?.length ? images : undefined });
           }
         };
         kernel.eventBus.on("message:outbound", handler);
@@ -425,6 +450,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
         sessionId,
         channel: "web",
         content: body.message.trim(),
+        attachments: attachments?.length ? attachments : undefined,
         user: { id: "web-user", name: "Web User" },
         timestamp: new Date().toISOString(),
       }).catch((err) => {
@@ -436,8 +462,13 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
         } as any);
       });
 
-      const response = await responsePromise;
-      return c.json({ sessionId, response });
+      const result = await responsePromise;
+      return c.json({
+        sessionId,
+        response: result.content,
+        images: result.images,
+        userImages: userImages?.length ? userImages : undefined,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 500);

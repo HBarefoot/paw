@@ -1,6 +1,7 @@
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
-import type { AIProvider, ChatMessage } from "./base-provider.js";
+import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
+import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
 
@@ -18,6 +19,7 @@ interface GeminiContent {
 
 type GeminiPart =
   | { text: string }
+  | { inlineData: { mimeType: string; data: string } }
   | { functionCall: { name: string; args: Record<string, unknown> } }
   | { functionResponse: { name: string; response: { content: string } } };
 
@@ -77,13 +79,25 @@ export class GeminiProvider implements AIProvider {
     return [{ functionDeclarations: declarations }];
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<string> {
+  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<ChatResponse> {
     let roundtrips = 0;
+    const collectedImages: ToolResultImage[] = [];
 
-    const contents: GeminiContent[] = messages.map((m) => ({
-      role: m.role === "assistant" ? "model" as const : "user" as const,
-      parts: [{ text: m.content }],
-    }));
+    const contents: GeminiContent[] = messages.map((m) => {
+      const parts: GeminiPart[] = [];
+      if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+        for (const att of m.attachments) {
+          if (att.type === "image" && att.data && att.mimeType) {
+            parts.push({ inlineData: { mimeType: att.mimeType, data: att.data.toString("base64") } });
+          }
+        }
+      }
+      parts.push({ text: m.content });
+      return {
+        role: m.role === "assistant" ? "model" as const : "user" as const,
+        parts,
+      };
+    });
 
     while (roundtrips < this.maxToolRoundtrips) {
       const tools = this.getTools(sessionId);
@@ -134,7 +148,7 @@ export class GeminiProvider implements AIProvider {
         const textParts = parts
           .filter((p): p is { text: string } => "text" in p)
           .map((p) => p.text);
-        return textParts.join("\n");
+        return { text: textParts.join("\n"), images: collectedImages.length > 0 ? collectedImages : undefined };
       }
 
       // Add model response to conversation
@@ -163,6 +177,7 @@ export class GeminiProvider implements AIProvider {
           call.functionCall.name,
           call.functionCall.args,
         );
+        if (result.images) collectedImages.push(...result.images);
         responseParts.push({
           functionResponse: {
             name: call.functionCall.name,
@@ -175,6 +190,6 @@ export class GeminiProvider implements AIProvider {
       roundtrips++;
     }
 
-    return "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.";
+    return { text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.", images: collectedImages.length > 0 ? collectedImages : undefined };
   }
 }

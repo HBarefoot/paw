@@ -1,6 +1,7 @@
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
-import type { AIProvider, ChatMessage } from "./base-provider.js";
+import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
+import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
 
@@ -12,9 +13,13 @@ export interface OpenAIProviderConfig {
   baseUrl?: string;
 }
 
+type OpenAIContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 interface OpenAIMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | OpenAIContentPart[] | null;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
 }
@@ -88,12 +93,27 @@ export class OpenAIProvider implements AIProvider {
     }));
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<string> {
+  async chat(messages: ChatMessage[], systemPrompt?: string, sessionId?: string): Promise<ChatResponse> {
     let roundtrips = 0;
+    const collectedImages: ToolResultImage[] = [];
 
     const conversation: OpenAIMessage[] = [
       { role: "system", content: systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
-      ...messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+      ...messages.map((m) => {
+        if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+          const parts: OpenAIContentPart[] = [{ type: "text", text: m.content }];
+          for (const att of m.attachments) {
+            if (att.type === "image" && att.data && att.mimeType) {
+              parts.push({
+                type: "image_url",
+                image_url: { url: `data:${att.mimeType};base64,${att.data.toString("base64")}` },
+              });
+            }
+          }
+          return { role: m.role as "user" | "assistant", content: parts };
+        }
+        return { role: m.role as "user" | "assistant", content: m.content };
+      }),
     ];
 
     while (roundtrips < this.maxToolRoundtrips) {
@@ -132,7 +152,7 @@ export class OpenAIProvider implements AIProvider {
 
       // No tool calls — return text response
       if (!toolCalls || toolCalls.length === 0 || choice.finish_reason === "stop") {
-        return choice.message.content ?? "";
+        return { text: choice.message.content ?? "", images: collectedImages.length > 0 ? collectedImages : undefined };
       }
 
       // Add assistant message with tool calls
@@ -167,6 +187,7 @@ export class OpenAIProvider implements AIProvider {
 
         this.logger.info("Executing tool", { tool: call.function.name, id: call.id });
         const result = await this.toolRegistry.execute(call.function.name, args);
+        if (result.images) collectedImages.push(...result.images);
         conversation.push({
           role: "tool",
           content: result.content,
@@ -177,6 +198,6 @@ export class OpenAIProvider implements AIProvider {
       roundtrips++;
     }
 
-    return "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.";
+    return { text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.", images: collectedImages.length > 0 ? collectedImages : undefined };
   }
 }
