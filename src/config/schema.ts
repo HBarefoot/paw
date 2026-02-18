@@ -63,6 +63,19 @@ export const configSchema = z.object({
     authToken: z.string().optional(),
     username: z.string().default("admin"),
     password: z.string().default(""),
+    tls: z.object({
+      enabled: z.boolean().default(false),
+      certFile: z.string().default(""),
+      keyFile: z.string().default(""),
+    }).default({}),
+    session: z.object({
+      maxAgeMinutes: z.number().int().positive().default(480),
+      idleTimeoutMinutes: z.number().int().positive().default(60),
+    }).default({}),
+    canvas: z.object({
+      enabled: z.boolean().default(true),
+      root: z.string().default("./data/canvas"),
+    }).default({}),
   }),
   workspace: z.object({
     path: z.string().default("."),

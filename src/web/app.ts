@@ -1,42 +1,241 @@
 import { Hono } from "hono";
+import { logger as honoLogger } from "hono/logger";
+import { bodyLimit } from "hono/body-limit";
+import { csrf } from "hono/csrf";
+import { setCookie, getCookie } from "hono/cookie";
+import { resolve, relative, extname } from "node:path";
+import { existsSync, statSync, readdirSync, watch, mkdirSync, rmSync } from "node:fs";
 import { DashboardPage } from "./views/dashboard.js";
 import { ConfigPage } from "./views/config-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
+import { CanvasPage, getCanvasScript } from "./views/canvas-page.js";
 import { CronPage } from "./views/cron-page.js";
 import { MemoryPage } from "./views/memory-page.js";
 import { SessionsListPage, SessionDetailPage } from "./views/sessions-page.js";
 import { MCPPage } from "./views/mcp-page.js";
 import { SkillsPage } from "./views/skills-page.js";
+import { LoginPage } from "./views/login-page.js";
+import { TotpSetupPage } from "./views/totp-setup-page.js";
 import { readConfigOverrides, saveConfigOverrides } from "../config/writer.js";
 import { listRecentSessions, getSessionWithMessages, deleteSession, updateSessionTitle } from "../store/sessions.js";
 import { isValidCron } from "../cron/parser.js";
+import { createSecurityHeaders } from "./middleware/security-headers.js";
+import { createAuthMiddleware } from "./middleware/auth.js";
+import { WebAuthManager } from "../security/web-auth.js";
+import { RateLimiter } from "../security/rate-limiter.js";
+import { buildOtpauthUri } from "../security/totp.js";
 import type { Kernel } from "../kernel/kernel.js";
 import type { PawConfig } from "../types/config.js";
+import type { Database } from "bun:sqlite";
 
-export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
+// Fields that cannot be modified through the web config form
+const BLOCKED_CONFIG_FIELDS = new Set([
+  "ai.apiKey",
+  "openai.apiKey",
+  "gemini.apiKey",
+  "slack.botToken",
+  "slack.appToken",
+  "slack.signingSecret",
+  "web.authToken",
+]);
+
+export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): Hono {
   const app = new Hono();
+  const database = db ?? kernel.database;
 
-  // Basic auth middleware (if password is set)
-  if (config.web.password) {
-    const expectedAuth = btoa(`${config.web.username}:${config.web.password}`);
-    app.use("*", async (c, next) => {
-      // Skip auth for API calls with token
-      if (config.web.authToken && c.req.header("Authorization") === `Bearer ${config.web.authToken}`) {
-        return next();
-      }
+  // --- Auth Manager ---
+  const authManager = new WebAuthManager(database, {
+    maxAgeMinutes: config.web.session.maxAgeMinutes,
+    idleTimeoutMinutes: config.web.session.idleTimeoutMinutes,
+  });
 
-      const auth = c.req.header("Authorization");
-      if (auth && auth.startsWith("Basic ")) {
-        const provided = auth.slice(6);
-        if (provided === expectedAuth) {
-          return next();
-        }
-      }
+  // --- Login rate limiter (5 attempts/min per IP) ---
+  const loginRateLimiter = new RateLimiter(5);
 
-      c.header("WWW-Authenticate", 'Basic realm="Paw"');
-      return c.text("Unauthorized", 401);
+  // --- Middleware Stack ---
+
+  // Request logging
+  app.use("*", honoLogger());
+
+  // Security headers
+  app.use("*", createSecurityHeaders(config.web.tls.enabled));
+
+  // Body size limit (5MB)
+  app.use("*", bodyLimit({ maxSize: 5 * 1024 * 1024 }));
+
+  // CSRF protection — skip for Bearer token API calls
+  app.use("*", async (c, next) => {
+    const authHeader = c.req.header("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      return next();
+    }
+    // Skip CSRF for GET/HEAD/OPTIONS
+    if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
+      return next();
+    }
+    return csrf({ origin: (origin) => origin !== "" })(c, next);
+  });
+
+  // Session auth middleware
+  app.use("*", createAuthMiddleware({
+    authManager,
+    bearerToken: config.web.authToken,
+  }));
+
+  // --- Auth Routes ---
+
+  app.get("/login", (c) => {
+    // If no admins exist, show the setup page
+    if (!authManager.hasAdmins()) {
+      return c.html(LoginPage({ setupMode: true }));
+    }
+    return c.html(LoginPage({}));
+  });
+
+  app.post("/login", async (c) => {
+    const ip = c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown";
+
+    // Rate limit check
+    const { allowed } = loginRateLimiter.check(ip);
+    if (!allowed) {
+      return c.html(LoginPage({ error: "Too many login attempts. Please wait a minute." }));
+    }
+
+    const body = await c.req.parseBody();
+    const username = String(body.username ?? "");
+    const password = String(body.password ?? "");
+    const totpCode = body.totp ? String(body.totp) : undefined;
+
+    if (!username || !password) {
+      return c.html(LoginPage({ error: "Username and password are required" }));
+    }
+
+    const result = await authManager.login(username, password, totpCode, ip);
+
+    if (result.requireTotp) {
+      return c.html(LoginPage({ requireTotp: true, error: "Please enter your authenticator code" }));
+    }
+
+    if (!result.success) {
+      return c.html(LoginPage({ error: result.error }));
+    }
+
+    setCookie(c, "paw_session", result.token!, {
+      httpOnly: true,
+      secure: config.web.tls.enabled,
+      sameSite: "Lax",
+      path: "/",
+      maxAge: config.web.session.maxAgeMinutes * 60,
     });
-  }
+
+    return c.redirect("/");
+  });
+
+  // First-time admin setup (only works when no admins exist)
+  app.post("/login/setup", async (c) => {
+    if (authManager.hasAdmins()) {
+      return c.redirect("/login");
+    }
+
+    const body = await c.req.parseBody();
+    const username = String(body.username ?? "").trim();
+    const password = String(body.password ?? "");
+    const confirmPassword = String(body.confirm_password ?? "");
+
+    if (!username) {
+      return c.html(LoginPage({ setupMode: true, error: "Username is required" }));
+    }
+    if (password.length < 8) {
+      return c.html(LoginPage({ setupMode: true, error: "Password must be at least 8 characters" }));
+    }
+    if (password !== confirmPassword) {
+      return c.html(LoginPage({ setupMode: true, error: "Passwords do not match" }));
+    }
+
+    try {
+      const adminId = await authManager.createAdmin(username, password);
+      const ip = c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown";
+      authManager.audit.log("admin.created", adminId, { username, via: "web-setup" }, ip);
+
+      // Auto-login after setup
+      const token = authManager.createSession(adminId, ip);
+      setCookie(c, "paw_session", token, {
+        httpOnly: true,
+        secure: config.web.tls.enabled,
+        sameSite: "Lax",
+        path: "/",
+        maxAge: config.web.session.maxAgeMinutes * 60,
+      });
+
+      return c.redirect("/login/totp-setup");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.html(LoginPage({ setupMode: true, error: message }));
+    }
+  });
+
+  app.get("/logout", (c) => {
+    const sessionToken = getCookie(c, "paw_session");
+    if (sessionToken) {
+      const session = authManager.validateSession(sessionToken);
+      authManager.logout(sessionToken, session?.user_id);
+    }
+    setCookie(c, "paw_session", "", {
+      httpOnly: true,
+      secure: config.web.tls.enabled,
+      sameSite: "Lax",
+      path: "/",
+      maxAge: 0,
+    });
+    return c.redirect("/login");
+  });
+
+  // --- TOTP Setup Routes ---
+
+  app.get("/login/totp-setup", (c) => {
+    const session = c.get("session") as { user_id: number } | undefined;
+    const admin = c.get("admin") as { id: number; username: string; totp_secret: string | null; totp_verified: number } | undefined;
+
+    if (!session || !admin) {
+      return c.redirect("/login");
+    }
+
+    // Generate a new secret if none exists or not yet verified
+    let secret = admin.totp_secret;
+    if (!secret || admin.totp_verified === 0) {
+      secret = authManager.setupTotp(admin.id);
+    }
+
+    const otpauthUriStr = buildOtpauthUri(secret, "Paw", admin.username);
+    return c.html(TotpSetupPage({ secret, otpauthUri: otpauthUriStr }));
+  });
+
+  app.post("/login/totp-setup", async (c) => {
+    const session = c.get("session") as { user_id: number } | undefined;
+    const admin = c.get("admin") as { id: number; username: string; totp_secret: string | null } | undefined;
+
+    if (!session || !admin) {
+      return c.redirect("/login");
+    }
+
+    const body = await c.req.parseBody();
+    const code = String(body.code ?? "");
+
+    if (!code || code.length !== 6) {
+      const secret = admin.totp_secret ?? authManager.setupTotp(admin.id);
+      const otpauthUriStr = buildOtpauthUri(secret, "Paw", admin.username);
+      return c.html(TotpSetupPage({ secret, otpauthUri: otpauthUriStr, error: "Please enter a valid 6-digit code" }));
+    }
+
+    const verified = authManager.verifyAndEnableTotp(admin.id, code);
+    if (!verified) {
+      const secret = admin.totp_secret ?? "";
+      const otpauthUriStr = buildOtpauthUri(secret, "Paw", admin.username);
+      return c.html(TotpSetupPage({ secret, otpauthUri: otpauthUriStr, error: "Invalid code. Make sure your authenticator app time is synchronized." }));
+    }
+
+    return c.redirect("/");
+  });
 
   // --- Pages ---
 
@@ -74,6 +273,11 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
 
       // Parse dotted form field names into nested objects
       for (const [key, value] of Object.entries(body)) {
+        // Block sensitive fields
+        if (BLOCKED_CONFIG_FIELDS.has(key)) {
+          return c.html(ConfigPage({ config: liveConfig(), error: `Field "${key}" cannot be modified through the web UI` }));
+        }
+
         const parts = key.split(".");
         let target = overrides;
         for (let i = 0; i < parts.length - 1; i++) {
@@ -91,6 +295,11 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
         else target[lastKey] = value;
       }
 
+      // Audit log config changes
+      const session = c.get("session") as { user_id: number } | undefined;
+      const ip = c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown";
+      authManager.audit.log("config.update", session?.user_id ?? null, { fields: Object.keys(body) }, ip);
+
       saveConfigOverrides(overrides);
       return c.html(ConfigPage({ config: liveConfig(), saved: true }));
     } catch (err) {
@@ -100,7 +309,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
   });
 
   app.get("/chat", (c) => {
-    const sessionId = c.req.query("session") || `web-${Date.now()}`;
+    const sessionId = c.req.query("session") || crypto.randomUUID();
     return c.html(ChatPage({ sessionId }));
   });
 
@@ -108,6 +317,202 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
     c.header("Content-Type", "application/javascript; charset=utf-8");
     c.header("Cache-Control", "no-cache");
     return c.body(getChatScript());
+  });
+
+  // --- Canvas ---
+
+  const canvasRoot = resolve(config.web.canvas?.root ?? "./data/canvas");
+
+  // In-memory event buffer for canvas polling (replaces SSE which Bun can't sustain)
+  const canvasEvents = new Map<string, Array<{ id: number; event: string; data: unknown; ts: number }>>();
+  let canvasEventSeq = 0;
+  const CANVAS_EVENT_TTL = 60_000; // events expire after 60s
+  const CANVAS_MAX_EVENTS = 200;
+
+  function pushCanvasEvent(sessionId: string, event: string, data: unknown) {
+    if (!canvasEvents.has(sessionId)) canvasEvents.set(sessionId, []);
+    const buf = canvasEvents.get(sessionId)!;
+    buf.push({ id: ++canvasEventSeq, event, data, ts: Date.now() });
+    // Trim old events
+    const cutoff = Date.now() - CANVAS_EVENT_TTL;
+    while (buf.length > CANVAS_MAX_EVENTS || (buf.length > 0 && buf[0].ts < cutoff)) {
+      buf.shift();
+    }
+  }
+
+  // Also push file-changed events to a global "__files__" channel
+  // so the iframe preview reloads can poll it.
+  function pushFileChanged(path: string) {
+    pushCanvasEvent("__files__", "file-changed", { path });
+    // Push to all active sessions too
+    for (const sid of canvasEvents.keys()) {
+      if (sid !== "__files__") {
+        pushCanvasEvent(sid, "file-changed", { path });
+      }
+    }
+  }
+
+  // Watch canvas root for file changes
+  try {
+    mkdirSync(canvasRoot, { recursive: true });
+    watch(canvasRoot, { recursive: true }, (_evt, filename) => {
+      if (filename) pushFileChanged(String(filename));
+    });
+  } catch { /* fs.watch may not be available */ }
+
+  // Listen for AI outbound messages bound for canvas sessions
+  kernel.eventBus.on("message:outbound", (outbound: { sessionId: string; content: string; channel?: string }) => {
+    if (outbound.sessionId?.startsWith("canvas-")) {
+      pushCanvasEvent(outbound.sessionId, "message", { content: outbound.content });
+    }
+  });
+
+  app.get("/canvas", (c) => {
+    const sessionId = "canvas-" + crypto.randomUUID();
+    // Initialize event buffer for this session
+    canvasEvents.set(sessionId, []);
+    return c.html(CanvasPage({ sessionId }));
+  });
+
+  app.get("/js/canvas.js", (c) => {
+    c.header("Content-Type", "application/javascript; charset=utf-8");
+    c.header("Cache-Control", "no-cache");
+    return c.body(getCanvasScript());
+  });
+
+  app.post("/api/canvas/chat", async (c) => {
+    if (!config.web.canvas?.enabled) {
+      return c.json({ error: "Canvas is disabled" }, 400);
+    }
+
+    const body = await c.req.json<{ sessionId: string; message: string }>();
+    if (!body.message?.trim()) {
+      return c.json({ error: "Message is required" }, 400);
+    }
+
+    const sessionId = body.sessionId || "canvas-" + crypto.randomUUID();
+
+    // Ensure event buffer exists for this session
+    if (!canvasEvents.has(sessionId)) canvasEvents.set(sessionId, []);
+
+    // Prepend canvas instructions so the AI uses canvas_write
+    const canvasInstruction = [
+      "[CANVAS MODE] You are working in a live canvas environment.",
+      "You MUST use the canvas_write tool to create/update files (HTML, CSS, JS).",
+      "Files written with canvas_write appear in a live preview iframe immediately.",
+      "Always start by writing an index.html file. Use canvas_read to check existing files.",
+      "Do NOT use file_write — only canvas_write works for the live preview.",
+      "Write complete, self-contained HTML files with inline CSS and JS when possible.",
+      "",
+      "User request: " + body.message.trim(),
+    ].join("\n");
+
+    // Fire-and-forget — response arrives via polling /api/canvas/events
+    kernel.eventBus.emit("message:inbound", {
+      id: crypto.randomUUID(),
+      sessionId,
+      channel: "canvas",
+      content: canvasInstruction,
+      user: { id: "canvas-user", name: "Canvas User" },
+      timestamp: new Date().toISOString(),
+      metadata: { canvas: true },
+    }).catch(() => {});
+
+    return c.json({ sessionId }, 202);
+  });
+
+  // Polling endpoint — replaces SSE which Bun cannot sustain
+  app.get("/api/canvas/events", (c) => {
+    const sessionId = c.req.query("sessionId") || "__files__";
+    const since = parseInt(c.req.query("since") || "0", 10);
+
+    const buf = canvasEvents.get(sessionId) || [];
+    const events = buf.filter((e) => e.id > since);
+
+    return c.json({ events });
+  });
+
+  app.post("/api/canvas/clear", (c) => {
+    if (existsSync(canvasRoot)) {
+      rmSync(canvasRoot, { recursive: true, force: true });
+      mkdirSync(canvasRoot, { recursive: true });
+    }
+    // Clear all event buffers
+    canvasEvents.clear();
+    return c.json({ cleared: true });
+  });
+
+  app.get("/api/canvas/files", (c) => {
+    if (!existsSync(canvasRoot)) {
+      return c.json({ files: [] });
+    }
+
+    const files: Array<{ path: string; size: number }> = [];
+    function walk(dir: string): void {
+      if (files.length >= 200) return;
+      const items = readdirSync(dir, { withFileTypes: true });
+      for (const item of items) {
+        if (item.name.startsWith(".")) continue;
+        const full = resolve(dir, item.name);
+        if (item.isDirectory()) {
+          walk(full);
+        } else {
+          files.push({ path: relative(canvasRoot, full), size: statSync(full).size });
+        }
+      }
+    }
+    walk(canvasRoot);
+    return c.json({ files });
+  });
+
+  app.get("/api/canvas/preview/*", async (c) => {
+    const reqPath = c.req.path.replace("/api/canvas/preview/", "").replace(/^\/+/, "") || "index.html";
+    const decoded = decodeURIComponent(reqPath);
+    const fullPath = resolve(canvasRoot, decoded);
+
+    // Path traversal check
+    const rel = relative(canvasRoot, fullPath);
+    if (rel.startsWith("..") || resolve(fullPath).includes("\0")) {
+      return c.text("Forbidden", 403);
+    }
+
+    if (!existsSync(fullPath) || statSync(fullPath).isDirectory()) {
+      // Return a placeholder page for index.html so the iframe isn't blank
+      if (decoded === "index.html") {
+        return c.html(`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+          body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center;
+                 height: 100vh; margin: 0; color: #9ca3af; background: #fafbfc; }
+          @media (prefers-color-scheme: dark) { body { background: #111113; color: #71717a; } }
+          .placeholder { text-align: center; }
+          .placeholder .icon { font-size: 48px; opacity: 0.3; margin-bottom: 12px; }
+          .placeholder p { font-size: 15px; }
+        </style></head><body><div class="placeholder"><div class="icon">🎨</div>
+        <p>Canvas preview will appear here</p></div>
+        </body></html>`);
+      }
+      return c.text("Not found", 404);
+    }
+
+    const ext = extname(fullPath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      ".html": "text/html", ".htm": "text/html",
+      ".css": "text/css",
+      ".js": "application/javascript",
+      ".json": "application/json",
+      ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+      ".gif": "image/gif", ".svg": "image/svg+xml",
+      ".ico": "image/x-icon",
+      ".woff": "font/woff", ".woff2": "font/woff2",
+      ".ttf": "font/ttf",
+    };
+    const contentType = mimeMap[ext] || "application/octet-stream";
+
+    const file = Bun.file(fullPath);
+    let content = await file.arrayBuffer();
+
+    c.header("Content-Type", contentType);
+    c.header("Cache-Control", "no-cache");
+    return c.body(content);
   });
 
   // --- Cron Page ---
@@ -412,7 +817,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
         return c.json({ error: "Message is required" }, 400);
       }
 
-      const sessionId = body.sessionId || `web-${Date.now()}`;
+      const sessionId = body.sessionId || crypto.randomUUID();
 
       // Convert uploaded images to Attachment[]
       const attachments = body.images?.map((img) => ({
@@ -627,6 +1032,9 @@ export function createWebApp(kernel: Kernel, config: PawConfig): Hono {
     if (!data) return c.json({ error: "Session not found" }, 404);
     return c.json({ session: data.session, messages: data.messages });
   });
+
+  // Expose authManager for kernel integration
+  (app as any).__authManager = authManager;
 
   return app;
 }

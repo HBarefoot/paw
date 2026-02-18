@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+import { mkdirSync } from "node:fs";
 import { EventBus } from "./bus.js";
 import { Sandbox } from "./sandbox.js";
 import { discoverPlugins } from "./plugin-loader.js";
@@ -25,6 +27,7 @@ import { MCPClientManager } from "../mcp/client-manager.js";
 import { SkillManager } from "../ai/skills.js";
 import { createFileTools } from "../tools/file-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
+import { createCanvasTools } from "../tools/canvas-tools.js";
 import { createLogger, setLogLevel } from "../observability/logger.js";
 import type { PawConfig } from "../types/config.js";
 import type { ChannelPlugin, PluginContext, PluginStore } from "../types/plugin.js";
@@ -45,6 +48,7 @@ export class Kernel {
   private accessController: AccessController | null = null;
   private rateLimiter: RateLimiter | null = null;
   private webServer: { stop: () => void } | null = null;
+  private sessionCleanupInterval: ReturnType<typeof setInterval> | null = null;
   private mcpClientManager: MCPClientManager;
   private skillManager: SkillManager;
   private logger = createLogger("kernel");
@@ -113,6 +117,21 @@ export class Kernel {
         allowedCommands: config.workspace.allowedCommands,
       }));
       this.logger.info("File/exec tools registered");
+    }
+
+    // Register canvas tools
+    if (config.web.canvas?.enabled) {
+      const canvasRoot = resolve(config.web.canvas.root);
+      mkdirSync(canvasRoot, { recursive: true });
+      // Register sandbox manifest so permission checks pass
+      this.sandbox.registerManifest({
+        name: "canvas",
+        version: "1.0.0",
+        description: "Live canvas workspace for HTML/CSS/JS preview",
+        permissions: ["canvas"],
+      });
+      this.toolRegistry.register(createCanvasTools({ canvasRoot }));
+      this.logger.info("Canvas tools registered", { canvasRoot });
     }
 
     // Initialize cron scheduler
@@ -216,7 +235,20 @@ export class Kernel {
       this.webServer = startWebServer(webApp, {
         host: this.config.web.host,
         port: this.config.web.port,
-      }, createLogger("web"));
+      }, createLogger("web"), this.config.web.tls);
+
+      // Periodic session cleanup (every 15 minutes)
+      const authManager = (webApp as any).__authManager;
+      if (authManager?.cleanExpiredSessions) {
+        this.sessionCleanupInterval = setInterval(() => {
+          try {
+            authManager.cleanExpiredSessions();
+          } catch {
+            // Ignore cleanup errors
+          }
+        }, 15 * 60 * 1000);
+      }
+
       await this.bus.emit("web:started", { host: this.config.web.host, port: this.config.web.port });
     }
 
@@ -443,6 +475,10 @@ export class Kernel {
 
   async shutdown(): Promise<void> {
     this.logger.info("Shutting down...");
+    if (this.sessionCleanupInterval) {
+      clearInterval(this.sessionCleanupInterval);
+      this.sessionCleanupInterval = null;
+    }
     this.webServer?.stop();
     this.heartbeatChecker?.stop();
     this.cronScheduler?.stop();

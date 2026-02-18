@@ -62,6 +62,19 @@ export const defaults: PawConfig = {
     port: 3000,
     username: "admin",
     password: "",
+    tls: {
+      enabled: false,
+      certFile: "",
+      keyFile: "",
+    },
+    session: {
+      maxAgeMinutes: 480,
+      idleTimeoutMinutes: 60,
+    },
+    canvas: {
+      enabled: true,
+      root: "./data/canvas",
+    },
   },
   workspace: {
     path: ".",

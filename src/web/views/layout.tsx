@@ -17,6 +17,7 @@ function navIcon(name: string): string {
     mcp: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6m0 8v6M4.93 4.93l4.24 4.24m5.66 5.66l4.24 4.24M2 12h6m8 0h6M4.93 19.07l4.24-4.24m5.66-5.66l4.24-4.24"/></svg>`,
     skills: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
     chat: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
+    canvas: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
   };
   return icons[name] ?? "";
 }
@@ -735,6 +736,7 @@ const navItems = [
   { path: "/sessions", label: "Sessions", icon: "sessions" },
   { path: "/mcp", label: "MCP", icon: "mcp" },
   { path: "/skills", label: "Skills", icon: "skills" },
+  { path: "/canvas", label: "Canvas", icon: "canvas" },
   { path: "/chat", label: "Chat", icon: "chat" },
 ];
 
@@ -753,7 +755,7 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
       <div class="app-layout">
         <aside class="sidebar">
           <div class="sidebar-header">
-            <div class="logo-icon">C</div>
+            {raw(`<div class="logo-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><ellipse cx="7" cy="4.5" rx="2.5" ry="3"/><ellipse cx="17" cy="4.5" rx="2.5" ry="3"/><ellipse cx="3.5" cy="11" rx="2.5" ry="3"/><ellipse cx="20.5" cy="11" rx="2.5" ry="3"/><path d="M12 22c-4 0-7-2.5-7-6 0-2.5 2-5 4-6.5a4.5 4.5 0 0 1 6 0c2 1.5 4 4 4 6.5 0 3.5-3 6-7 6z"/></svg></div>`)}
             <span class="logo-text">Paw</span>
           </div>
           <nav class="sidebar-nav">
@@ -769,6 +771,10 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
           </nav>
           <div class="sidebar-footer">
             <span>Paw v0.1.0</span>
+            <a href="/logout" class="nav-item" style="margin-top: 8px; font-size: 12px; padding: 6px 12px;">
+              {raw(`<span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span>`)}
+              <span class="nav-label">Logout</span>
+            </a>
           </div>
         </aside>
         <div class="main-area">

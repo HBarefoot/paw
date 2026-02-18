@@ -61,6 +61,19 @@ export interface PawConfig {
     authToken?: string;
     username: string;
     password: string;
+    tls: {
+      enabled: boolean;
+      certFile: string;
+      keyFile: string;
+    };
+    session: {
+      maxAgeMinutes: number;
+      idleTimeoutMinutes: number;
+    };
+    canvas: {
+      enabled: boolean;
+      root: string;
+    };
   };
   workspace: {
     path: string;
