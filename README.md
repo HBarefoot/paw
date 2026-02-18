@@ -26,7 +26,8 @@ bun run dev
 - **Plugin architecture** — Built-in Slack and Web Pilot (Playwright) plugins. Drop-in plugin discovery from `plugins/` directory.
 - **MCP support** — Connect external tool servers via stdio, SSE, or HTTP transport. Manage at `/mcp`.
 - **Cron scheduler** — Schedule prompts, tool calls, or events on cron expressions.
-- **Web UI** — Dashboard, chat, memory browser, session history, config editor, skill/cron/MCP management.
+- **Live Canvas** — Agent-driven visual workspace. Prompt the AI to build HTML/CSS/JS and see a live preview in a split-pane iframe. Auto-refreshes on changes.
+- **Web UI** — Dashboard, chat, canvas, memory browser, session history, config editor, skill/cron/MCP management.
 - **Security** — Rate limiting, user allowlist/blocklist, pairing code approval, sandboxed tool execution.
 
 ## Configuration
@@ -96,6 +97,7 @@ Start with `PAW_WEB_ENABLED=true` (or set in config). Default: `http://127.0.0.1
 |------|------|-------------|
 | Dashboard | `/` | Health, uptime, plugin status, memory/cron stats |
 | Chat | `/chat` | Interactive chat with session persistence |
+| Canvas | `/canvas` | Live visual workspace — AI writes HTML/CSS/JS with live preview |
 | Memory | `/memory` | Browse, search, and manage stored memories |
 | Sessions | `/sessions` | View past conversation sessions |
 | Skills | `/skills` | View/toggle/edit skill groups and their tools |
@@ -112,6 +114,15 @@ Tools are automatically grouped into skills based on their source plugin. Only a
 This reduces input tokens from ~15-25k to ~1k per request.
 
 Manage skills at `/skills` in the web UI: toggle always-active, edit descriptions, view tool lists.
+
+## Canvas
+
+The live canvas at `/canvas` is a split-pane workspace where the AI generates HTML/CSS/JS and the result renders in a live preview iframe.
+
+- **How it works** — Send a prompt (e.g. "Create a landing page for a car dealer"), the AI uses `canvas_write` to create files in `./data/canvas/`, and the preview auto-refreshes.
+- **Persistence** — Canvas files survive server restarts. Use the trash icon in the toolbar to clear all files and start fresh.
+- **Tools** — `canvas_write`, `canvas_read`, `canvas_list` — sandboxed to the canvas root directory.
+- **Config** — `web.canvas.enabled` (default: true), `web.canvas.root` (default: `./data/canvas`).
 
 ## Plugins
 
@@ -177,7 +188,7 @@ src/
   security/         Access control, rate limiting
   mcp/              MCP client manager (stdio, SSE, HTTP)
   web/              Hono web server, JSX views, REST API
-  tools/            Built-in file and exec tools
+  tools/            Built-in file, exec, and canvas tools
   types/            TypeScript interfaces
 plugins/
   slack/            Slack channel plugin
