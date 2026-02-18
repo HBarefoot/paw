@@ -39,11 +39,83 @@ function skillsScript(): string {
       var el = document.getElementById('tools-' + name);
       if (el) el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
     }
+
+    async function toggleTool(skillName, toolName, currentlyEnabled, checkbox) {
+      var nowEnabled = !currentlyEnabled;
+      var label = checkbox.closest('label');
+
+      // Optimistically update the UI immediately
+      if (label) {
+        label.style.opacity = nowEnabled ? '' : '0.5';
+        var code = label.querySelector('code');
+        if (code) code.style.textDecoration = nowEnabled ? '' : 'line-through';
+      }
+      checkbox.setAttribute('onchange', "toggleTool('" + skillName + "', '" + toolName + "', " + nowEnabled + ", this)");
+
+      // Update counters right away
+      updateToolCounts(skillName);
+
+      var res = await fetch(
+        '/api/skills/' + encodeURIComponent(skillName) + '/tools/' + encodeURIComponent(toolName) + '/toggle',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: nowEnabled }),
+        }
+      );
+      if (!res.ok) {
+        // Revert on failure
+        checkbox.checked = currentlyEnabled;
+        if (label) {
+          label.style.opacity = currentlyEnabled ? '' : '0.5';
+          var codeEl = label.querySelector('code');
+          if (codeEl) codeEl.style.textDecoration = currentlyEnabled ? '' : 'line-through';
+        }
+        checkbox.setAttribute('onchange', "toggleTool('" + skillName + "', '" + toolName + "', " + currentlyEnabled + ", this)");
+        updateToolCounts(skillName);
+        alert('Failed to toggle tool');
+      }
+    }
+
+    function updateToolCounts(skillName) {
+      // Update the tool count button for this skill
+      var row = document.getElementById('tools-' + skillName);
+      if (row) {
+        var checkboxes = row.querySelectorAll('input[type="checkbox"]');
+        var enabled = 0;
+        var total = checkboxes.length;
+        checkboxes.forEach(function(cb) { if (cb.checked) enabled++; });
+        var skillRow = row.previousElementSibling;
+        if (skillRow) {
+          var btn = skillRow.querySelector('.btn-ghost.btn-sm');
+          if (btn) btn.textContent = enabled < total ? (enabled + '/' + total + ' tools') : (total + ' tools');
+        }
+      }
+
+      // Update the Total Tools stat card
+      var allCheckboxes = document.querySelectorAll('tr[id^="tools-"] input[type="checkbox"]');
+      var globalEnabled = 0;
+      var globalTotal = allCheckboxes.length;
+      allCheckboxes.forEach(function(cb) { if (cb.checked) globalEnabled++; });
+      var statCards = document.querySelectorAll('.grid .card');
+      var toolsCard = statCards[2];
+      if (toolsCard) {
+        var numEl = toolsCard.querySelector('div');
+        var labelEl = toolsCard.querySelectorAll('div')[1];
+        if (numEl && labelEl) {
+          var globalDisabled = globalTotal - globalEnabled;
+          numEl.textContent = globalDisabled > 0 ? (globalEnabled + '/' + globalTotal) : String(globalTotal);
+          labelEl.textContent = globalDisabled > 0 ? 'Enabled / Total Tools' : 'Total Tools';
+        }
+      }
+    }
   `;
 }
 
 export const SkillsPage: FC<SkillsPageProps> = ({ skills, totalTools, success, error }) => {
   const alwaysActiveCount = skills.filter((s) => s.alwaysActive).length;
+  const totalDisabled = skills.reduce((sum, s) => sum + s.disabledTools.length, 0);
+  const enabledTools = totalTools - totalDisabled;
 
   return (
     <Layout title="Skills" currentPath="/skills">
@@ -60,8 +132,12 @@ export const SkillsPage: FC<SkillsPageProps> = ({ skills, totalTools, success, e
           <div style="font-size:13px;color:var(--text-muted)">Always Active</div>
         </div>
         <div class="card" style="text-align:center">
-          <div style="font-size:28px;font-weight:700;color:var(--text)">{totalTools}</div>
-          <div style="font-size:13px;color:var(--text-muted)">Total Tools</div>
+          <div style="font-size:28px;font-weight:700;color:var(--text)">
+            {totalDisabled > 0 ? `${enabledTools}/${totalTools}` : totalTools}
+          </div>
+          <div style="font-size:13px;color:var(--text-muted)">
+            {totalDisabled > 0 ? "Enabled / Total Tools" : "Total Tools"}
+          </div>
         </div>
       </div>
 
@@ -87,7 +163,9 @@ export const SkillsPage: FC<SkillsPageProps> = ({ skills, totalTools, success, e
                   <td style="max-width:300px;font-size:13px">{skill.description}</td>
                   <td>
                     <button class="btn-ghost btn-sm" onclick={`toggleTools('${skill.name}')`}>
-                      {skill.toolNames.length} tools
+                      {skill.disabledTools.length > 0
+                        ? `${skill.toolNames.length - skill.disabledTools.length}/${skill.toolNames.length} tools`
+                        : `${skill.toolNames.length} tools`}
                     </button>
                   </td>
                   <td>
@@ -115,10 +193,28 @@ export const SkillsPage: FC<SkillsPageProps> = ({ skills, totalTools, success, e
                 <tr id={`tools-${skill.name}`} style="display:none">
                   <td colspan={5} style="padding:8px 16px;background:var(--bg-secondary)">
                     <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Tools in this skill:</div>
-                    <div style="display:flex;flex-wrap:wrap;gap:6px">
-                      {skill.toolNames.map((t) => (
-                        <code style="font-size:12px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border)">{t}</code>
-                      ))}
+                    <div style="display:flex;flex-direction:column;gap:4px">
+                      {skill.toolNames.map((t) => {
+                        const isDisabled = skill.disabledTools.includes(t);
+                        const desc = skill.toolDescriptions[t] ?? "";
+                        const shortDesc = desc.length > 80 ? desc.slice(0, 80) + "..." : desc;
+                        return (
+                          <label
+                            style={`display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 8px;border-radius:4px;background:var(--surface);border:1px solid var(--border);cursor:pointer${isDisabled ? ";opacity:0.5" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={!isDisabled}
+                              onchange={`toggleTool('${skill.name}', '${t}', ${!isDisabled}, this)`}
+                              style="margin:0;flex-shrink:0"
+                            />
+                            <code style={`font-size:12px;flex-shrink:0${isDisabled ? ";text-decoration:line-through" : ""}`}>{t}</code>
+                            {shortDesc && (
+                              <span style="color:var(--text-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{shortDesc}</span>
+                            )}
+                          </label>
+                        );
+                      })}
                     </div>
                   </td>
                 </tr>,

@@ -96,6 +96,7 @@ export const configSchema = z.object({
   skills: z.record(z.string(), z.object({
     description: z.string().optional(),
     alwaysActive: z.boolean().optional(),
+    disabledTools: z.array(z.string()).optional(),
   })).default({}),
   mcpServers: z.record(z.string(), z.object({
     command: z.string().optional(),

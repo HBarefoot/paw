@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolResult } from "../types/message.js";
+import type { ToolDefinition, ToolResult, ToolResultImage } from "../types/message.js";
 import type { Logger } from "../types/plugin.js";
 
 interface MCPServerConfig {
@@ -20,7 +20,7 @@ interface MCPClient {
   close(): Promise<void>;
   listTools(): Promise<{ tools: MCPTool[] }>;
   callTool(params: { name: string; arguments: Record<string, unknown> }): Promise<{
-    content: Array<{ type: string; text?: string }>;
+    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
     isError?: boolean;
   }>;
 }
@@ -123,6 +123,7 @@ export class MCPClientManager {
 
   private wrapMCPTool(serverName: string, client: MCPClient, tool: MCPTool): ToolDefinition {
     const qualifiedName = `mcp__${serverName}__${tool.name}`;
+    const logger = this.logger;
 
     return {
       name: qualifiedName,
@@ -132,11 +133,61 @@ export class MCPClientManager {
       handler: async (input: Record<string, unknown>): Promise<ToolResult> => {
         try {
           const result = await client.callTool({ name: tool.name, arguments: input });
-          const text = result.content
-            .filter((c) => c.type === "text" && c.text)
-            .map((c) => c.text!)
-            .join("\n");
-          return { content: text || "(no output)", is_error: result.isError ?? false };
+
+          // Log content block summary for debugging
+          const blockSummary = (result.content ?? []).map((c: any) => ({
+            type: c.type,
+            hasData: !!c.data,
+            hasMimeType: !!c.mimeType,
+            hasBlob: !!(c.resource?.blob),
+            textPreview: c.type === "text" ? (c.text ?? "").slice(0, 100) : undefined,
+          }));
+          logger.debug("MCP tool result", { tool: tool.name, blocks: blockSummary });
+
+          // The MCP SDK may return content blocks as typed objects — access fields defensively
+          const contentBlocks = result.content as Array<Record<string, unknown>>;
+          const textParts: string[] = [];
+          const images: ToolResultImage[] = [];
+
+          for (const block of contentBlocks) {
+            if (block.type === "text" && typeof block.text === "string") {
+              textParts.push(block.text);
+            } else if (block.type === "image" && typeof block.data === "string") {
+              // Standard MCP ImageContent: { type: "image", data: base64, mimeType: "image/png" }
+              const mt = (block.mimeType as string) || "image/png";
+              if (["image/png", "image/jpeg", "image/gif", "image/webp"].includes(mt)) {
+                images.push({ base64: block.data as string, media_type: mt as ToolResultImage["media_type"] });
+              }
+            } else if (block.type === "resource" && typeof block.resource === "object" && block.resource !== null) {
+              // MCP EmbeddedResource: { type: "resource", resource: { blob: base64, mimeType, uri } }
+              const res = block.resource as Record<string, unknown>;
+              if (typeof res.blob === "string" && typeof res.mimeType === "string") {
+                const mt = res.mimeType as string;
+                if (mt.startsWith("image/") && ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(mt)) {
+                  images.push({ base64: res.blob as string, media_type: mt as ToolResultImage["media_type"] });
+                }
+              } else if (typeof res.text === "string") {
+                textParts.push(res.text);
+              }
+            }
+
+            // Log unexpected content types for debugging
+            if (!["text", "image", "resource"].includes(block.type as string)) {
+              logger.debug("Unknown MCP content block type", { tool: tool.name, type: block.type, keys: Object.keys(block) });
+            }
+          }
+
+          // Log image detection for debugging
+          if (images.length > 0) {
+            logger.info("MCP tool returned images", { tool: tool.name, count: images.length });
+          }
+
+          const text = textParts.join("\n");
+          return {
+            content: text || (images.length > 0 ? `Screenshot captured (${images.length} image(s))` : "(no output)"),
+            images: images.length > 0 ? images : undefined,
+            is_error: result.isError ?? false,
+          };
         } catch (err) {
           return { content: `MCP tool error: ${err instanceof Error ? err.message : String(err)}`, is_error: true };
         }

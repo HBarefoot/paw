@@ -25,8 +25,14 @@ export interface OutboundMessage {
   metadata?: Record<string, unknown>;
 }
 
+export interface ToolResultImage {
+  base64: string;
+  media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+}
+
 export interface ToolResult {
   content: string;
+  images?: ToolResultImage[];
   is_error?: boolean;
 }
 

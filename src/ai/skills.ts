@@ -5,7 +5,9 @@ export interface SkillEntry {
   name: string;
   description: string;
   toolNames: string[];
+  toolDescriptions: Record<string, string>;
   alwaysActive: boolean;
+  disabledTools: string[];
 }
 
 export class SkillManager {
@@ -15,16 +17,18 @@ export class SkillManager {
   buildFromRegistry(registry: ToolRegistry): void {
     this.skills.clear();
 
-    const groups = new Map<string, { tools: string[]; alwaysActive: boolean }>();
+    const groups = new Map<string, { tools: string[]; descriptions: Record<string, string>; alwaysActive: boolean }>();
 
     for (const tool of registry.allTools()) {
       const skillName = this.deriveSkillName(tool);
       const isAlwaysOn = skillName === "memory";
 
       if (!groups.has(skillName)) {
-        groups.set(skillName, { tools: [], alwaysActive: isAlwaysOn });
+        groups.set(skillName, { tools: [], descriptions: {}, alwaysActive: isAlwaysOn });
       }
-      groups.get(skillName)!.tools.push(tool.name);
+      const group = groups.get(skillName)!;
+      group.tools.push(tool.name);
+      group.descriptions[tool.name] = tool.description;
     }
 
     for (const [name, group] of groups) {
@@ -32,7 +36,9 @@ export class SkillManager {
         name,
         description: this.deriveDescription(name),
         toolNames: group.tools,
+        toolDescriptions: group.descriptions,
         alwaysActive: group.alwaysActive,
+        disabledTools: [],
       });
     }
   }
@@ -62,9 +68,12 @@ export class SkillManager {
     const deferred = Array.from(this.skills.values()).filter((s) => !s.alwaysActive);
     if (deferred.length === 0) return "";
 
-    const lines = deferred.map(
-      (s) => `- **${s.name}** (${s.toolNames.length} tools): ${s.description}`,
-    );
+    const lines = deferred.map((s) => {
+      const enabled = s.toolNames.length - s.disabledTools.length;
+      const total = s.toolNames.length;
+      const count = enabled < total ? `${enabled}/${total} tools` : `${total} tools`;
+      return `- **${s.name}** (${count}): ${s.description}`;
+    });
     return [
       "\n## Available Skills",
       "You can activate additional tool sets by calling the `activate_skill` tool. Available skills:",
@@ -89,7 +98,9 @@ export class SkillManager {
 
     for (const skill of this.skills.values()) {
       if (skill.alwaysActive) {
-        for (const t of skill.toolNames) names.add(t);
+        for (const t of skill.toolNames) {
+          if (!skill.disabledTools.includes(t)) names.add(t);
+        }
       }
     }
 
@@ -98,7 +109,9 @@ export class SkillManager {
       for (const skillName of active) {
         const skill = this.skills.get(skillName);
         if (skill) {
-          for (const t of skill.toolNames) names.add(t);
+          for (const t of skill.toolNames) {
+            if (!skill.disabledTools.includes(t)) names.add(t);
+          }
         }
       }
     }
@@ -132,26 +145,41 @@ export class SkillManager {
     if (skill) skill.description = value;
   }
 
-  applyOverrides(overrides: Record<string, { description?: string; alwaysActive?: boolean }>): void {
+  setToolEnabled(skillName: string, toolName: string, enabled: boolean): void {
+    const skill = this.skills.get(skillName);
+    if (!skill) return;
+    if (enabled) {
+      skill.disabledTools = skill.disabledTools.filter((t) => t !== toolName);
+    } else {
+      if (!skill.disabledTools.includes(toolName)) {
+        skill.disabledTools.push(toolName);
+      }
+    }
+  }
+
+  applyOverrides(overrides: Record<string, { description?: string; alwaysActive?: boolean; disabledTools?: string[] }>): void {
     for (const [name, override] of Object.entries(overrides)) {
       const skill = this.skills.get(name);
       if (!skill) continue;
       if (override.description !== undefined) skill.description = override.description;
       if (override.alwaysActive !== undefined) skill.alwaysActive = override.alwaysActive;
+      if (override.disabledTools !== undefined) skill.disabledTools = override.disabledTools;
     }
   }
 
-  toOverrides(): Record<string, { description?: string; alwaysActive?: boolean }> {
-    const result: Record<string, { description?: string; alwaysActive?: boolean }> = {};
+  toOverrides(): Record<string, { description?: string; alwaysActive?: boolean; disabledTools?: string[] }> {
+    const result: Record<string, { description?: string; alwaysActive?: boolean; disabledTools?: string[] }> = {};
     for (const skill of this.skills.values()) {
       const defaultDesc = this.deriveDescription(skill.name);
       const defaultAlwaysActive = skill.name === "memory";
       const hasDescOverride = skill.description !== defaultDesc;
       const hasActiveOverride = skill.alwaysActive !== defaultAlwaysActive;
-      if (hasDescOverride || hasActiveOverride) {
+      const hasDisabledTools = skill.disabledTools.length > 0;
+      if (hasDescOverride || hasActiveOverride || hasDisabledTools) {
         result[skill.name] = {};
         if (hasDescOverride) result[skill.name].description = skill.description;
         if (hasActiveOverride) result[skill.name].alwaysActive = skill.alwaysActive;
+        if (hasDisabledTools) result[skill.name].disabledTools = skill.disabledTools;
       }
     }
     return result;
