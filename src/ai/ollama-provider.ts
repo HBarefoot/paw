@@ -1,0 +1,160 @@
+import { ToolRegistry } from "./tools.js";
+import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import type { AIProvider, ChatMessage } from "./base-provider.js";
+import type { Logger } from "../types/plugin.js";
+
+export interface OllamaProviderConfig {
+  baseUrl: string;
+  model: string;
+  maxToolRoundtrips: number;
+}
+
+interface OllamaMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: OllamaToolCall[];
+}
+
+interface OllamaToolCall {
+  function: {
+    name: string;
+    arguments: Record<string, unknown>;
+  };
+}
+
+interface OllamaTool {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+interface OllamaResponse {
+  message: {
+    role: string;
+    content: string;
+    tool_calls?: OllamaToolCall[];
+  };
+  done: boolean;
+}
+
+export class OllamaProvider implements AIProvider {
+  readonly name = "ollama";
+  private baseUrl: string;
+  private model: string;
+  private maxToolRoundtrips: number;
+  readonly toolRegistry: ToolRegistry;
+  private logger: Logger;
+
+  constructor(config: OllamaProviderConfig, toolRegistry: ToolRegistry, logger: Logger) {
+    this.baseUrl = config.baseUrl.replace(/\/$/, "");
+    this.model = config.model;
+    this.maxToolRoundtrips = config.maxToolRoundtrips;
+    this.toolRegistry = toolRegistry;
+    this.logger = logger;
+
+    this.logger.info("Ollama provider initialized", { baseUrl: this.baseUrl, model: this.model });
+  }
+
+  async chat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
+    const tools = this.buildTools();
+    let roundtrips = 0;
+
+    const actualSystemPrompt = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+    const conversation: OllamaMessage[] = [
+      { role: "system", content: actualSystemPrompt },
+      ...messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    ];
+
+    this.logger.info("Ollama system prompt", {
+      fromArg: !!systemPrompt,
+      length: actualSystemPrompt.length,
+      preview: actualSystemPrompt.substring(0, 150),
+    });
+
+    while (roundtrips < this.maxToolRoundtrips) {
+      this.logger.debug("Sending request to Ollama", { roundtrip: roundtrips, model: this.model });
+
+      const body: Record<string, unknown> = {
+        model: this.model,
+        messages: conversation,
+        stream: false,
+      };
+
+      if (tools.length > 0) {
+        body.tools = tools;
+      }
+
+      const res = await fetch(`${this.baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Ollama error (${res.status}): ${text}`);
+      }
+
+      const data = (await res.json()) as OllamaResponse;
+      const toolCalls = data.message.tool_calls;
+
+      // No tool calls — return the text response
+      if (!toolCalls || toolCalls.length === 0) {
+        return data.message.content || "";
+      }
+
+      // Add assistant message with tool calls
+      conversation.push({
+        role: "assistant",
+        content: data.message.content || "",
+        tool_calls: toolCalls,
+      });
+
+      // Execute each tool call and add results
+      for (const call of toolCalls) {
+        this.logger.info("Executing tool", { tool: call.function.name });
+        const result = await this.toolRegistry.execute(call.function.name, call.function.arguments);
+        conversation.push({
+          role: "tool",
+          content: result.content,
+        });
+      }
+
+      roundtrips++;
+    }
+
+    return "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.";
+  }
+
+  private buildTools(): OllamaTool[] {
+    return this.toolRegistry.toAnthropicTools().map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.input_schema,
+      },
+    }));
+  }
+
+  async healthCheck(): Promise<{ ok: boolean; details?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/tags`);
+      if (!res.ok) return { ok: false, details: `HTTP ${res.status}` };
+      const data = (await res.json()) as { models?: Array<{ name: string }> };
+      const models = data.models?.map((m) => m.name) ?? [];
+      const hasModel = models.some((m) => m.startsWith(this.model));
+      return {
+        ok: true,
+        details: hasModel
+          ? `Connected, model "${this.model}" available`
+          : `Connected, but model "${this.model}" not found. Available: ${models.join(", ")}`,
+      };
+    } catch (err) {
+      return { ok: false, details: `Cannot reach Ollama at ${this.baseUrl}: ${err}` };
+    }
+  }
+}
