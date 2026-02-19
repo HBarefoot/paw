@@ -3,7 +3,7 @@ import { getCookie } from "hono/cookie";
 import type { WebAuthManager } from "../../security/web-auth.js";
 
 const PUBLIC_ROUTES = new Set(["/login", "/login/setup", "/login/totp-setup", "/api/health"]);
-const PUBLIC_PREFIXES = ["/api/canvas/events", "/api/canvas/files", "/api/canvas/preview/"];
+const PUBLIC_PREFIXES = ["/api/canvas/events", "/api/canvas/files", "/api/canvas/preview/", "/canvas/share/"];
 
 function isPublicRoute(path: string): boolean {
   if (PUBLIC_ROUTES.has(path)) return true;

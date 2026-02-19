@@ -45,10 +45,10 @@ const cssDesignSystem = `
     --text-tertiary: #9ca3af;
     --text-inverse: #ffffff;
 
-    --accent: #6366f1;
-    --accent-hover: #4f46e5;
-    --accent-subtle: #eef2ff;
-    --accent-gradient: linear-gradient(135deg, #6366f1, #8b5cf6);
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --accent-subtle: #e8e5ff;
+    --accent-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
 
     --success: #10b981;
     --success-bg: #ecfdf5;
@@ -88,16 +88,16 @@ const cssDesignSystem = `
 
       --border-primary: #27272a;
       --border-secondary: #1e1e22;
-      --border-focus: #818cf8;
+      --border-focus: #a5b4fc;
 
       --text-primary: #f4f4f5;
       --text-secondary: #a1a1aa;
       --text-tertiary: #71717a;
       --text-inverse: #09090b;
 
-      --accent: #818cf8;
-      --accent-hover: #6366f1;
-      --accent-subtle: rgba(99,102,241,0.12);
+      --accent: #a5b4fc;
+      --accent-hover: #818cf8;
+      --accent-subtle: rgba(165,180,252,0.10);
 
       --success-bg: rgba(16,185,129,0.1);
       --error-bg: rgba(239,68,68,0.1);
@@ -492,8 +492,8 @@ const cssDesignSystem = `
     font-size: 14px;
   }
   .msg.user {
-    background: var(--accent);
-    color: var(--text-inverse);
+    background: var(--accent-subtle);
+    color: var(--text-primary);
     border-bottom-right-radius: var(--radius-sm);
   }
   .msg.assistant {
@@ -516,7 +516,7 @@ const cssDesignSystem = `
     margin-bottom: 4px;
     opacity: 0.6;
   }
-  .msg.user .role { color: rgba(255,255,255,0.7); }
+  .msg.user .role { color: var(--text-tertiary); }
 
   /* Markdown rendering inside assistant messages */
   .msg.assistant .md-content h1,
@@ -783,16 +783,44 @@ const cssDesignSystem = `
     padding: 0;
   }
 
+  /* ===== CANVAS DIVIDER ===== */
+  .canvas-divider {
+    width: 4px; cursor: col-resize; background: var(--border-primary);
+    flex-shrink: 0; transition: background 150ms;
+  }
+  .canvas-divider:hover, .canvas-divider.dragging { background: var(--accent); }
+
   /* ===== CANVAS PANEL ===== */
   .canvas-panel {
     display: none;
     flex-direction: column;
-    width: 50%;
+    width: var(--canvas-width, 50%);
     min-width: 380px;
-    border-left: 1px solid var(--border-primary);
+    border-left: none;
     background: var(--bg-card);
   }
   .canvas-panel.open { display: flex; }
+
+  /* ===== CANVAS TABS ===== */
+  .canvas-tabs {
+    display: flex; gap: 0; overflow-x: auto; border-bottom: 1px solid var(--border-secondary);
+    background: var(--bg-secondary); flex-shrink: 0;
+  }
+  .canvas-tab {
+    padding: 6px 12px; font-size: 12px; font-family: var(--font-mono);
+    border-right: 1px solid var(--border-secondary); cursor: pointer;
+    white-space: nowrap; display: flex; align-items: center; gap: 6px;
+    color: var(--text-secondary); background: transparent;
+  }
+  .canvas-tab:hover { background: var(--bg-hover); }
+  .canvas-tab.active { background: var(--bg-card); color: var(--text-primary); font-weight: 500; }
+  .canvas-tab .tab-close { opacity: 0.5; cursor: pointer; font-size: 14px; line-height: 1; }
+  .canvas-tab .tab-close:hover { opacity: 1; color: var(--error); }
+  .canvas-tab-add { color: var(--text-tertiary); font-size: 16px; font-weight: 500; padding: 4px 10px; font-family: var(--font-sans); }
+  .canvas-tab-add:hover { color: var(--accent); background: var(--bg-hover); }
+  .canvas-tab-content { flex: 1; position: relative; }
+  .canvas-tab-content iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: none; }
+  .canvas-tab-content iframe.hidden { display: none; }
 
   .canvas-file-item {
     display: inline-block; padding: 1px 6px; font-size: 11px; font-family: var(--font-mono);
@@ -850,7 +878,7 @@ const cssDesignSystem = `
     background: var(--bg-secondary); border: 1px solid var(--border-primary);
     color: var(--text-secondary);
   }
-  .msg.user .file-badge { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.2); color: rgba(255,255,255,0.9); }
+  .msg.user .file-badge { background: var(--bg-secondary); border-color: var(--border-primary); color: var(--text-secondary); }
 
   /* Chat toolbar row */
   .chat-toolbar {

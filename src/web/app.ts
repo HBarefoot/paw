@@ -355,13 +355,24 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     if (pruneCount > 0) buf.splice(0, pruneCount);
   }
 
-  // Periodic cleanup of abandoned canvas sessions (every 5 minutes)
+  // Share tokens (in-memory, expire after 24 hours)
+  const canvasShareTokens = new Map<string, { createdAt: number }>();
+  const CANVAS_SHARE_TTL = 24 * 60 * 60_000; // 24 hours
+
+  // Periodic cleanup of abandoned canvas sessions and expired share tokens (every 5 minutes)
   const canvasCleanupInterval = setInterval(() => {
     const cutoff = Date.now() - CANVAS_SESSION_TTL;
     for (const [sid, lastAccess] of canvasSessionLastAccess) {
       if (lastAccess < cutoff) {
         canvasEvents.delete(sid);
         canvasSessionLastAccess.delete(sid);
+      }
+    }
+    // Clean up expired share tokens
+    const shareCutoff = Date.now() - CANVAS_SHARE_TTL;
+    for (const [token, meta] of canvasShareTokens) {
+      if (meta.createdAt < shareCutoff) {
+        canvasShareTokens.delete(token);
       }
     }
   }, 5 * 60_000);
@@ -476,6 +487,42 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     const events = buf.filter((e) => e.id > since);
 
     return c.json({ events });
+  });
+
+  // Canvas share — generate a shareable read-only link
+  app.post("/api/canvas/share", (c) => {
+    const token = crypto.randomUUID();
+    canvasShareTokens.set(token, { createdAt: Date.now() });
+    return c.json({ token, url: `/canvas/share/${token}` });
+  });
+
+  // Canvas share — render a read-only preview page (no auth required)
+  app.get("/canvas/share/:token", (c) => {
+    const token = c.req.param("token");
+    const meta = canvasShareTokens.get(token);
+    if (!meta || Date.now() - meta.createdAt > CANVAS_SHARE_TTL) {
+      canvasShareTokens.delete(token);
+      return c.text("Share link expired or invalid", 404);
+    }
+    return c.html(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Shared Canvas - Paw</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; background: #f8f9fb; }
+        .header { padding: 12px 20px; background: #fff; border-bottom: 1px solid #e2e4e9;
+          display: flex; align-items: center; gap: 10px; font-size: 14px; color: #6b7280; }
+        .header strong { color: #111827; }
+        iframe { width: 100%; height: calc(100vh - 49px); border: none; }
+        @media (prefers-color-scheme: dark) {
+          body { background: #09090b; }
+          .header { background: #131316; border-color: #27272a; color: #a1a1aa; }
+          .header strong { color: #f4f4f5; }
+        }
+      </style></head><body>
+      <div class="header"><strong>Paw Canvas</strong> &mdash; Shared preview (read-only)</div>
+      <iframe src="/api/canvas/preview/index.html"></iframe>
+    </body></html>`);
   });
 
   app.post("/api/canvas/clear", (c) => {

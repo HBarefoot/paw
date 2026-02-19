@@ -11,6 +11,7 @@ const attachIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="non
 const canvasIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
 const refreshIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
 const trashIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+const shareIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>`;
 
 export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
   return (
@@ -48,10 +49,12 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
         {raw(`<div class="canvas-panel" id="canvas-panel">
           <div class="canvas-toolbar">
             <span class="current-file" id="current-file">index.html</span>
+            <button onclick="canvasShare()" title="Share canvas">${shareIconSvg}</button>
             <button onclick="canvasRefresh()" title="Refresh preview">${refreshIconSvg}</button>
             <button onclick="canvasClear()" title="Clear canvas" style="color:var(--error)">${trashIconSvg}</button>
           </div>
-          <iframe class="canvas-iframe" id="canvas-iframe" src="/api/canvas/preview/index.html"></iframe>
+          <div class="canvas-tabs" id="canvas-tabs"></div>
+          <div class="canvas-tab-content" id="canvas-tab-content"></div>
           <div class="canvas-status" id="canvas-status">
             <span class="dot" id="status-dot"></span>
             <span id="status-text">Idle</span>
@@ -477,6 +480,9 @@ export function getChatScript(): string {
 
     s = esc(s);
 
+    // Restore <br> tags that the AI may include
+    s = s.replace(/&lt;br\\s*\\/?&gt;/gi, "<br>");
+
     // Bold + italic
     s = s.replace(/\\*\\*\\*(.+?)\\*\\*\\*/g, "<strong><em>$1</em></strong>");
     // Bold
@@ -513,7 +519,8 @@ export function getChatScript(): string {
   var canvasMode = localStorage.getItem("paw-canvas-mode") === "true";
   var canvasPanel = document.getElementById("canvas-panel");
   var canvasToggleBtn = document.getElementById("canvas-toggle");
-  var canvasIframe = document.getElementById("canvas-iframe");
+  var canvasTabsBar = document.getElementById("canvas-tabs");
+  var canvasTabContent = document.getElementById("canvas-tab-content");
   var canvasFileList = document.getElementById("file-list");
   var canvasCurrentFile = document.getElementById("current-file");
   var canvasStatusDot = document.getElementById("status-dot");
@@ -524,16 +531,218 @@ export function getChatScript(): string {
   var canvasCurrentFileName = "index.html";
   var canvasThinkingEl = null;
   var attachBtn = document.getElementById("attach-btn");
+  var canvasDividerEl = null;
+
+  // Multi-tab state
+  var canvasTabs = [];
+  var canvasTabIdSeq = 0;
+
+  function createCanvasTab(path) {
+    var id = ++canvasTabIdSeq;
+    var iframe = document.createElement("iframe");
+    iframe.src = "/api/canvas/preview/" + encodeURIComponent(path);
+    iframe.className = "hidden";
+    iframe.style.background = "#fff";
+    canvasTabContent.appendChild(iframe);
+    var tab = { id: id, path: path, iframeEl: iframe };
+    canvasTabs.push(tab);
+    renderCanvasTabs();
+    activateCanvasTab(id);
+    return tab;
+  }
+
+  function activateCanvasTab(id) {
+    for (var i = 0; i < canvasTabs.length; i++) {
+      var isActive = canvasTabs[i].id === id;
+      canvasTabs[i].iframeEl.classList.toggle("hidden", !isActive);
+      if (isActive) {
+        canvasCurrentFileName = canvasTabs[i].path;
+        canvasCurrentFile.textContent = canvasTabs[i].path;
+      }
+    }
+    renderCanvasTabs();
+  }
+
+  function closeCanvasTab(id) {
+    var idx = -1;
+    for (var i = 0; i < canvasTabs.length; i++) {
+      if (canvasTabs[i].id === id) { idx = i; break; }
+    }
+    if (idx === -1) return;
+    // Don't allow closing the last tab
+    if (canvasTabs.length <= 1) return;
+    var tab = canvasTabs[idx];
+    tab.iframeEl.remove();
+    canvasTabs.splice(idx, 1);
+    // If closed tab was active, activate nearest
+    if (tab.path === canvasCurrentFileName) {
+      var newIdx = Math.min(idx, canvasTabs.length - 1);
+      activateCanvasTab(canvasTabs[newIdx].id);
+    }
+    renderCanvasTabs();
+  }
+
+  function renderCanvasTabs() {
+    var html = "";
+    for (var i = 0; i < canvasTabs.length; i++) {
+      var t = canvasTabs[i];
+      var active = t.path === canvasCurrentFileName ? " active" : "";
+      var closeBtn = canvasTabs.length > 1
+        ? ' <span class="tab-close" data-tab-id="' + t.id + '">\\u00d7</span>'
+        : "";
+      html += '<div class="canvas-tab' + active + '" data-tab-id="' + t.id + '">'
+        + esc(t.path) + closeBtn + '</div>';
+    }
+    html += '<div class="canvas-tab canvas-tab-add" id="canvas-tab-add" title="Open file">+</div>';
+    canvasTabsBar.innerHTML = html;
+    // Attach event listeners for tabs
+    var tabEls = canvasTabsBar.querySelectorAll(".canvas-tab:not(.canvas-tab-add)");
+    for (var j = 0; j < tabEls.length; j++) {
+      (function(el) {
+        el.addEventListener("click", function(e) {
+          if (e.target.classList.contains("tab-close")) {
+            closeCanvasTab(parseInt(e.target.getAttribute("data-tab-id")));
+          } else {
+            activateCanvasTab(parseInt(el.getAttribute("data-tab-id")));
+          }
+        });
+      })(tabEls[j]);
+    }
+    // "+" button — show file picker dropdown
+    var addBtn = document.getElementById("canvas-tab-add");
+    if (addBtn) {
+      addBtn.addEventListener("click", function() {
+        showTabFilePicker(addBtn);
+      });
+    }
+  }
+
+  function showTabFilePicker(anchorEl) {
+    // Remove existing picker if any
+    var existing = document.getElementById("canvas-tab-picker");
+    if (existing) { existing.remove(); return; }
+
+    fetch("/api/canvas/files", { credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var files = data.files || [];
+        // Filter out files already open in tabs
+        var openPaths = {};
+        for (var i = 0; i < canvasTabs.length; i++) openPaths[canvasTabs[i].path] = true;
+        var available = files.filter(function(f) { return !openPaths[f.path]; });
+
+        var picker = document.createElement("div");
+        picker.id = "canvas-tab-picker";
+
+        // Position using fixed coordinates from the anchor button
+        var rect = anchorEl.getBoundingClientRect();
+        picker.style.cssText = "position:fixed;z-index:9000;min-width:180px;max-height:240px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);padding:4px 0;"
+          + "top:" + rect.bottom + "px;left:" + rect.left + "px;";
+
+        var html = "";
+        if (available.length === 0) {
+          html = '<div style="padding:10px 14px;font-size:12px;color:var(--text-tertiary);text-align:center">All files are already open</div>';
+        } else {
+          for (var j = 0; j < available.length; j++) {
+            html += '<div class="canvas-tab-picker-item" data-path="' + esc(available[j].path) + '" style="padding:6px 12px;font-size:12px;font-family:var(--font-mono);cursor:pointer;color:var(--text-secondary)">' + esc(available[j].path) + '</div>';
+          }
+        }
+        picker.innerHTML = html;
+
+        document.body.appendChild(picker);
+
+        // Hover styles and click handlers for file items
+        var items = picker.querySelectorAll(".canvas-tab-picker-item");
+        for (var k = 0; k < items.length; k++) {
+          (function(item) {
+            item.addEventListener("mouseenter", function() { item.style.background = "var(--bg-hover)"; });
+            item.addEventListener("mouseleave", function() { item.style.background = "transparent"; });
+            item.addEventListener("click", function() {
+              findOrCreateTab(item.getAttribute("data-path"));
+              picker.remove();
+            });
+          })(items[k]);
+        }
+
+        // Close on outside click
+        setTimeout(function() {
+          function closePicker(e) {
+            if (!picker.contains(e.target) && e.target !== anchorEl) {
+              picker.remove();
+              document.removeEventListener("click", closePicker);
+            }
+          }
+          document.addEventListener("click", closePicker);
+        }, 0);
+      });
+  }
+
+  function findOrCreateTab(path) {
+    for (var i = 0; i < canvasTabs.length; i++) {
+      if (canvasTabs[i].path === path) {
+        activateCanvasTab(canvasTabs[i].id);
+        return canvasTabs[i];
+      }
+    }
+    return createCanvasTab(path);
+  }
+
+  // Initialize default tab
+  createCanvasTab("index.html");
+
+  // Draggable divider
+  function insertDivider() {
+    if (canvasDividerEl) return;
+    canvasDividerEl = document.createElement("div");
+    canvasDividerEl.className = "canvas-divider";
+    var chatWithCanvas = document.getElementById("chat-with-canvas");
+    chatWithCanvas.insertBefore(canvasDividerEl, canvasPanel);
+
+    // Restore saved width
+    var savedWidth = localStorage.getItem("paw-canvas-width");
+    if (savedWidth) canvasPanel.style.setProperty("--canvas-width", savedWidth);
+
+    canvasDividerEl.addEventListener("mousedown", function(e) {
+      e.preventDefault();
+      canvasDividerEl.classList.add("dragging");
+      var container = document.getElementById("chat-with-canvas");
+      var containerRect = container.getBoundingClientRect();
+
+      function onMouseMove(e) {
+        var x = e.clientX - containerRect.left;
+        var pct = ((containerRect.width - x) / containerRect.width) * 100;
+        pct = Math.max(20, Math.min(80, pct));
+        canvasPanel.style.setProperty("--canvas-width", pct + "%");
+      }
+
+      function onMouseUp() {
+        canvasDividerEl.classList.remove("dragging");
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        var current = canvasPanel.style.getPropertyValue("--canvas-width");
+        if (current) localStorage.setItem("paw-canvas-width", current);
+      }
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    });
+  }
+
+  function removeDivider() {
+    if (canvasDividerEl) { canvasDividerEl.remove(); canvasDividerEl = null; }
+  }
 
   function applyCanvasMode() {
     if (canvasMode) {
       canvasPanel.classList.add("open");
       canvasToggleBtn.classList.add("active");
+      insertDivider();
       startCanvasPolling();
       refreshCanvasFiles();
     } else {
       canvasPanel.classList.remove("open");
       canvasToggleBtn.classList.remove("active");
+      removeDivider();
       stopCanvasPolling();
     }
   }
@@ -655,9 +864,7 @@ export function getChatScript(): string {
 
   window.canvasOpenFile = function(el) {
     var path = el.getAttribute("data-path");
-    canvasCurrentFileName = path;
-    canvasCurrentFile.textContent = path;
-    canvasIframe.src = "/api/canvas/preview/" + encodeURIComponent(path);
+    findOrCreateTab(path);
     var items = canvasFileList.querySelectorAll(".canvas-file-item");
     for (var i = 0; i < items.length; i++) {
       items[i].classList.toggle("active", items[i].getAttribute("data-path") === path);
@@ -665,9 +872,16 @@ export function getChatScript(): string {
   };
 
   window.canvasRefresh = function() {
-    var src = canvasIframe.src;
-    canvasIframe.src = "about:blank";
-    setTimeout(function() { canvasIframe.src = src; }, 50);
+    // Refresh the active tab's iframe
+    for (var i = 0; i < canvasTabs.length; i++) {
+      if (canvasTabs[i].path === canvasCurrentFileName) {
+        var iframe = canvasTabs[i].iframeEl;
+        var src = iframe.src;
+        iframe.src = "about:blank";
+        setTimeout(function() { iframe.src = src; }, 50);
+        break;
+      }
+    }
   };
 
   window.canvasClear = async function() {
@@ -677,13 +891,29 @@ export function getChatScript(): string {
       .then(function(r) { return r.json(); })
       .then(function() {
         canvasFileList.innerHTML = '<span class="text-muted text-xs">No files yet</span>';
-        canvasCurrentFileName = "index.html";
-        canvasCurrentFile.textContent = "index.html";
-        canvasIframe.src = "/api/canvas/preview/index.html";
+        // Reset tabs — remove all iframes and recreate default tab
+        for (var i = 0; i < canvasTabs.length; i++) canvasTabs[i].iframeEl.remove();
+        canvasTabs = [];
+        canvasTabIdSeq = 0;
+        createCanvasTab("index.html");
         appendMsg("assistant", "Canvas cleared.");
       })
       .catch(function(err) {
         appendMsg("assistant", "Failed to clear: " + err.message);
+      });
+  };
+
+  // Share canvas
+  window.canvasShare = function() {
+    fetch("/api/canvas/share", { method: "POST", credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) { pawModal.alert("Share Error", data.error); return; }
+        var url = location.origin + data.url;
+        pawModal.alert("Canvas Shared", "Share this link (valid for 24 hours):<br><br><input type=\\"text\\" value=\\"" + url + "\\" onclick=\\"this.select()\\" readonly style=\\"width:100%;margin-top:4px\\">");
+      })
+      .catch(function(err) {
+        pawModal.alert("Share Error", "Failed to share: " + err.message);
       });
   };
 
