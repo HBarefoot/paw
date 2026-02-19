@@ -470,7 +470,10 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
       user: { id: "canvas-user", name: "Canvas User" },
       timestamp: new Date().toISOString(),
       metadata: { canvas: true },
-    }).catch(() => {});
+    }).catch((err) => {
+      // Push error event so the frontend can clear "Generating..." state
+      pushCanvasEvent(sessionId, "error", { message: err instanceof Error ? err.message : String(err) });
+    });
 
     return c.json({ sessionId }, 202);
   });

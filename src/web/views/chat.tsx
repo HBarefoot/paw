@@ -797,11 +797,16 @@ export function getChatScript(): string {
         for (var i = 0; i < events.length; i++) {
           var evt = events[i];
           if (evt.id > canvasLastEventId) canvasLastEventId = evt.id;
-          if (evt.event === "message" && evt.data && evt.data.content) {
+          if (evt.event === "message" && evt.data) {
             hideCanvasThinking();
             canvasWaitingForResponse = false;
             canvasPollInterval = CANVAS_POLL_IDLE;
-            appendMsg("assistant", evt.data.content);
+            appendMsg("assistant", evt.data.content || "(empty response)");
+          } else if (evt.event === "error" && evt.data) {
+            hideCanvasThinking();
+            canvasWaitingForResponse = false;
+            canvasPollInterval = CANVAS_POLL_IDLE;
+            appendMsg("assistant", "Error: " + (evt.data.message || "Unknown error"));
           } else if (evt.event === "file-changed") {
             hadFileChange = true;
             var changed = evt.data && evt.data.path ? evt.data.path : "";
@@ -823,6 +828,8 @@ export function getChatScript(): string {
       });
   }
 
+  var canvasThinkingTimeout = null;
+
   function showCanvasThinking() {
     if (canvasThinkingEl) return;
     canvasWaitingForResponse = true;
@@ -837,9 +844,20 @@ export function getChatScript(): string {
     canvasThinkingEl.innerHTML = '<div class="spinner"></div> Generating...';
     messagesDiv.insertBefore(canvasThinkingEl, typingDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    // Auto-clear after 90 seconds to prevent stuck state
+    if (canvasThinkingTimeout) clearTimeout(canvasThinkingTimeout);
+    canvasThinkingTimeout = setTimeout(function() {
+      if (canvasWaitingForResponse) {
+        hideCanvasThinking();
+        canvasWaitingForResponse = false;
+        canvasPollInterval = CANVAS_POLL_IDLE;
+        appendMsg("assistant", "Request timed out. The AI may still be processing — check the canvas preview or try again.");
+      }
+    }, 90000);
   }
 
   function hideCanvasThinking() {
+    if (canvasThinkingTimeout) { clearTimeout(canvasThinkingTimeout); canvasThinkingTimeout = null; }
     if (canvasStatusDot) { canvasStatusDot.className = "dot connected"; }
     if (canvasStatusText) { canvasStatusText.textContent = "Connected"; }
     if (canvasThinkingEl) { canvasThinkingEl.remove(); canvasThinkingEl = null; }
