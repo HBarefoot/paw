@@ -90,6 +90,9 @@ export class GeminiProvider implements AIProvider {
         for (const att of m.attachments) {
           if (att.type === "image" && att.data && att.mimeType) {
             parts.push({ inlineData: { mimeType: att.mimeType, data: att.data.toString("base64") } });
+          } else if (att.type === "text" && att.data) {
+            const header = att.name ? `[File: ${att.name}]\n` : "";
+            parts.push({ text: header + att.data.toString("utf-8") });
           }
         }
       }

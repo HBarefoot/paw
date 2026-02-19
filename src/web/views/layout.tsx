@@ -77,8 +77,7 @@ const cssDesignSystem = `
   }
 
   /* ===== DARK THEME ===== */
-  @media (prefers-color-scheme: dark) {
-    :root {
+  :root.dark {
       --bg-primary: #09090b;
       --bg-secondary: #111113;
       --bg-tertiary: #18181b;
@@ -108,8 +107,22 @@ const cssDesignSystem = `
       --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
       --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.4);
       --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.5);
-    }
   }
+
+  /* Smooth theme transitions */
+  body, .sidebar, .main-area, .topbar, .card, .msg, .chat-container,
+  .chat-input, .chat-messages, .nav-item, table, input, textarea, select, button {
+    transition: background-color 300ms ease, color 300ms ease, border-color 300ms ease;
+  }
+
+  /* Theme toggle */
+  .theme-toggle { padding: 0 12px; display: flex; gap: 4px; margin-bottom: 8px; }
+  .theme-btn {
+    padding: 6px; border-radius: var(--radius-sm); background: transparent;
+    color: var(--text-tertiary); border: none; cursor: pointer;
+  }
+  .theme-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+  .theme-btn.active { background: var(--accent-subtle); color: var(--accent); }
 
   /* ===== BASE ===== */
   body {
@@ -254,6 +267,8 @@ const cssDesignSystem = `
     max-width: 1200px;
     flex: 1;
   }
+  /* Chat page needs full width for canvas split */
+  .content.content-full { max-width: none; }
 
   /* ===== CARDS ===== */
   .card {
@@ -435,6 +450,7 @@ const cssDesignSystem = `
     height: calc(100vh - 140px);
     border-radius: var(--radius-lg);
     overflow: hidden;
+    background: var(--bg-card);
   }
 
   .chat-messages {
@@ -743,6 +759,120 @@ const cssDesignSystem = `
   .paw-modal-actions .btn-confirm.danger { background: var(--error); }
   .paw-modal-actions .btn-confirm.danger:hover { background: #dc2626; }
 
+  /* ===== CHAT + CANVAS UNIFIED LAYOUT ===== */
+
+  /* Outer wrapper — single card for both chat and canvas */
+  .chat-with-canvas {
+    display: flex;
+    height: calc(100vh - 185px);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background: var(--bg-card);
+    box-shadow: var(--shadow-sm);
+  }
+  /* When inside the unified wrapper, chat-container loses its own card styles */
+  .chat-with-canvas .chat-container {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    margin-bottom: 0;
+    padding: 0;
+  }
+
+  /* ===== CANVAS PANEL ===== */
+  .canvas-panel {
+    display: none;
+    flex-direction: column;
+    width: 50%;
+    min-width: 380px;
+    border-left: 1px solid var(--border-primary);
+    background: var(--bg-card);
+  }
+  .canvas-panel.open { display: flex; }
+
+  .canvas-file-item {
+    display: inline-block; padding: 1px 6px; font-size: 11px; font-family: var(--font-mono);
+    color: var(--text-tertiary); text-decoration: none; border-radius: 3px;
+    cursor: pointer;
+  }
+  .canvas-file-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .canvas-file-item.active { background: var(--accent-subtle); color: var(--accent); }
+
+  .canvas-toolbar {
+    display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+    border-bottom: 1px solid var(--border-secondary); background: var(--bg-secondary); font-size: 13px;
+  }
+  .canvas-toolbar .current-file {
+    flex: 1; font-family: var(--font-mono); color: var(--text-secondary); font-size: 12px;
+  }
+  .canvas-toolbar button {
+    background: transparent; color: var(--text-tertiary); border: 1px solid var(--border-secondary);
+    padding: 4px 8px; border-radius: var(--radius-sm); font-size: 12px;
+  }
+  .canvas-toolbar button:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-primary); }
+
+  .canvas-iframe { flex: 1; border: none; background: #fff; }
+  :root.dark .canvas-iframe { background: #1a1a2e; }
+
+  .canvas-status {
+    display: flex; align-items: center; gap: 6px; font-size: 11px;
+    color: var(--text-tertiary); padding: 6px 12px;
+    border-top: 1px solid var(--border-secondary); background: var(--bg-secondary);
+    overflow-x: auto; white-space: nowrap;
+  }
+  .canvas-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); flex-shrink: 0; }
+  .canvas-status .dot.connected { background: var(--success); }
+  .canvas-status .dot.working { background: var(--warning); animation: pulse-dot 1s ease-in-out infinite; }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.4); }
+  }
+
+  .canvas-thinking {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border-radius: var(--radius-md); background: var(--bg-tertiary);
+    color: var(--text-secondary); font-size: 13px;
+  }
+  .canvas-thinking .spinner {
+    width: 16px; height: 16px; border: 2px solid var(--border-primary);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* File badge for attached spreadsheets */
+  .file-badge {
+    display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
+    border-radius: var(--radius-sm); font-size: 12px; margin-top: 6px;
+    background: var(--bg-secondary); border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+  }
+  .msg.user .file-badge { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.2); color: rgba(255,255,255,0.9); }
+
+  /* Chat toolbar row */
+  .chat-toolbar {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 0;
+    padding: 0 0 12px;
+  }
+  .chat-toolbar select {
+    flex: 1; min-width: 0; padding: 7px 12px; border-radius: var(--radius-sm);
+    font-size: 13px; border: 1px solid var(--border-primary);
+    background: var(--bg-input); color: var(--text-primary);
+  }
+  .chat-toolbar-btn {
+    padding: 7px 14px; border-radius: var(--radius-sm); font-size: 13px;
+    cursor: pointer; white-space: nowrap; display: inline-flex;
+    align-items: center; gap: 6px; border: 1px solid var(--border-primary);
+    background: transparent; color: var(--text-secondary);
+  }
+  .chat-toolbar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .chat-toolbar-btn.primary { background: var(--accent); color: var(--text-inverse); border-color: var(--accent); }
+  .chat-toolbar-btn.primary:hover { background: var(--accent-hover); }
+  .chat-toolbar-btn.active { background: var(--accent-subtle); color: var(--accent); border-color: var(--accent); }
+
   /* ===== RESPONSIVE ===== */
   @media (max-width: 768px) {
     .sidebar { width: var(--sidebar-collapsed); }
@@ -754,6 +884,8 @@ const cssDesignSystem = `
     .main-area { margin-left: var(--sidebar-collapsed); }
     .content { padding: 20px 16px; }
     .topbar { padding: 16px; }
+    .canvas-panel { min-width: 280px; width: 45%; }
+    .chat-toolbar { flex-wrap: wrap; }
   }
 `;
 
@@ -826,7 +958,6 @@ const navItems = [
   { path: "/sessions", label: "Sessions", icon: "sessions" },
   { path: "/mcp", label: "MCP", icon: "mcp" },
   { path: "/skills", label: "Skills", icon: "skills" },
-  { path: "/canvas", label: "Canvas", icon: "canvas" },
   { path: "/chat", label: "Chat", icon: "chat" },
 ];
 
@@ -839,6 +970,7 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">`)}
       <title>{title} - Paw</title>
+      {raw(`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`)}
       {raw(`<style>${cssDesignSystem}</style>`)}
       {raw(`<script>${modalScript}</script>`)}
     </head>
@@ -846,7 +978,7 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
       <div class="app-layout">
         <aside class="sidebar">
           <div class="sidebar-header">
-            {raw(`<div class="logo-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><ellipse cx="7" cy="4.5" rx="2.5" ry="3"/><ellipse cx="17" cy="4.5" rx="2.5" ry="3"/><ellipse cx="3.5" cy="11" rx="2.5" ry="3"/><ellipse cx="20.5" cy="11" rx="2.5" ry="3"/><path d="M12 22c-4 0-7-2.5-7-6 0-2.5 2-5 4-6.5a4.5 4.5 0 0 1 6 0c2 1.5 4 4 4 6.5 0 3.5-3 6-7 6z"/></svg></div>`)}
+            {raw(`<img src="/paw-logo.jpg" width="32" height="32" alt="Paw" style="border-radius:8px;flex-shrink:0" />`)}
             <span class="logo-text">Paw</span>
           </div>
           <nav class="sidebar-nav">
@@ -861,6 +993,17 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
             ))}
           </nav>
           <div class="sidebar-footer">
+            {raw(`<div class="theme-toggle">
+              <button class="theme-btn" data-theme="light" onclick="__pawSetTheme('light')" title="Light">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+              </button>
+              <button class="theme-btn" data-theme="system" onclick="__pawSetTheme('system')" title="System">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              </button>
+              <button class="theme-btn" data-theme="dark" onclick="__pawSetTheme('dark')" title="Dark">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+              </button>
+            </div>`)}
             <span>Paw v0.1.0</span>
             <a href="/logout" class="nav-item" style="margin-top: 8px; font-size: 12px; padding: 6px 12px;">
               {raw(`<span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span>`)}
@@ -875,6 +1018,7 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
           <main class="content">{children}</main>
         </div>
       </div>
+      {raw(`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});})()</script>`)}
     </body>
   </html>
 );

@@ -102,15 +102,19 @@ export class OpenAIProvider implements AIProvider {
       { role: "system", content: systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
       ...messages.map((m) => {
         if (m.role === "user" && m.attachments && m.attachments.length > 0) {
-          const parts: OpenAIContentPart[] = [{ type: "text", text: m.content }];
+          const parts: OpenAIContentPart[] = [];
           for (const att of m.attachments) {
             if (att.type === "image" && att.data && att.mimeType) {
               parts.push({
                 type: "image_url",
                 image_url: { url: `data:${att.mimeType};base64,${att.data.toString("base64")}` },
               });
+            } else if (att.type === "text" && att.data) {
+              const header = att.name ? `[File: ${att.name}]\n` : "";
+              parts.push({ type: "text", text: header + att.data.toString("utf-8") });
             }
           }
+          parts.push({ type: "text", text: m.content });
           return { role: m.role as "user" | "assistant", content: parts };
         }
         return { role: m.role as "user" | "assistant", content: m.content };

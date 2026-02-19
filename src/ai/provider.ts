@@ -68,6 +68,9 @@ export class ClaudeProvider implements AIProvider {
                 data: att.data.toString("base64"),
               },
             } as ContentBlockParam);
+          } else if (att.type === "text" && att.data) {
+            const header = att.name ? `[File: ${att.name}]\n` : "";
+            contentParts.push({ type: "text", text: header + att.data.toString("utf-8") } as ContentBlockParam);
           }
         }
         contentParts.push({ type: "text", text: m.content } as ContentBlockParam);

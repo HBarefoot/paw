@@ -3,9 +3,11 @@ import { getCookie } from "hono/cookie";
 import type { WebAuthManager } from "../../security/web-auth.js";
 
 const PUBLIC_ROUTES = new Set(["/login", "/login/setup", "/login/totp-setup", "/api/health"]);
+const PUBLIC_PREFIXES = ["/api/canvas/events", "/api/canvas/files", "/api/canvas/preview/"];
 
 function isPublicRoute(path: string): boolean {
-  return PUBLIC_ROUTES.has(path);
+  if (PUBLIC_ROUTES.has(path)) return true;
+  return PUBLIC_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 function isApiRoute(path: string): boolean {
