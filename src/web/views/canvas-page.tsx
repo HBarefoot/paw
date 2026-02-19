@@ -381,8 +381,9 @@ export function getCanvasScript(): string {
     setTimeout(function() { iframe.src = src; }, 50);
   };
 
-  window.canvasClear = function() {
-    if (!confirm("Delete all canvas files and start fresh?")) return;
+  window.canvasClear = async function() {
+    var ok = await pawModal.confirm("Clear Canvas", "Delete all canvas files and start fresh?", { confirmLabel: "Clear All", danger: true });
+    if (!ok) return;
     fetch("/api/canvas/clear", { method: "POST" })
       .then(function(r) { return r.json(); })
       .then(function() {

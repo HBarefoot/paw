@@ -23,10 +23,11 @@ interface MemoryPageProps {
 function memoryScript(): string {
   return `
     async function deleteMemory(id) {
-      if (!confirm('Delete this memory?')) return;
-      const res = await fetch('/api/memory/' + id, { method: 'DELETE' });
+      var ok = await pawModal.confirm("Delete Memory", "Are you sure you want to delete this memory?", { confirmLabel: "Delete", danger: true });
+      if (!ok) return;
+      var res = await fetch('/api/memory/' + id, { method: 'DELETE' });
       if (res.ok) window.location.reload();
-      else alert('Failed to delete memory');
+      else pawModal.alert("Error", "Failed to delete memory.");
     }
   `;
 }

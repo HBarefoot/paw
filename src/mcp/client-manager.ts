@@ -14,6 +14,7 @@ interface MCPServerConfig {
 // Default allowlist of safe MCP command executables
 const DEFAULT_ALLOWED_COMMANDS = new Set([
   "npx", "node", "bun", "bunx", "deno", "python", "python3", "uvx",
+  "docker", "podman", "kubectl",
 ]);
 
 // Private/internal IP ranges to block for SSRF prevention

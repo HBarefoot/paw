@@ -714,6 +714,35 @@ const cssDesignSystem = `
   .self-start { align-self: flex-start; }
   .max-w-form { max-width: 500px; }
 
+  /* ===== MODAL ===== */
+  .paw-modal-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    animation: pawModalFadeIn 150ms ease;
+  }
+  @keyframes pawModalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .paw-modal {
+    background: var(--bg-card); border: 1px solid var(--border-primary);
+    border-radius: var(--radius-lg); padding: 24px; min-width: 340px; max-width: 480px;
+    box-shadow: var(--shadow-lg); animation: pawModalSlideIn 150ms ease;
+  }
+  @keyframes pawModalSlideIn { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
+  .paw-modal-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary); }
+  .paw-modal-body { font-size: 14px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 20px; }
+  .paw-modal-body input, .paw-modal-body textarea {
+    width: 100%; margin-top: 8px;
+  }
+  .paw-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .paw-modal-actions .btn-cancel {
+    background: transparent; color: var(--text-secondary); border: 1px solid var(--border-primary);
+  }
+  .paw-modal-actions .btn-cancel:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .paw-modal-actions .btn-confirm { background: var(--accent); color: var(--text-inverse); }
+  .paw-modal-actions .btn-confirm:hover { background: var(--accent-hover); }
+  .paw-modal-actions .btn-confirm.danger { background: var(--error); }
+  .paw-modal-actions .btn-confirm.danger:hover { background: #dc2626; }
+
   /* ===== RESPONSIVE ===== */
   @media (max-width: 768px) {
     .sidebar { width: var(--sidebar-collapsed); }
@@ -726,6 +755,67 @@ const cssDesignSystem = `
     .content { padding: 20px 16px; }
     .topbar { padding: 16px; }
   }
+`;
+
+const modalScript = `
+window.pawModal = {
+  _overlay: null,
+  _close: function() {
+    if (this._overlay) { this._overlay.remove(); this._overlay = null; }
+  },
+  _show: function(title, body, actions) {
+    this._close();
+    var overlay = document.createElement("div");
+    overlay.className = "paw-modal-overlay";
+    overlay.onclick = function(e) { if (e.target === overlay) pawModal._close(); };
+    var modal = document.createElement("div");
+    modal.className = "paw-modal";
+    modal.innerHTML = '<div class="paw-modal-title">' + title + '</div>'
+      + '<div class="paw-modal-body">' + body + '</div>'
+      + '<div class="paw-modal-actions">' + actions + '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    this._overlay = overlay;
+    var firstBtn = modal.querySelector(".btn-confirm");
+    if (firstBtn) firstBtn.focus();
+    return modal;
+  },
+  alert: function(title, message) {
+    return new Promise(function(resolve) {
+      var modal = pawModal._show(title, message,
+        '<button class="btn-confirm" onclick="pawModal._close()">OK</button>'
+      );
+      modal.querySelector(".btn-confirm").onclick = function() { pawModal._close(); resolve(); };
+    });
+  },
+  confirm: function(title, message, opts) {
+    opts = opts || {};
+    var confirmLabel = opts.confirmLabel || "Confirm";
+    var danger = opts.danger ? " danger" : "";
+    return new Promise(function(resolve) {
+      pawModal._show(title, message,
+        '<button class="btn-cancel">Cancel</button><button class="btn-confirm' + danger + '">' + confirmLabel + '</button>'
+      );
+      pawModal._overlay.querySelector(".btn-cancel").onclick = function() { pawModal._close(); resolve(false); };
+      pawModal._overlay.querySelector(".btn-confirm").onclick = function() { pawModal._close(); resolve(true); };
+    });
+  },
+  prompt: function(title, message, defaultVal) {
+    return new Promise(function(resolve) {
+      var inputId = "paw-modal-input-" + Date.now();
+      var body = message + '<input type="text" id="' + inputId + '" value="' + (defaultVal || "").replace(/"/g, "&quot;") + '">';
+      pawModal._show(title, body,
+        '<button class="btn-cancel">Cancel</button><button class="btn-confirm">Save</button>'
+      );
+      var input = document.getElementById(inputId);
+      input.focus();
+      input.select();
+      input.onkeydown = function(e) { if (e.key === "Enter") { pawModal._close(); resolve(input.value); } };
+      pawModal._overlay.querySelector(".btn-cancel").onclick = function() { pawModal._close(); resolve(null); };
+      pawModal._overlay.querySelector(".btn-confirm").onclick = function() { pawModal._close(); resolve(input.value); };
+    });
+  }
+};
 `;
 
 const navItems = [
@@ -750,6 +840,7 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">`)}
       <title>{title} - Paw</title>
       {raw(`<style>${cssDesignSystem}</style>`)}
+      {raw(`<script>${modalScript}</script>`)}
     </head>
     <body>
       <div class="app-layout">

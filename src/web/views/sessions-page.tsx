@@ -74,8 +74,9 @@ export const SessionsListPage: FC<SessionsListProps> = ({ sessions }) => {
         )}
       </div>
       {raw(`<script>
-function deleteSession(id) {
-  if (!confirm("Delete this session and all its messages?")) return;
+async function deleteSession(id) {
+  var ok = await pawModal.confirm("Delete Session", "Delete this session and all its messages?", { confirmLabel: "Delete", danger: true });
+  if (!ok) return;
   fetch("/api/sessions/" + id, { method: "DELETE" })
     .then(function(r) { return r.json(); })
     .then(function(data) {

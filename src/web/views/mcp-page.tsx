@@ -20,23 +20,24 @@ interface MCPPageProps {
 function mcpScript(): string {
   return `
     async function removeServer(name) {
-      if (!confirm('Remove MCP server "' + name + '"? This will disconnect it and remove it from config.')) return;
-      const res = await fetch('/api/mcp/servers/' + encodeURIComponent(name), { method: 'DELETE' });
+      var ok = await pawModal.confirm("Remove Server", 'Remove MCP server "' + name + '"? This will disconnect it and remove it from config.', { confirmLabel: "Remove", danger: true });
+      if (!ok) return;
+      var res = await fetch('/api/mcp/servers/' + encodeURIComponent(name), { method: 'DELETE' });
       if (res.ok) window.location.reload();
-      else alert('Failed to remove server');
+      else pawModal.alert("Error", "Failed to remove server.");
     }
 
     async function reconnectServer(name) {
-      const btn = event.target;
+      var btn = event.target;
       btn.disabled = true;
       btn.textContent = 'Connecting...';
-      const res = await fetch('/api/mcp/servers/' + encodeURIComponent(name) + '/reconnect', { method: 'POST' });
+      var res = await fetch('/api/mcp/servers/' + encodeURIComponent(name) + '/reconnect', { method: 'POST' });
       if (res.ok) window.location.reload();
-      else { alert('Failed to reconnect'); btn.disabled = false; btn.textContent = 'Reconnect'; }
+      else { pawModal.alert("Error", "Failed to reconnect server."); btn.disabled = false; btn.textContent = 'Reconnect'; }
     }
 
     function toggleAdvanced() {
-      const el = document.getElementById('advanced-fields');
+      var el = document.getElementById('advanced-fields');
       el.style.display = el.style.display === 'none' ? 'flex' : 'none';
     }
   `;

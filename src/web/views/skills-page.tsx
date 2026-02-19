@@ -19,20 +19,19 @@ function skillsScript(): string {
         body: JSON.stringify({ alwaysActive: alwaysActive }),
       });
       if (res.ok) window.location.href = '/skills?success=1';
-      else alert('Failed to update skill');
+      else pawModal.alert('Error', 'Failed to update skill.');
     }
 
-    function editDescription(name, current) {
-      var input = prompt('Edit description for "' + name + '":', current);
+    async function editDescription(name, current) {
+      var input = await pawModal.prompt('Edit Description', 'Description for "' + name + '":', current);
       if (input === null) return;
-      fetch('/api/skills/' + encodeURIComponent(name) + '/description', {
+      var res = await fetch('/api/skills/' + encodeURIComponent(name) + '/description', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: input }),
-      }).then(function(res) {
-        if (res.ok) window.location.href = '/skills?success=1';
-        else alert('Failed to update description');
       });
+      if (res.ok) window.location.href = '/skills?success=1';
+      else pawModal.alert('Error', 'Failed to update description.');
     }
 
     function toggleTools(name) {
@@ -73,7 +72,7 @@ function skillsScript(): string {
         }
         checkbox.setAttribute('onchange', "toggleTool('" + skillName + "', '" + toolName + "', " + currentlyEnabled + ", this)");
         updateToolCounts(skillName);
-        alert('Failed to toggle tool');
+        pawModal.alert('Error', 'Failed to toggle tool.');
       }
     }
 

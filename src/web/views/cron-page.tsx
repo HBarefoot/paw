@@ -23,17 +23,18 @@ interface CronPageProps {
 function cronScript(): string {
   return `
     async function toggleJob(id, enable) {
-      const action = enable ? 'enable' : 'disable';
-      const res = await fetch('/api/cron/jobs/' + id + '/' + action, { method: 'POST' });
+      var action = enable ? 'enable' : 'disable';
+      var res = await fetch('/api/cron/jobs/' + id + '/' + action, { method: 'POST' });
       if (res.ok) window.location.reload();
-      else alert('Failed to ' + action + ' job');
+      else pawModal.alert("Error", "Failed to " + action + " job.");
     }
 
     async function deleteJob(id) {
-      if (!confirm('Delete this cron job?')) return;
-      const res = await fetch('/api/cron/jobs/' + id, { method: 'DELETE' });
+      var ok = await pawModal.confirm("Delete Job", "Are you sure you want to delete this cron job?", { confirmLabel: "Delete", danger: true });
+      if (!ok) return;
+      var res = await fetch('/api/cron/jobs/' + id, { method: 'DELETE' });
       if (res.ok) window.location.reload();
-      else alert('Failed to delete job');
+      else pawModal.alert("Error", "Failed to delete job.");
     }
   `;
 }
