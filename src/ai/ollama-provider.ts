@@ -1,5 +1,6 @@
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import { withRetry } from "./retry.js";
 import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
 import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
@@ -100,10 +101,9 @@ export class OllamaProvider implements AIProvider {
       }),
     ];
 
-    this.logger.info("Ollama system prompt", {
+    this.logger.debug("Ollama system prompt", {
       fromArg: !!systemPrompt,
       length: actualSystemPrompt.length,
-      preview: actualSystemPrompt.substring(0, 150),
     });
 
     while (roundtrips < this.maxToolRoundtrips) {
@@ -120,18 +120,20 @@ export class OllamaProvider implements AIProvider {
         body.tools = tools;
       }
 
-      const res = await fetch(`${this.baseUrl}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const data = await withRetry(async () => {
+        const res = await fetch(`${this.baseUrl}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Ollama error (${res.status}): ${text}`);
-      }
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Ollama error (${res.status}): ${text}`);
+        }
 
-      const data = (await res.json()) as OllamaResponse;
+        return (await res.json()) as OllamaResponse;
+      }, this.logger);
       const toolCalls = data.message.tool_calls;
 
       // No tool calls — return the text response

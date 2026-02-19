@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { csrf } from "hono/csrf";
 import { setCookie, getCookie } from "hono/cookie";
 import { resolve, relative, extname } from "node:path";
-import { existsSync, statSync, readdirSync, watch, mkdirSync, rmSync } from "node:fs";
+import { existsSync, statSync, readdirSync, watch, mkdirSync, rmSync, realpathSync } from "node:fs";
 import { DashboardPage } from "./views/dashboard.js";
 import { ConfigPage } from "./views/config-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
@@ -325,9 +325,11 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
   // In-memory event buffer for canvas polling (replaces SSE which Bun can't sustain)
   const canvasEvents = new Map<string, Array<{ id: number; event: string; data: unknown; ts: number }>>();
+  const canvasSessionLastAccess = new Map<string, number>(); // tracks last poll time per session
   let canvasEventSeq = 0;
   const CANVAS_EVENT_TTL = 60_000; // events expire after 60s
   const CANVAS_MAX_EVENTS = 200;
+  const CANVAS_SESSION_TTL = 60 * 60_000; // abandon sessions after 1 hour of inactivity
 
   function pushCanvasEvent(sessionId: string, event: string, data: unknown) {
     if (!canvasEvents.has(sessionId)) canvasEvents.set(sessionId, []);
@@ -339,6 +341,17 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
       buf.shift();
     }
   }
+
+  // Periodic cleanup of abandoned canvas sessions (every 5 minutes)
+  const canvasCleanupInterval = setInterval(() => {
+    const cutoff = Date.now() - CANVAS_SESSION_TTL;
+    for (const [sid, lastAccess] of canvasSessionLastAccess) {
+      if (lastAccess < cutoff) {
+        canvasEvents.delete(sid);
+        canvasSessionLastAccess.delete(sid);
+      }
+    }
+  }, 5 * 60_000);
 
   // Also push file-changed events to a global "__files__" channel
   // so the iframe preview reloads can poll it.
@@ -352,10 +365,11 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     }
   }
 
-  // Watch canvas root for file changes
+  // Watch canvas root for file changes (store watcher for cleanup)
+  let canvasWatcher: ReturnType<typeof watch> | null = null;
   try {
     mkdirSync(canvasRoot, { recursive: true });
-    watch(canvasRoot, { recursive: true }, (_evt, filename) => {
+    canvasWatcher = watch(canvasRoot, { recursive: true }, (_evt, filename) => {
       if (filename) pushFileChanged(String(filename));
     });
   } catch { /* fs.watch may not be available */ }
@@ -426,6 +440,9 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     const sessionId = c.req.query("sessionId") || "__files__";
     const since = parseInt(c.req.query("since") || "0", 10);
 
+    // Track last access for session cleanup
+    canvasSessionLastAccess.set(sessionId, Date.now());
+
     const buf = canvasEvents.get(sessionId) || [];
     const events = buf.filter((e) => e.id > since);
 
@@ -470,10 +487,23 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     const decoded = decodeURIComponent(reqPath);
     const fullPath = resolve(canvasRoot, decoded);
 
-    // Path traversal check
+    // Path traversal check (logical path)
     const rel = relative(canvasRoot, fullPath);
-    if (rel.startsWith("..") || resolve(fullPath).includes("\0")) {
+    if (rel.startsWith("..") || fullPath.includes("\0")) {
       return c.text("Forbidden", 403);
+    }
+
+    // Symlink check: resolve real path and verify it's within canvas root
+    if (existsSync(fullPath)) {
+      try {
+        const realPath = realpathSync(fullPath);
+        const realRel = relative(canvasRoot, realPath);
+        if (realRel.startsWith("..")) {
+          return c.text("Forbidden", 403);
+        }
+      } catch {
+        return c.text("Forbidden", 403);
+      }
     }
 
     if (!existsSync(fullPath) || statSync(fullPath).isDirectory()) {
@@ -831,10 +861,6 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
       // Create a promise that resolves when the outbound message arrives
       const responsePromise = new Promise<{ content: string; images?: string[] }>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("Response timeout"));
-        }, 120_000);
-
         const handler = (outbound: { sessionId: string; content: string; attachments?: Array<{ type: string; data?: Buffer; mimeType?: string }> }) => {
           if (outbound.sessionId === sessionId) {
             clearTimeout(timeout);
@@ -846,6 +872,12 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
             resolve({ content: outbound.content, images: images?.length ? images : undefined });
           }
         };
+
+        const timeout = setTimeout(() => {
+          kernel.eventBus.off("message:outbound", handler); // prevent listener leak
+          reject(new Error("Response timeout"));
+        }, 120_000);
+
         kernel.eventBus.on("message:outbound", handler);
       });
 
@@ -1035,6 +1067,14 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
   // Expose authManager for kernel integration
   (app as any).__authManager = authManager;
+
+  // Expose cleanup function for graceful shutdown (close watcher, clear intervals)
+  (app as any).__cleanup = () => {
+    canvasWatcher?.close();
+    clearInterval(canvasCleanupInterval);
+    canvasEvents.clear();
+    canvasSessionLastAccess.clear();
+  };
 
   return app;
 }

@@ -1,3 +1,4 @@
+import { resolve, relative } from "node:path";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
 
 interface ExecToolsConfig {
@@ -7,15 +8,50 @@ interface ExecToolsConfig {
   allowedCommands?: string[];
 }
 
+// Shell metacharacters that indicate command chaining/injection
+const SHELL_METACHAR_RE = /[;&|`$(){}!<>\n\\]/;
+
+/**
+ * Parse a command string into [executable, ...args] without shell interpretation.
+ * Supports simple quoting (single and double quotes) but rejects shell metacharacters.
+ */
+function parseArgv(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (inSingle) {
+      if (ch === "'") { inSingle = false; continue; }
+      current += ch;
+    } else if (inDouble) {
+      if (ch === '"') { inDouble = false; continue; }
+      current += ch;
+    } else if (ch === "'") {
+      inSingle = true;
+    } else if (ch === '"') {
+      inDouble = true;
+    } else if (/\s/.test(ch)) {
+      if (current) { tokens.push(current); current = ""; }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
 export function createExecTools(config: ExecToolsConfig): ToolDefinition[] {
   const execCommand: ToolDefinition = {
     name: "exec_command",
-    description: "Execute a shell command within the workspace. Output is captured and returned.",
+    description: "Execute a command within the workspace. Provide the command and arguments. Shell operators (pipes, redirects, semicolons, &&) are not allowed — use separate tool calls instead.",
     plugin: "kernel",
     input_schema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "The shell command to execute" },
+        command: { type: "string", description: "The command to execute (e.g. 'ls -la src')" },
         cwd: { type: "string", description: "Working directory (relative to workspace, default: workspace root)" },
         timeout_ms: { type: "number", description: `Timeout in ms (default: ${config.execTimeout})` },
       },
@@ -24,24 +60,45 @@ export function createExecTools(config: ExecToolsConfig): ToolDefinition[] {
     handler: async (input): Promise<ToolResult> => {
       const command = input.command as string;
 
+      // Reject shell metacharacters to prevent injection
+      if (SHELL_METACHAR_RE.test(command)) {
+        return {
+          content: "Error: shell operators (;, &, |, `, $, etc.) are not allowed. Use separate exec_command calls for multiple commands.",
+          is_error: true,
+        };
+      }
+
+      // Parse into argv without shell interpretation
+      const argv = parseArgv(command);
+      if (argv.length === 0) {
+        return { content: "Error: empty command", is_error: true };
+      }
+
+      const executable = argv[0];
+
       // Check allowlist if configured
       if (config.allowedCommands && config.allowedCommands.length > 0) {
-        const baseCmd = command.split(/\s+/)[0];
-        if (!config.allowedCommands.includes(baseCmd)) {
-          return { content: `Error: command '${baseCmd}' is not in the allowed list`, is_error: true };
+        if (!config.allowedCommands.includes(executable)) {
+          return { content: `Error: command '${executable}' is not in the allowed list`, is_error: true };
         }
       }
 
+      // Validate cwd is within workspace
       const cwd = input.cwd
-        ? Bun.resolveSync(input.cwd as string, config.workspacePath)
+        ? resolve(config.workspacePath, input.cwd as string)
         : config.workspacePath;
+
+      const cwdRel = relative(config.workspacePath, cwd);
+      if (cwdRel.startsWith("..")) {
+        return { content: "Error: working directory must be within the workspace", is_error: true };
+      }
 
       const timeout = typeof input.timeout_ms === "number"
         ? Math.min(input.timeout_ms, config.execTimeout)
         : config.execTimeout;
 
       try {
-        const proc = Bun.spawn(["sh", "-c", command], {
+        const proc = Bun.spawn(argv, {
           cwd,
           stdout: "pipe",
           stderr: "pipe",

@@ -48,6 +48,7 @@ export class Kernel {
   private accessController: AccessController | null = null;
   private rateLimiter: RateLimiter | null = null;
   private webServer: { stop: () => void } | null = null;
+  private webAppCleanup: (() => void) | null = null;
   private sessionCleanupInterval: ReturnType<typeof setInterval> | null = null;
   private mcpClientManager: MCPClientManager;
   private skillManager: SkillManager;
@@ -232,6 +233,7 @@ export class Kernel {
     // Start web UI
     if (this.config.web.enabled) {
       const webApp = createWebApp(this, this.config);
+      this.webAppCleanup = (webApp as any).__cleanup ?? null;
       this.webServer = startWebServer(webApp, {
         host: this.config.web.host,
         port: this.config.web.port,
@@ -372,7 +374,6 @@ export class Kernel {
       agentName,
       hasCustomPrompt: !!agentPrompt,
       promptLength: systemPrompt.length,
-      promptPreview: systemPrompt.substring(0, 150),
     });
 
     try {
@@ -479,6 +480,7 @@ export class Kernel {
       clearInterval(this.sessionCleanupInterval);
       this.sessionCleanupInterval = null;
     }
+    this.webAppCleanup?.();
     this.webServer?.stop();
     this.heartbeatChecker?.stop();
     this.cronScheduler?.stop();

@@ -1,20 +1,26 @@
 import { resolve, relative } from "node:path";
-import { existsSync, statSync, readdirSync, mkdirSync } from "node:fs";
+import { existsSync, statSync, readdirSync, mkdirSync, realpathSync } from "node:fs";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
 
 interface CanvasToolsConfig {
   canvasRoot: string;
 }
 
-function isWithinCanvas(filePath: string, root: string): boolean {
-  const resolved = resolve(root, filePath);
-  const rel = relative(root, resolved);
-  return !rel.startsWith("..") && !resolve(resolved).includes("\0");
-}
-
 function safePath(filePath: string, root: string): string | null {
   const resolved = resolve(root, filePath);
-  if (!isWithinCanvas(filePath, root)) return null;
+  // Check logical path first (no ".." traversal, no null bytes)
+  const rel = relative(root, resolved);
+  if (rel.startsWith("..") || resolved.includes("\0")) return null;
+  // If the path exists, resolve symlinks and verify real path is within canvas root
+  if (existsSync(resolved)) {
+    try {
+      const real = realpathSync(resolved);
+      const realRel = relative(root, real);
+      if (realRel.startsWith("..")) return null;
+    } catch {
+      return null;
+    }
+  }
   return resolved;
 }
 

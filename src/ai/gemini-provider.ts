@@ -1,5 +1,6 @@
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import { withRetry } from "./retry.js";
 import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
 import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
@@ -122,18 +123,20 @@ export class GeminiProvider implements AIProvider {
 
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
 
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const data = await withRetry(async () => {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Gemini error (${res.status}): ${text}`);
-      }
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Gemini error (${res.status}): ${text}`);
+        }
 
-      const data = (await res.json()) as GeminiResponse;
+        return (await res.json()) as GeminiResponse;
+      }, this.logger);
       const candidate = data.candidates?.[0];
       if (!candidate) throw new Error("Gemini returned no candidates");
 

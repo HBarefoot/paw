@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam, ContentBlockParam, ToolUseBlock, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/messages";
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import { withRetry } from "./retry.js";
 import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
 import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
@@ -42,25 +43,6 @@ export class ClaudeProvider implements AIProvider {
     this.logger.info("Claude provider initialized", { authMethod: config.authMethod, model: config.model });
   }
 
-  private async withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
-    let lastError: unknown;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        return await fn();
-      } catch (err: unknown) {
-        lastError = err;
-        const isRateLimit =
-          (err instanceof Anthropic.RateLimitError) ||
-          (err instanceof Error && err.message.includes("429"));
-        if (!isRateLimit || attempt === maxRetries) throw err;
-        const delayMs = Math.min(1000 * Math.pow(2, attempt), 30000);
-        this.logger.warn("Rate limited, retrying", { attempt: attempt + 1, delayMs });
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-    throw lastError;
-  }
-
   private getTools(sessionId?: string) {
     if (!this.skillManager || !sessionId) {
       return this.toolRegistry.toAnthropicTools();
@@ -98,7 +80,7 @@ export class ClaudeProvider implements AIProvider {
       const tools = this.getTools(sessionId);
       this.logger.debug("Sending request to Claude", { roundtrip: roundtrips, messageCount: conversation.length, toolCount: tools.length });
 
-      const response = await this.withRetry(() =>
+      const response = await withRetry(() =>
         this.client.messages.stream({
           model: this.model,
           max_tokens: this.maxTokens,
@@ -106,7 +88,7 @@ export class ClaudeProvider implements AIProvider {
           messages: conversation,
           ...(tools.length > 0 ? { tools: tools as Anthropic.Messages.Tool[] } : {}),
         }).finalMessage()
-      );
+      , this.logger);
 
       const toolUseBlocks = response.content.filter((b): b is ToolUseBlock => b.type === "tool_use");
 

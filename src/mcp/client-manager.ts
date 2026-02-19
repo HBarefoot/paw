@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ToolDefinition, ToolResult, ToolResultImage } from "../types/message.js";
 import type { Logger } from "../types/plugin.js";
 
@@ -7,6 +9,30 @@ interface MCPServerConfig {
   env?: Record<string, string>;
   url?: string;
   transport?: "stdio" | "sse" | "http";
+}
+
+// Default allowlist of safe MCP command executables
+const DEFAULT_ALLOWED_COMMANDS = new Set([
+  "npx", "node", "bun", "bunx", "deno", "python", "python3", "uvx",
+]);
+
+// Private/internal IP ranges to block for SSRF prevention
+const PRIVATE_IP_PATTERNS = [
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[0-1])\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^0\./,
+  /^localhost$/i,
+  /^\[::1\]$/,
+  /^\[fc/i,
+  /^\[fd/i,
+  /^\[fe80:/i,
+];
+
+function isPrivateHost(hostname: string): boolean {
+  return PRIVATE_IP_PATTERNS.some((p) => p.test(hostname));
 }
 
 interface MCPTool {
@@ -38,9 +64,51 @@ interface ConnectedServer {
 export class MCPClientManager {
   private servers = new Map<string, ConnectedServer>();
   private logger: Logger;
+  private allowedCommands: Set<string>;
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, allowedCommands?: string[]) {
     this.logger = logger;
+    this.allowedCommands = allowedCommands
+      ? new Set(allowedCommands)
+      : DEFAULT_ALLOWED_COMMANDS;
+  }
+
+  /**
+   * Validate a stdio command against the allowlist.
+   * Only the basename of the command is checked (e.g. "npx" from "/usr/bin/npx").
+   */
+  private validateCommand(command: string, args: string[]): void {
+    // Extract basename for allowlist check
+    const basename = command.split("/").pop() ?? command;
+    if (!this.allowedCommands.has(basename)) {
+      throw new Error(
+        `MCP command "${basename}" is not in the allowed list. ` +
+        `Allowed: ${[...this.allowedCommands].join(", ")}. ` +
+        `To allow additional commands, configure mcpAllowedCommands in config.`,
+      );
+    }
+
+    // Reject shell metacharacters in args to prevent injection
+    const shellMetaRe = /[;&|`$(){}!<>\\]/;
+    for (const arg of args) {
+      if (shellMetaRe.test(arg)) {
+        throw new Error(`MCP server argument contains forbidden shell characters: "${arg}"`);
+      }
+    }
+  }
+
+  /**
+   * Validate a URL is not targeting private/internal networks (SSRF prevention).
+   */
+  private validateUrl(urlStr: string): URL {
+    const url = new URL(urlStr);
+    if (isPrivateHost(url.hostname)) {
+      throw new Error(
+        `MCP server URL "${url.hostname}" targets a private/internal network. ` +
+        `Only public URLs are allowed for SSE/HTTP transports.`,
+      );
+    }
+    return url;
   }
 
   async connectServer(name: string, config: MCPServerConfig): Promise<void> {
@@ -69,6 +137,9 @@ export class MCPClientManager {
         if (!config.command) {
           throw new Error(`MCP server "${name}" requires a command for stdio transport`);
         }
+        // Validate command against allowlist
+        this.validateCommand(config.command, config.args ?? []);
+
         const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
         transport = new StdioClientTransport({
           command: config.command,
@@ -79,14 +150,18 @@ export class MCPClientManager {
         if (!config.url) {
           throw new Error(`MCP server "${name}" requires a url for SSE transport`);
         }
+        // Validate URL is not targeting internal networks
+        const url = this.validateUrl(config.url);
         const { SSEClientTransport } = await import("@modelcontextprotocol/sdk/client/sse.js");
-        transport = new SSEClientTransport(new URL(config.url));
+        transport = new SSEClientTransport(url);
       } else if (transportType === "http") {
         if (!config.url) {
           throw new Error(`MCP server "${name}" requires a url for HTTP transport`);
         }
+        // Validate URL is not targeting internal networks
+        const url = this.validateUrl(config.url);
         const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
-        transport = new StreamableHTTPClientTransport(new URL(config.url));
+        transport = new StreamableHTTPClientTransport(url);
       } else {
         throw new Error(`Unknown transport type: ${transportType}`);
       }

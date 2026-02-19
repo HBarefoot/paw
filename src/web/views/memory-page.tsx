@@ -103,7 +103,8 @@ export const MemoryPage: FC<MemoryPageProps> = ({ memories, stats, query, catego
                     <span class="text-xs text-muted">{mem.created_at}</span>
                     <button
                       class="btn-danger btn-sm"
-                      onclick={`deleteMemory('${mem.id}')`}
+                      data-memory-id={mem.id}
+                      onclick="deleteMemory(this.dataset.memoryId)"
                     >
                       Delete
                     </button>

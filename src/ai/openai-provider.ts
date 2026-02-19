@@ -1,5 +1,6 @@
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import { withRetry } from "./retry.js";
 import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
 import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
@@ -130,21 +131,23 @@ export class OpenAIProvider implements AIProvider {
         body.tools = tools;
       }
 
-      const res = await fetch(`${this.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify(body),
-      });
+      const data = await withRetry(async () => {
+        const res = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify(body),
+        });
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`OpenAI error (${res.status}): ${text}`);
-      }
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`OpenAI error (${res.status}): ${text}`);
+        }
 
-      const data = (await res.json()) as OpenAIResponse;
+        return (await res.json()) as OpenAIResponse;
+      }, this.logger);
       const choice = data.choices[0];
       if (!choice) throw new Error("OpenAI returned no choices");
 

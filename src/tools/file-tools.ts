@@ -1,5 +1,5 @@
 import { resolve, relative } from "node:path";
-import { existsSync, statSync, readdirSync } from "node:fs";
+import { existsSync, statSync, readdirSync, realpathSync } from "node:fs";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
 
 interface FileToolsConfig {
@@ -8,15 +8,21 @@ interface FileToolsConfig {
   maxOutputLength: number;
 }
 
-function isWithinWorkspace(filePath: string, workspace: string): boolean {
-  const resolved = resolve(workspace, filePath);
-  const rel = relative(workspace, resolved);
-  return !rel.startsWith("..") && !resolve(resolved).includes("\0");
-}
-
 function safePath(filePath: string, workspace: string): string | null {
   const resolved = resolve(workspace, filePath);
-  if (!isWithinWorkspace(filePath, workspace)) return null;
+  // Check logical path first (no ".." traversal, no null bytes)
+  const rel = relative(workspace, resolved);
+  if (rel.startsWith("..") || resolved.includes("\0")) return null;
+  // If the path exists, resolve symlinks and verify the real path is still within workspace
+  if (existsSync(resolved)) {
+    try {
+      const real = realpathSync(resolved);
+      const realRel = relative(workspace, real);
+      if (realRel.startsWith("..")) return null;
+    } catch {
+      return null;
+    }
+  }
   return resolved;
 }
 
