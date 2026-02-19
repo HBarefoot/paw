@@ -99,19 +99,23 @@ export class MemoryStore {
     // 2. FTS5 keyword search
     const ftsResults = this.db.prepare<{ rowid: number; rank: number }, [string, number]>(
       `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`,
-    ).all(query.replace(/['"]/g, ""), limit * 2);
+    ).all(query.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim(), limit * 2);
 
-    // Map FTS rowids to memory IDs
+    // Map FTS rowids to memory IDs (batch query instead of N individual lookups)
     const ftsScores = new Map<string, number>();
     if (ftsResults.length > 0) {
       const maxRank = Math.abs(ftsResults[ftsResults.length - 1]?.rank ?? 1);
+      const placeholders = ftsResults.map(() => "?").join(",");
+      const rowids = ftsResults.map(r => r.rowid);
+      const idRows = this.db.prepare<{ rowid: number; id: string }, number[]>(
+        `SELECT rowid, id FROM memories WHERE rowid IN (${placeholders})`
+      ).all(...rowids);
+      const rowidToId = new Map(idRows.map(r => [r.rowid, r.id]));
       for (const row of ftsResults) {
-        const memRow = this.db.prepare<{ id: string }, [number]>(
-          "SELECT id FROM memories WHERE rowid = ?",
-        ).get(row.rowid);
-        if (memRow) {
+        const id = rowidToId.get(row.rowid);
+        if (id) {
           // Normalize rank to 0-1 (rank is negative, closer to 0 is better match)
-          ftsScores.set(memRow.id, maxRank > 0 ? (1 - Math.abs(row.rank) / maxRank) : 1);
+          ftsScores.set(id, maxRank > 0 ? (1 - Math.abs(row.rank) / maxRank) : 1);
         }
       }
     }
@@ -136,18 +140,21 @@ export class MemoryStore {
 
     if (topIds.length === 0) return [];
 
-    // 4. Fetch full memory records
+    // 4. Fetch full memory records (batch query instead of N individual lookups)
     const results: MemoryResult[] = [];
-    for (const { id, score } of topIds) {
-      const row = this.db.prepare<
+    if (topIds.length > 0) {
+      const placeholders = topIds.map(() => "?").join(",");
+      const ids = topIds.map(t => t.id);
+      const scoreMap = new Map(topIds.map(t => [t.id, t.score]));
+      const rows = this.db.prepare<
         { id: string; text: string; scope: string; category: string; source: string | null; created_at: string },
-        [string]
-      >("SELECT id, text, scope, category, source, created_at FROM memories WHERE id = ?").get(id);
-      if (row) {
+        string[]
+      >(`SELECT id, text, scope, category, source, created_at FROM memories WHERE id IN (${placeholders})`).all(...ids);
+      for (const row of rows) {
         results.push({
           id: row.id,
           text: row.text,
-          score,
+          score: scoreMap.get(row.id)!,
           metadata: {
             scope: row.scope,
             category: row.category as MemoryMetadata["category"],

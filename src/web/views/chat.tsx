@@ -8,36 +8,59 @@ interface ChatPageProps {
 
 const sendIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
 const attachIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>`;
+const canvasIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+const refreshIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
+const trashIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 
 export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
   return (
     <Layout title="Chat" currentPath="/chat">
-      <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center">
-        <select id="session-selector" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;min-width:250px">
+      {raw(`<script>document.querySelector(".content").classList.add("content-full")</script>`)}
+      <div class="chat-toolbar">
+        <select id="session-selector">
           <option value="">New conversation</option>
         </select>
-        {raw(`<button id="new-chat-btn" onclick="newChat()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--accent);color:#fff;font-size:13px;cursor:pointer;white-space:nowrap">New Chat</button>`)}
+        {raw(`<button class="chat-toolbar-btn primary" id="new-chat-btn" onclick="newChat()">+ New Chat</button>`)}
+        {raw(`<button class="chat-toolbar-btn" id="canvas-toggle" onclick="toggleCanvasMode()">${canvasIconSvg} Canvas</button>`)}
       </div>
-      <div class="card chat-container" id="chat-container" data-session-id={sessionId}>
-        <div class="chat-messages" id="messages">
-          <div class="chat-welcome">
-            <div class="welcome-icon">💬</div>
-            <p>Send a message to start chatting with Paw</p>
-          </div>
-          <div id="typing" class="msg-wrapper" style="display: none">
-            <div class="avatar bot-avatar">P</div>
-            <div class="typing-indicator">
-              <span></span><span></span><span></span>
+      <div class="chat-with-canvas" id="chat-with-canvas">
+        <div class="chat-container" id="chat-container" data-session-id={sessionId}>
+          <div class="chat-messages" id="messages">
+            <div class="chat-welcome">
+              <div class="welcome-icon">💬</div>
+              <p>Send a message to start chatting with Paw</p>
+            </div>
+            <div id="typing" class="msg-wrapper" style="display: none">
+              <div class="avatar bot-avatar">P</div>
+              <div class="typing-indicator">
+                <span></span><span></span><span></span>
+              </div>
             </div>
           </div>
+          {raw(`<div class="chat-attachments" id="chat-attachments" style="display:none"></div>`)}
+          <div class="chat-input">
+            {raw(`<input type="file" id="file-input" accept="image/*,.csv,.xlsx,.xls" multiple style="display:none" />`)}
+            {raw(`<button class="attach-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files">${attachIconSvg}</button>`)}
+            <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off" />
+            {raw(`<button class="send-btn" id="send-btn" onclick="sendMessage()">${sendIconSvg}</button>`)}
+          </div>
         </div>
-        {raw(`<div class="chat-attachments" id="chat-attachments" style="display:none"></div>`)}
-        <div class="chat-input">
-          {raw(`<input type="file" id="file-input" accept="image/*" multiple style="display:none" />`)}
-          {raw(`<button class="attach-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach images">${attachIconSvg}</button>`)}
-          <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off" />
-          {raw(`<button class="send-btn" id="send-btn" onclick="sendMessage()">${sendIconSvg}</button>`)}
-        </div>
+        {raw(`<div class="canvas-panel" id="canvas-panel">
+          <div class="canvas-toolbar">
+            <span class="current-file" id="current-file">index.html</span>
+            <button onclick="canvasRefresh()" title="Refresh preview">${refreshIconSvg}</button>
+            <button onclick="canvasClear()" title="Clear canvas" style="color:var(--error)">${trashIconSvg}</button>
+          </div>
+          <iframe class="canvas-iframe" id="canvas-iframe" src="/api/canvas/preview/index.html"></iframe>
+          <div class="canvas-status" id="canvas-status">
+            <span class="dot" id="status-dot"></span>
+            <span id="status-text">Idle</span>
+            <span style="margin-left:auto"></span>
+            <div id="canvas-files" style="display:flex;align-items:center;gap:4px">
+              <span id="file-list" class="text-xs text-muted">No files</span>
+            </div>
+          </div>
+        </div>`)}
       </div>
       {raw(`<script src="/js/chat.js"></script>`)}
     </Layout>
@@ -58,27 +81,51 @@ export function getChatScript(): string {
   var fileInput = document.getElementById("file-input");
   var attachmentsDiv = document.getElementById("chat-attachments");
   var pendingImages = [];
+  var pendingFiles = [];
+  var MAX_FILE_SIZE = 5 * 1024 * 1024;
+
+  function isSpreadsheet(file) {
+    var ext = file.name.split(".").pop().toLowerCase();
+    return ext === "csv" || ext === "xlsx" || ext === "xls" ||
+      file.type === "text/csv" || file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      file.type === "application/vnd.ms-excel";
+  }
 
   fileInput.addEventListener("change", function() {
     var files = fileInput.files;
     for (var i = 0; i < files.length; i++) {
       (function(file) {
-        var reader = new FileReader();
-        reader.onload = function(e) {
-          var dataUrl = e.target.result;
-          var base64 = dataUrl.split(",")[1];
-          var mimeType = dataUrl.split(":")[1].split(";")[0];
-          pendingImages.push({ data: base64, mimeType: mimeType, dataUrl: dataUrl });
-          renderPendingImages();
-        };
-        reader.readAsDataURL(file);
+        if (file.size > MAX_FILE_SIZE) {
+          pawModal.alert("File too large", file.name + " exceeds the 5MB size limit.");
+          return;
+        }
+        if (isSpreadsheet(file)) {
+          var reader = new FileReader();
+          reader.onload = function(e) {
+            var base64 = btoa(new Uint8Array(e.target.result).reduce(function(data, byte) { return data + String.fromCharCode(byte); }, ""));
+            var mimeType = file.type || "application/octet-stream";
+            pendingFiles.push({ data: base64, mimeType: mimeType, name: file.name });
+            renderPendingAttachments();
+          };
+          reader.readAsArrayBuffer(file);
+        } else {
+          var reader = new FileReader();
+          reader.onload = function(e) {
+            var dataUrl = e.target.result;
+            var base64 = dataUrl.split(",")[1];
+            var mimeType = dataUrl.split(":")[1].split(";")[0];
+            pendingImages.push({ data: base64, mimeType: mimeType, dataUrl: dataUrl });
+            renderPendingAttachments();
+          };
+          reader.readAsDataURL(file);
+        }
       })(files[i]);
     }
     fileInput.value = "";
   });
 
-  function renderPendingImages() {
-    if (pendingImages.length === 0) {
+  function renderPendingAttachments() {
+    if (pendingImages.length === 0 && pendingFiles.length === 0) {
       attachmentsDiv.style.display = "none";
       attachmentsDiv.innerHTML = "";
       return;
@@ -91,12 +138,23 @@ export function getChatScript(): string {
         '<button class="attachment-remove" onclick="removePendingImage(' + i + ')">\\u00d7</button>' +
         '</div>';
     }
+    for (var j = 0; j < pendingFiles.length; j++) {
+      html += '<div class="attachment-thumb" style="display:flex;align-items:center;justify-content:center;width:auto;padding:4px 10px;font-size:12px;gap:4px" data-file-index="' + j + '">' +
+        '<span>\\uD83D\\uDCC4</span><span>' + escapeHtml(pendingFiles[j].name) + '</span>' +
+        '<button class="attachment-remove" style="position:static;width:18px;height:18px;font-size:12px" onclick="removePendingFile(' + j + ')">\\u00d7</button>' +
+        '</div>';
+    }
     attachmentsDiv.innerHTML = html;
   }
 
   window.removePendingImage = function(index) {
     pendingImages.splice(index, 1);
-    renderPendingImages();
+    renderPendingAttachments();
+  };
+
+  window.removePendingFile = function(index) {
+    pendingFiles.splice(index, 1);
+    renderPendingAttachments();
   };
 
   // Load session list
@@ -152,8 +210,8 @@ export function getChatScript(): string {
 
   loadSessions();
 
-  // If page loaded with a saved session, load its messages
-  if (savedSession) {
+  // If page loaded with a saved session, load its messages (skip canvas sessions — they're in-memory only)
+  if (savedSession && !sessionId.startsWith("canvas-")) {
     fetch("/api/sessions/" + sessionId + "/messages")
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -173,21 +231,24 @@ export function getChatScript(): string {
 
   window.sendMessage = function sendMessage() {
     var text = input.value.trim();
-    if (!text && pendingImages.length === 0) return;
-    if (!text) text = "(image)";
+    if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
+    if (!text) text = pendingFiles.length > 0 ? "(file attached)" : "(image)";
     input.value = "";
 
-    // Capture pending images for this message
+    // Capture pending attachments for this message
     var imagesToSend = pendingImages.slice();
+    var filesToSend = pendingFiles.slice();
     var userImageUrls = imagesToSend.map(function(img) { return img.dataUrl; });
+    var userFileNames = filesToSend.map(function(f) { return f.name; });
     pendingImages = [];
-    renderPendingImages();
+    pendingFiles = [];
+    renderPendingAttachments();
 
     // Remove welcome state if present
     var welcome = messagesDiv.querySelector(".chat-welcome");
     if (welcome) welcome.remove();
 
-    appendMsg("user", text, userImageUrls);
+    appendMsg("user", text, userImageUrls, userFileNames);
     var sendBtn = document.getElementById("send-btn");
     sendBtn.disabled = true;
 
@@ -198,6 +259,9 @@ export function getChatScript(): string {
     var payload = { sessionId: sessionId, message: text };
     if (imagesToSend.length > 0) {
       payload.images = imagesToSend.map(function(img) { return { data: img.data, mimeType: img.mimeType }; });
+    }
+    if (filesToSend.length > 0) {
+      payload.files = filesToSend.map(function(f) { return { data: f.data, mimeType: f.mimeType, name: f.name }; });
     }
 
     fetch("/api/chat", {
@@ -229,7 +293,7 @@ export function getChatScript(): string {
     input.focus();
   };
 
-  function appendMsg(role, text, images) {
+  function appendMsg(role, text, images, fileNames) {
     var wrapper = document.createElement("div");
     wrapper.className = "msg-wrapper" + (role === "user" ? " user-msg" : "");
 
@@ -259,6 +323,16 @@ export function getChatScript(): string {
         img.style.cssText = "max-width:100%;border-radius:8px;margin-top:8px;cursor:pointer";
         img.onclick = function() { window.open(this.src, "_blank"); };
         bubble.appendChild(img);
+      }
+    }
+
+    // Render file badges
+    if (fileNames && fileNames.length > 0) {
+      for (var fi = 0; fi < fileNames.length; fi++) {
+        var badge = document.createElement("div");
+        badge.className = "file-badge";
+        badge.textContent = "\\uD83D\\uDCC4 " + fileNames[fi];
+        bubble.appendChild(badge);
       }
     }
 
@@ -421,6 +495,248 @@ export function getChatScript(): string {
 
     return s;
   }
+
+  // ===== CANVAS MODE =====
+  var _canvasRefreshTimer = null;
+  var _canvasFileListTimer = null;
+
+  function debouncedCanvasRefresh() {
+    if (_canvasRefreshTimer) clearTimeout(_canvasRefreshTimer);
+    _canvasRefreshTimer = setTimeout(function() { canvasRefresh(); _canvasRefreshTimer = null; }, 300);
+  }
+
+  function debouncedRefreshFiles() {
+    if (_canvasFileListTimer) clearTimeout(_canvasFileListTimer);
+    _canvasFileListTimer = setTimeout(function() { refreshCanvasFiles(); _canvasFileListTimer = null; }, 300);
+  }
+
+  var canvasMode = localStorage.getItem("paw-canvas-mode") === "true";
+  var canvasPanel = document.getElementById("canvas-panel");
+  var canvasToggleBtn = document.getElementById("canvas-toggle");
+  var canvasIframe = document.getElementById("canvas-iframe");
+  var canvasFileList = document.getElementById("file-list");
+  var canvasCurrentFile = document.getElementById("current-file");
+  var canvasStatusDot = document.getElementById("status-dot");
+  var canvasStatusText = document.getElementById("status-text");
+  var canvasSessionId = "canvas-" + crypto.randomUUID();
+  var canvasLastEventId = 0;
+  var canvasPolling = false;
+  var canvasCurrentFileName = "index.html";
+  var canvasThinkingEl = null;
+  var attachBtn = document.getElementById("attach-btn");
+
+  function applyCanvasMode() {
+    if (canvasMode) {
+      canvasPanel.classList.add("open");
+      canvasToggleBtn.classList.add("active");
+      startCanvasPolling();
+      refreshCanvasFiles();
+    } else {
+      canvasPanel.classList.remove("open");
+      canvasToggleBtn.classList.remove("active");
+      stopCanvasPolling();
+    }
+  }
+
+  window.toggleCanvasMode = function() {
+    canvasMode = !canvasMode;
+    localStorage.setItem("paw-canvas-mode", canvasMode);
+    applyCanvasMode();
+  };
+
+  var canvasWaitingForResponse = false;
+  var canvasPollInterval = 10000; // idle: 10s
+  var CANVAS_POLL_FAST = 1000;   // active: 1s
+  var CANVAS_POLL_IDLE = 10000;  // idle: 10s
+  var canvasPollTimer = null;
+
+  function startCanvasPolling() {
+    if (canvasPolling) return;
+    canvasPolling = true;
+    canvasPollInterval = canvasWaitingForResponse ? CANVAS_POLL_FAST : CANVAS_POLL_IDLE;
+    pollCanvasEvents();
+  }
+
+  function stopCanvasPolling() {
+    canvasPolling = false;
+    if (canvasPollTimer) { clearTimeout(canvasPollTimer); canvasPollTimer = null; }
+  }
+
+  function scheduleNextPoll() {
+    if (!canvasPolling) return;
+    if (canvasPollTimer) clearTimeout(canvasPollTimer);
+    canvasPollTimer = setTimeout(pollCanvasEvents, canvasPollInterval);
+  }
+
+  function pollCanvasEvents() {
+    if (!canvasPolling) return;
+    fetch("/api/canvas/events?sessionId=" + encodeURIComponent(canvasSessionId) + "&since=" + canvasLastEventId, { credentials: "same-origin" })
+      .then(function(r) {
+        if (r.status === 401) {
+          stopCanvasPolling();
+          if (canvasStatusDot) { canvasStatusDot.className = "dot"; }
+          if (canvasStatusText) { canvasStatusText.textContent = "Session expired — please refresh"; }
+          return null;
+        }
+        return r.json();
+      })
+      .then(function(data) {
+        if (!data) return;
+        var events = data.events || [];
+        var hadFileChange = false;
+        for (var i = 0; i < events.length; i++) {
+          var evt = events[i];
+          if (evt.id > canvasLastEventId) canvasLastEventId = evt.id;
+          if (evt.event === "message" && evt.data && evt.data.content) {
+            hideCanvasThinking();
+            canvasWaitingForResponse = false;
+            canvasPollInterval = CANVAS_POLL_IDLE;
+            appendMsg("assistant", evt.data.content);
+          } else if (evt.event === "file-changed") {
+            hadFileChange = true;
+            var changed = evt.data && evt.data.path ? evt.data.path : "";
+            if (changed === canvasCurrentFileName || canvasCurrentFileName === "index.html") {
+              debouncedCanvasRefresh();
+            }
+          }
+        }
+        if (hadFileChange) debouncedRefreshFiles();
+        if (canvasStatusDot) { canvasStatusDot.className = "dot connected"; }
+        if (canvasStatusText) { canvasStatusText.textContent = canvasWaitingForResponse ? "Working..." : "Connected"; }
+      })
+      .catch(function() {
+        if (canvasStatusDot) { canvasStatusDot.className = "dot"; }
+        if (canvasStatusText) { canvasStatusText.textContent = "Reconnecting..."; }
+      })
+      .finally(function() {
+        scheduleNextPoll();
+      });
+  }
+
+  function showCanvasThinking() {
+    if (canvasThinkingEl) return;
+    canvasWaitingForResponse = true;
+    canvasPollInterval = CANVAS_POLL_FAST;
+    // Restart polling at fast rate immediately
+    if (canvasPollTimer) { clearTimeout(canvasPollTimer); }
+    scheduleNextPoll();
+    if (canvasStatusDot) { canvasStatusDot.className = "dot working"; }
+    if (canvasStatusText) { canvasStatusText.textContent = "Working..."; }
+    canvasThinkingEl = document.createElement("div");
+    canvasThinkingEl.className = "canvas-thinking";
+    canvasThinkingEl.innerHTML = '<div class="spinner"></div> Generating...';
+    messagesDiv.insertBefore(canvasThinkingEl, typingDiv);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  function hideCanvasThinking() {
+    if (canvasStatusDot) { canvasStatusDot.className = "dot connected"; }
+    if (canvasStatusText) { canvasStatusText.textContent = "Connected"; }
+    if (canvasThinkingEl) { canvasThinkingEl.remove(); canvasThinkingEl = null; }
+  }
+
+  function refreshCanvasFiles() {
+    fetch("/api/canvas/files", { credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.files || data.files.length === 0) {
+          canvasFileList.innerHTML = '<span class="text-xs text-muted">No files</span>';
+          return;
+        }
+        var html = "";
+        data.files.forEach(function(f) {
+          var active = f.path === canvasCurrentFileName ? " active" : "";
+          html += '<a class="canvas-file-item' + active + '" data-path="' + esc(f.path) + '" onclick="canvasOpenFile(this)">' + esc(f.path) + '</a>';
+        });
+        canvasFileList.innerHTML = html;
+      })
+      .catch(function() {});
+  }
+
+  window.canvasOpenFile = function(el) {
+    var path = el.getAttribute("data-path");
+    canvasCurrentFileName = path;
+    canvasCurrentFile.textContent = path;
+    canvasIframe.src = "/api/canvas/preview/" + encodeURIComponent(path);
+    var items = canvasFileList.querySelectorAll(".canvas-file-item");
+    for (var i = 0; i < items.length; i++) {
+      items[i].classList.toggle("active", items[i].getAttribute("data-path") === path);
+    }
+  };
+
+  window.canvasRefresh = function() {
+    var src = canvasIframe.src;
+    canvasIframe.src = "about:blank";
+    setTimeout(function() { canvasIframe.src = src; }, 50);
+  };
+
+  window.canvasClear = async function() {
+    var ok = await pawModal.confirm("Clear Canvas", "Delete all canvas files and start fresh?", { confirmLabel: "Clear All", danger: true });
+    if (!ok) return;
+    fetch("/api/canvas/clear", { method: "POST", credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function() {
+        canvasFileList.innerHTML = '<span class="text-muted text-xs">No files yet</span>';
+        canvasCurrentFileName = "index.html";
+        canvasCurrentFile.textContent = "index.html";
+        canvasIframe.src = "/api/canvas/preview/index.html";
+        appendMsg("assistant", "Canvas cleared.");
+      })
+      .catch(function(err) {
+        appendMsg("assistant", "Failed to clear: " + err.message);
+      });
+  };
+
+  // Override sendMessage when canvas mode is on
+  var _origSendMessage = window.sendMessage;
+  window.sendMessage = function() {
+    if (!canvasMode) return _origSendMessage();
+
+    var text = input.value.trim();
+    if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
+    if (!text) text = pendingFiles.length > 0 ? "(file attached)" : "(image)";
+    input.value = "";
+
+    // Capture pending attachments
+    var imagesToSend = pendingImages.slice();
+    var filesToSend = pendingFiles.slice();
+    var userImageUrls = imagesToSend.map(function(img) { return img.dataUrl; });
+    var userFileNames = filesToSend.map(function(f) { return f.name; });
+    pendingImages = [];
+    pendingFiles = [];
+    renderPendingAttachments();
+
+    var welcome = messagesDiv.querySelector(".chat-welcome");
+    if (welcome) welcome.remove();
+
+    appendMsg("user", text, userImageUrls, userFileNames);
+    showCanvasThinking();
+
+    var payload = { sessionId: canvasSessionId, message: text };
+    if (imagesToSend.length > 0) {
+      payload.images = imagesToSend.map(function(img) { return { data: img.data, mimeType: img.mimeType }; });
+    }
+    if (filesToSend.length > 0) {
+      payload.files = filesToSend.map(function(f) { return { data: f.data, mimeType: f.mimeType, name: f.name }; });
+    }
+
+    fetch("/api/canvas/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    })
+    .then(function(res) {
+      if (!res.ok) return res.json().then(function(d) { throw new Error(d.error || "Request failed"); });
+    })
+    .catch(function(err) {
+      hideCanvasThinking();
+      appendMsg("assistant", "Failed to send: " + err.message);
+    });
+  };
+
+  // Initialize canvas mode on page load
+  applyCanvasMode();
 })();
 `;
 }

@@ -8,7 +8,7 @@ import { existsSync, statSync, readdirSync, watch, mkdirSync, rmSync, realpathSy
 import { DashboardPage } from "./views/dashboard.js";
 import { ConfigPage } from "./views/config-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
-import { CanvasPage, getCanvasScript } from "./views/canvas-page.js";
+// canvas-page.tsx removed — canvas is now merged into chat
 import { CronPage } from "./views/cron-page.js";
 import { MemoryPage } from "./views/memory-page.js";
 import { SessionsListPage, SessionDetailPage } from "./views/sessions-page.js";
@@ -24,6 +24,7 @@ import { createAuthMiddleware } from "./middleware/auth.js";
 import { WebAuthManager } from "../security/web-auth.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import { buildOtpauthUri } from "../security/totp.js";
+import { parseUploadedFiles } from "./file-parser.js";
 import type { Kernel } from "../kernel/kernel.js";
 import type { PawConfig } from "../types/config.js";
 import type { Database } from "bun:sqlite";
@@ -319,6 +320,16 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     return c.body(getChatScript());
   });
 
+  // Serve static files from public directory
+  app.get("/paw-logo.jpg", async (c) => {
+    const logoPath = resolve(import.meta.dir, "public/paw-logo.jpg");
+    if (!existsSync(logoPath)) return c.text("Not found", 404);
+    const file = Bun.file(logoPath);
+    c.header("Content-Type", "image/jpeg");
+    c.header("Cache-Control", "public, max-age=86400");
+    return c.body(await file.arrayBuffer());
+  });
+
   // --- Canvas ---
 
   const canvasRoot = resolve(config.web.canvas?.root ?? "./data/canvas");
@@ -335,11 +346,13 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     if (!canvasEvents.has(sessionId)) canvasEvents.set(sessionId, []);
     const buf = canvasEvents.get(sessionId)!;
     buf.push({ id: ++canvasEventSeq, event, data, ts: Date.now() });
-    // Trim old events
+    // Batch prune: find first valid index, splice once
     const cutoff = Date.now() - CANVAS_EVENT_TTL;
-    while (buf.length > CANVAS_MAX_EVENTS || (buf.length > 0 && buf[0].ts < cutoff)) {
-      buf.shift();
+    let pruneCount = 0;
+    while (pruneCount < buf.length && (buf.length - pruneCount > CANVAS_MAX_EVENTS || buf[pruneCount].ts < cutoff)) {
+      pruneCount++;
     }
+    if (pruneCount > 0) buf.splice(0, pruneCount);
   }
 
   // Periodic cleanup of abandoned canvas sessions (every 5 minutes)
@@ -381,26 +394,15 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     }
   });
 
-  app.get("/canvas", (c) => {
-    const sessionId = "canvas-" + crypto.randomUUID();
-    // Initialize event buffer for this session
-    canvasEvents.set(sessionId, []);
-    return c.html(CanvasPage({ sessionId }));
-  });
-
-  app.get("/js/canvas.js", (c) => {
-    c.header("Content-Type", "application/javascript; charset=utf-8");
-    c.header("Cache-Control", "no-cache");
-    return c.body(getCanvasScript());
-  });
+  // Canvas page routes removed — canvas is now integrated into the chat page
 
   app.post("/api/canvas/chat", async (c) => {
     if (!config.web.canvas?.enabled) {
       return c.json({ error: "Canvas is disabled" }, 400);
     }
 
-    const body = await c.req.json<{ sessionId: string; message: string }>();
-    if (!body.message?.trim()) {
+    const body = await c.req.json<{ sessionId: string; message: string; images?: Array<{ data: string; mimeType: string }>; files?: Array<{ data: string; mimeType: string; name: string }> }>();
+    if (!body.message?.trim() && !body.images?.length && !body.files?.length) {
       return c.json({ error: "Message is required" }, 400);
     }
 
@@ -408,6 +410,31 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
     // Ensure event buffer exists for this session
     if (!canvasEvents.has(sessionId)) canvasEvents.set(sessionId, []);
+
+    // Parse file attachments into text content for the AI
+    const attachments: Array<{ type: "image" | "text"; data: Buffer; mimeType: string; name?: string }> = [];
+    if (body.images) {
+      for (const img of body.images) {
+        attachments.push({
+          type: "image" as const,
+          data: Buffer.from(img.data, "base64"),
+          mimeType: img.mimeType,
+        });
+      }
+    }
+    if (body.files) {
+      const fileAttachments = await parseUploadedFiles(body.files);
+      attachments.push(...fileAttachments);
+    }
+
+    // Build inline file content so the AI can reference it in the instruction text
+    const fileContentSections: string[] = [];
+    for (const att of attachments) {
+      if (att.type === "text" && att.data) {
+        const header = att.name ? `[File: ${att.name}]` : "[Attached file]";
+        fileContentSections.push(header + "\n" + att.data.toString("utf-8"));
+      }
+    }
 
     // Prepend canvas instructions so the AI uses canvas_write
     const canvasInstruction = [
@@ -418,7 +445,8 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
       "Do NOT use file_write — only canvas_write works for the live preview.",
       "Write complete, self-contained HTML files with inline CSS and JS when possible.",
       "",
-      "User request: " + body.message.trim(),
+      "User request: " + (body.message?.trim() || "(see attached files)"),
+      ...(fileContentSections.length > 0 ? ["", "--- Attached Data ---", ...fileContentSections] : []),
     ].join("\n");
 
     // Fire-and-forget — response arrives via polling /api/canvas/events
@@ -427,6 +455,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
       sessionId,
       channel: "canvas",
       content: canvasInstruction,
+      attachments: attachments.length > 0 ? attachments : undefined,
       user: { id: "canvas-user", name: "Canvas User" },
       timestamp: new Date().toISOString(),
       metadata: { canvas: true },
@@ -842,7 +871,12 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
   app.post("/api/chat", async (c) => {
     try {
-      const body = await c.req.json<{ sessionId: string; message: string; images?: Array<{ data: string; mimeType: string }> }>();
+      const body = await c.req.json<{
+        sessionId: string;
+        message: string;
+        images?: Array<{ data: string; mimeType: string }>;
+        files?: Array<{ data: string; mimeType: string; name: string }>;
+      }>();
       if (!body.message?.trim()) {
         return c.json({ error: "Message is required" }, 400);
       }
@@ -850,14 +884,25 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
       const sessionId = body.sessionId || crypto.randomUUID();
 
       // Convert uploaded images to Attachment[]
-      const attachments = body.images?.map((img) => ({
-        type: "image" as const,
-        data: Buffer.from(img.data, "base64"),
-        mimeType: img.mimeType,
-      }));
+      const attachments: Array<{ type: "image" | "text"; data: Buffer; mimeType: string; name?: string }> = [];
+      if (body.images) {
+        for (const img of body.images) {
+          attachments.push({
+            type: "image" as const,
+            data: Buffer.from(img.data, "base64"),
+            mimeType: img.mimeType,
+          });
+        }
+      }
+
+      // Parse spreadsheet files into text attachments
+      if (body.files) {
+        const fileAttachments = await parseUploadedFiles(body.files);
+        attachments.push(...fileAttachments);
+      }
 
       // Build base64 data URIs for the user images so the UI can render them
-      const userImages = body.images?.map((img) => `data:${img.mimeType};base64,${img.data}`);
+      const userImages = body.images?.map((img: { data: string; mimeType: string }) => `data:${img.mimeType};base64,${img.data}`);
 
       // Create a promise that resolves when the outbound message arrives
       const responsePromise = new Promise<{ content: string; images?: string[] }>((resolve, reject) => {
@@ -887,7 +932,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
         sessionId,
         channel: "web",
         content: body.message.trim(),
-        attachments: attachments?.length ? attachments : undefined,
+        attachments: attachments.length > 0 ? attachments : undefined,
         user: { id: "web-user", name: "Web User" },
         timestamp: new Date().toISOString(),
       }).catch((err) => {

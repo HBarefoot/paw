@@ -12,7 +12,7 @@ import { buildSystemPrompt } from "../ai/system-prompt.js";
 import type { AIProvider, ChatMessage } from "../ai/base-provider.js";
 import type { ToolDefinition } from "../types/message.js";
 import { getDb, closeDb } from "../store/db.js";
-import { getOrCreateSession, getSession, updateSessionTitle } from "../store/sessions.js";
+import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
 import { appendMessage, getSessionMessages } from "../store/messages.js";
 import { MemoryStore } from "../memory/store.js";
 import { createMemoryTools } from "../memory/tools.js";
@@ -299,12 +299,11 @@ export class Kernel {
       return;
     }
 
-    getOrCreateSession(this.db, msg.sessionId, msg.channel, msg.user.id);
+    const session = getOrCreateSession(this.db, msg.sessionId, msg.channel, msg.user.id);
     appendMessage(this.db, msg.sessionId, "user", msg.content);
 
     // Auto-generate session title from first user message
-    const session = getSession(this.db, msg.sessionId);
-    if (session && !session.title) {
+    if (!session.title) {
       const title = msg.content.length > 80 ? msg.content.slice(0, 80) + "..." : msg.content;
       updateSessionTitle(this.db, msg.sessionId, title);
     }
