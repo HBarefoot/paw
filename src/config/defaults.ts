@@ -13,6 +13,7 @@ export const defaults: PawConfig = {
     baseUrl: "http://localhost:11434",
     model: "llama3.1",
     maxToolRoundtrips: 10,
+    requestTimeoutMs: 300_000,
   },
   openai: {
     apiKey: "",

@@ -324,7 +324,7 @@ export class Kernel {
 
     // Recall relevant memories and build system prompt
     let memoryContext: string | undefined;
-    if (this.memoryStore) {
+    if (this.memoryStore && msg.channel !== "canvas") {
       try {
         const [userMemories, globalMemories] = await Promise.all([
           this.memoryStore.recall(msg.content, { limit: 3, scope: msg.user.id }),
@@ -375,14 +375,20 @@ export class Kernel {
       promptLength: systemPrompt.length,
     });
 
+    // Pre-activate canvas skill so canvas tools are available from roundtrip 1
+    if (msg.channel === "canvas") {
+      this.skillManager.activateSkill(msg.sessionId, "canvas");
+    }
+
     try {
       const response = await this.provider.chat(messages, systemPrompt, msg.sessionId);
-      appendMessage(this.db, msg.sessionId, "assistant", response.text);
+      const replyText = response.text || (msg.channel === "canvas" ? "Done — canvas updated." : "");
+      appendMessage(this.db, msg.sessionId, "assistant", replyText);
 
       await this.bus.emit("message:outbound", {
         sessionId: msg.sessionId,
         channel: msg.channel,
-        content: response.text,
+        content: replyText,
         attachments: response.images?.map((img) => ({
           type: "image" as const,
           data: Buffer.from(img.base64, "base64"),
@@ -391,9 +397,9 @@ export class Kernel {
         metadata: msg.metadata,
       });
 
-      // Auto-extract memories from conversation
-      if (this.memoryStore && this.config.memory.autoExtract) {
-        this.autoExtractMemories(msg, response.text).catch((err) => {
+      // Auto-extract memories from conversation (skip canvas — code generation has no useful facts)
+      if (this.memoryStore && this.config.memory.autoExtract && msg.channel !== "canvas") {
+        this.autoExtractMemories(msg, replyText).catch((err) => {
           this.logger.warn("Auto-extract failed", { error: String(err) });
         });
       }
@@ -405,10 +411,14 @@ export class Kernel {
         userMessage = "I'm being rate-limited by the AI provider. Please wait a moment and try again.";
       } else if (errStr.includes("401") || errStr.includes("403") || errStr.includes("authentication")) {
         userMessage = "There's an authentication issue with the AI provider. Please check your API key configuration.";
-      } else if (errStr.includes("timeout") || errStr.includes("ETIMEDOUT")) {
-        userMessage = "The request timed out. Please try again in a moment.";
+      } else if (errStr.includes("timeout") || errStr.includes("ETIMEDOUT") || errStr.includes("TimeoutError") || errStr.includes("AbortError")) {
+        userMessage = "The AI provider took too long to respond. This can happen with complex requests — try breaking it into smaller steps.";
       } else {
         userMessage = "Sorry, I encountered an error processing your message. Please try again.";
+      }
+      // For canvas, append the actual error so the user can diagnose
+      if (msg.channel === "canvas" && !errStr.includes("429") && !errStr.includes("401")) {
+        userMessage += ` (${errStr.length > 200 ? errStr.slice(0, 200) + "..." : errStr})`;
       }
       await this.bus.emit("message:outbound", {
         sessionId: msg.sessionId,

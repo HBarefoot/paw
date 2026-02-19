@@ -448,17 +448,68 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
       }
     }
 
+    // Read existing canvas files and inject contents so the AI doesn't need canvas_read
+    const BINARY_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".mp3", ".mp4", ".webm", ".ogg", ".wav", ".pdf", ".zip", ".tar", ".gz"]);
+    const MAX_INJECT_BYTES = 50 * 1024; // 50KB total cap for injected content
+    let canvasFilesSummary = "";
+
+    if (existsSync(canvasRoot)) {
+      const canvasFiles: Array<{ path: string; size: number; fullPath: string }> = [];
+      function walkCanvas(dir: string): void {
+        if (canvasFiles.length >= 50) return;
+        try {
+          const items = readdirSync(dir, { withFileTypes: true });
+          for (const item of items) {
+            if (item.name.startsWith(".")) continue;
+            const full = resolve(dir, item.name);
+            if (item.isDirectory()) {
+              walkCanvas(full);
+            } else {
+              canvasFiles.push({ path: relative(canvasRoot, full), size: statSync(full).size, fullPath: full });
+            }
+          }
+        } catch { /* ignore read errors */ }
+      }
+      walkCanvas(canvasRoot);
+
+      if (canvasFiles.length > 0) {
+        const sections: string[] = [];
+        let injectedBytes = 0;
+        for (const f of canvasFiles) {
+          const ext = extname(f.path).toLowerCase();
+          const isBinary = BINARY_EXTS.has(ext);
+          if (isBinary || f.size > MAX_INJECT_BYTES || injectedBytes + f.size > MAX_INJECT_BYTES) {
+            sections.push(`[${f.path}] (${isBinary ? "binary" : f.size + " bytes"} — use canvas_read if needed)`);
+          } else {
+            try {
+              const content = readFileSync(f.fullPath, "utf-8");
+              sections.push(`[${f.path}]\n${content}`);
+              injectedBytes += f.size;
+            } catch {
+              sections.push(`[${f.path}] (unreadable — use canvas_read if needed)`);
+            }
+          }
+        }
+        canvasFilesSummary = "\n\n--- Current Canvas Files ---\n" + sections.join("\n\n");
+      }
+    }
+
+    const hasExistingFiles = canvasFilesSummary.length > 0;
+
     // Prepend canvas instructions so the AI uses canvas_write
     const canvasInstruction = [
       "[CANVAS MODE] You are working in a live canvas environment.",
       "You MUST use the canvas_write tool to create/update files (HTML, CSS, JS).",
       "Files written with canvas_write appear in a live preview iframe immediately.",
-      "Always start by writing an index.html file. Use canvas_read to check existing files.",
+      hasExistingFiles
+        ? "The current canvas file contents are provided below. Write directly using canvas_write — do NOT call canvas_read unless you need a file not listed below."
+        : "The canvas is currently empty. Start by writing an index.html file.",
       "Do NOT use file_write — only canvas_write works for the live preview.",
       "Write complete, self-contained HTML files with inline CSS and JS when possible.",
       "",
       "User request: " + (body.message?.trim() || "(see attached files)"),
       ...(fileContentSections.length > 0 ? ["", "--- Attached Data ---", ...fileContentSections] : []),
+      ...(canvasFilesSummary ? [canvasFilesSummary] : []),
     ].join("\n");
 
     // Fire-and-forget — response arrives via polling /api/canvas/events

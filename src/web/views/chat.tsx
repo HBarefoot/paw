@@ -844,7 +844,7 @@ export function getChatScript(): string {
     canvasThinkingEl.innerHTML = '<div class="spinner"></div> Generating...';
     messagesDiv.insertBefore(canvasThinkingEl, typingDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    // Auto-clear after 90 seconds to prevent stuck state
+    // Auto-clear after 5 minutes to prevent stuck state
     if (canvasThinkingTimeout) clearTimeout(canvasThinkingTimeout);
     canvasThinkingTimeout = setTimeout(function() {
       if (canvasWaitingForResponse) {
@@ -853,7 +853,7 @@ export function getChatScript(): string {
         canvasPollInterval = CANVAS_POLL_IDLE;
         appendMsg("assistant", "Request timed out. The AI may still be processing — check the canvas preview or try again.");
       }
-    }, 90000);
+    }, 300000);
   }
 
   function hideCanvasThinking() {

@@ -11,6 +11,7 @@ export interface PawConfig {
     baseUrl: string;
     model: string;
     maxToolRoundtrips: number;
+    requestTimeoutMs: number;
   };
   openai: {
     apiKey: string;

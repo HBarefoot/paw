@@ -23,7 +23,9 @@ export async function withRetry<T>(
         msg.includes("529") ||
         msg.includes("rate_limit") ||
         msg.includes("ETIMEDOUT") ||
-        msg.includes("ECONNRESET");
+        msg.includes("ECONNRESET") ||
+        msg.includes("TimeoutError") ||
+        msg.includes("AbortError");
       if (!isRetryable || attempt === maxRetries) throw err;
       const delayMs = Math.min(1000 * Math.pow(2, attempt), 30_000);
       logger.warn("Retrying after transient error", { attempt: attempt + 1, delayMs, error: msg });

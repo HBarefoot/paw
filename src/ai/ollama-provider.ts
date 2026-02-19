@@ -10,6 +10,7 @@ export interface OllamaProviderConfig {
   baseUrl: string;
   model: string;
   maxToolRoundtrips: number;
+  requestTimeoutMs?: number;
 }
 
 interface OllamaMessage {
@@ -49,6 +50,7 @@ export class OllamaProvider implements AIProvider {
   private baseUrl: string;
   private model: string;
   private maxToolRoundtrips: number;
+  private requestTimeoutMs: number;
   readonly toolRegistry: ToolRegistry;
   private skillManager: SkillManager | null;
   private logger: Logger;
@@ -57,6 +59,7 @@ export class OllamaProvider implements AIProvider {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.model = config.model;
     this.maxToolRoundtrips = config.maxToolRoundtrips;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? 300_000;
     this.toolRegistry = toolRegistry;
     this.skillManager = skillManager ?? null;
     this.logger = logger;
@@ -125,6 +128,7 @@ export class OllamaProvider implements AIProvider {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(this.requestTimeoutMs),
         });
 
         if (!res.ok) {
