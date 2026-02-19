@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { csrf } from "hono/csrf";
 import { setCookie, getCookie } from "hono/cookie";
 import { resolve, relative, extname } from "node:path";
-import { existsSync, statSync, readdirSync, watch, mkdirSync, rmSync, realpathSync } from "node:fs";
+import { existsSync, statSync, readdirSync, readFileSync, watch, mkdirSync, rmSync, realpathSync } from "node:fs";
 import { DashboardPage } from "./views/dashboard.js";
 import { ConfigPage } from "./views/config-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
@@ -523,6 +523,138 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
       <div class="header"><strong>Paw Canvas</strong> &mdash; Shared preview (read-only)</div>
       <iframe src="/api/canvas/preview/index.html"></iframe>
     </body></html>`);
+  });
+
+  // CRC32 for ZIP file construction
+  function crc32(data: Uint8Array): number {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < data.length; i++) {
+      crc ^= data[i];
+      for (let j = 0; j < 8; j++) {
+        crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+      }
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  // Download all canvas files as a ZIP
+  app.get("/api/canvas/download", async (c) => {
+    if (!existsSync(canvasRoot)) {
+      return c.text("No canvas files", 404);
+    }
+
+    const files: Array<{ path: string; fullPath: string }> = [];
+    function walk(dir: string): void {
+      if (files.length >= 200) return;
+      const items = readdirSync(dir, { withFileTypes: true });
+      for (const item of items) {
+        if (item.name.startsWith(".")) continue;
+        const full = resolve(dir, item.name);
+        if (item.isDirectory()) {
+          walk(full);
+        } else {
+          files.push({ path: relative(canvasRoot, full), fullPath: full });
+        }
+      }
+    }
+    walk(canvasRoot);
+
+    if (files.length === 0) {
+      return c.text("No canvas files", 404);
+    }
+
+    // Build ZIP using Bun's built-in JSZip-compatible approach
+    // Manual ZIP construction (minimal spec-compliant)
+    const entries: Array<{ path: string; data: Uint8Array }> = [];
+    for (const f of files) {
+      entries.push({ path: f.path, data: new Uint8Array(readFileSync(f.fullPath)) });
+    }
+
+    const zipParts: Uint8Array[] = [];
+    const centralDir: Uint8Array[] = [];
+    let offset = 0;
+
+    for (const entry of entries) {
+      const nameBytes = new TextEncoder().encode(entry.path);
+      // Local file header
+      const header = new Uint8Array(30 + nameBytes.length);
+      const hv = new DataView(header.buffer);
+      hv.setUint32(0, 0x04034b50, true); // signature
+      hv.setUint16(4, 20, true); // version needed
+      hv.setUint16(6, 0, true);  // flags
+      hv.setUint16(8, 0, true);  // compression (store)
+      hv.setUint16(10, 0, true); // mod time
+      hv.setUint16(12, 0, true); // mod date
+      // CRC32
+      const crc = crc32(entry.data);
+      hv.setUint32(14, crc, true);
+      hv.setUint32(18, entry.data.length, true); // compressed size
+      hv.setUint32(22, entry.data.length, true); // uncompressed size
+      hv.setUint16(26, nameBytes.length, true);   // filename length
+      hv.setUint16(28, 0, true); // extra field length
+      header.set(nameBytes, 30);
+
+      zipParts.push(header);
+      zipParts.push(entry.data);
+
+      // Central directory entry
+      const cdEntry = new Uint8Array(46 + nameBytes.length);
+      const cv = new DataView(cdEntry.buffer);
+      cv.setUint32(0, 0x02014b50, true); // signature
+      cv.setUint16(4, 20, true);  // version made by
+      cv.setUint16(6, 20, true);  // version needed
+      cv.setUint16(8, 0, true);   // flags
+      cv.setUint16(10, 0, true);  // compression
+      cv.setUint16(12, 0, true);  // mod time
+      cv.setUint16(14, 0, true);  // mod date
+      cv.setUint32(16, crc, true);
+      cv.setUint32(20, entry.data.length, true);
+      cv.setUint32(24, entry.data.length, true);
+      cv.setUint16(28, nameBytes.length, true);
+      cv.setUint16(30, 0, true);  // extra field length
+      cv.setUint16(32, 0, true);  // comment length
+      cv.setUint16(34, 0, true);  // disk number
+      cv.setUint16(36, 0, true);  // internal attrs
+      cv.setUint32(38, 0, true);  // external attrs
+      cv.setUint32(42, offset, true); // local header offset
+      cdEntry.set(nameBytes, 46);
+
+      centralDir.push(cdEntry);
+      offset += header.length + entry.data.length;
+    }
+
+    const cdOffset = offset;
+    let cdSize = 0;
+    for (const cd of centralDir) {
+      zipParts.push(cd);
+      cdSize += cd.length;
+    }
+
+    // End of central directory
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(4, 0, true);
+    ev.setUint16(6, 0, true);
+    ev.setUint16(8, entries.length, true);
+    ev.setUint16(10, entries.length, true);
+    ev.setUint32(12, cdSize, true);
+    ev.setUint32(16, cdOffset, true);
+    ev.setUint16(20, 0, true);
+    zipParts.push(eocd);
+
+    // Concatenate all parts
+    const totalLen = zipParts.reduce((sum, p) => sum + p.length, 0);
+    const zipData = new Uint8Array(totalLen);
+    let pos = 0;
+    for (const part of zipParts) {
+      zipData.set(part, pos);
+      pos += part.length;
+    }
+
+    c.header("Content-Type", "application/zip");
+    c.header("Content-Disposition", "attachment; filename=\"canvas.zip\"");
+    return c.body(zipData);
   });
 
   app.post("/api/canvas/clear", (c) => {

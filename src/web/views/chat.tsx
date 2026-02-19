@@ -12,6 +12,7 @@ const canvasIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="non
 const refreshIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
 const trashIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 const shareIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>`;
+const exportIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
 
 export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
   return (
@@ -49,7 +50,7 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
         {raw(`<div class="canvas-panel" id="canvas-panel">
           <div class="canvas-toolbar">
             <span class="current-file" id="current-file">index.html</span>
-            <button onclick="canvasShare()" title="Share canvas">${shareIconSvg}</button>
+            <button onclick="canvasExportMenu(this)" title="Export / Share" id="canvas-export-btn">${exportIconSvg}</button>
             <button onclick="canvasRefresh()" title="Refresh preview">${refreshIconSvg}</button>
             <button onclick="canvasClear()" title="Clear canvas" style="color:var(--error)">${trashIconSvg}</button>
           </div>
@@ -903,8 +904,93 @@ export function getChatScript(): string {
       });
   };
 
-  // Share canvas
-  window.canvasShare = function() {
+  // Export / Share menu
+  window.canvasExportMenu = function(anchorEl) {
+    var existing = document.getElementById("canvas-export-picker");
+    if (existing) { existing.remove(); return; }
+
+    var rect = anchorEl.getBoundingClientRect();
+    var menu = document.createElement("div");
+    menu.id = "canvas-export-picker";
+    menu.style.cssText = "position:fixed;z-index:9000;min-width:200px;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);padding:4px 0;"
+      + "top:" + rect.bottom + 4 + "px;right:" + (window.innerWidth - rect.right) + "px;";
+
+    menu.innerHTML = ''
+      + '<div class="canvas-export-item" data-action="copy-source" style="padding:8px 14px;font-size:13px;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;gap:8px">'
+      + '<span style="font-size:15px">\\uD83D\\uDCCB</span> Copy source code</div>'
+      + '<div class="canvas-export-item" data-action="download-file" style="padding:8px 14px;font-size:13px;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;gap:8px">'
+      + '<span style="font-size:15px">\\uD83D\\uDCC4</span> Download current file</div>'
+      + '<div class="canvas-export-item" data-action="download-zip" style="padding:8px 14px;font-size:13px;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;gap:8px">'
+      + '<span style="font-size:15px">\\uD83D\\uDCE6</span> Download all as ZIP</div>'
+      + '<div style="border-top:1px solid var(--border-secondary);margin:4px 0"></div>'
+      + '<div class="canvas-export-item" data-action="share-link" style="padding:8px 14px;font-size:13px;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;gap:8px">'
+      + '<span style="font-size:15px">\\uD83D\\uDD17</span> Share link (24h)</div>';
+
+    document.body.appendChild(menu);
+
+    var items = menu.querySelectorAll(".canvas-export-item");
+    for (var i = 0; i < items.length; i++) {
+      (function(item) {
+        item.addEventListener("mouseenter", function() { item.style.background = "var(--bg-hover)"; });
+        item.addEventListener("mouseleave", function() { item.style.background = "transparent"; });
+        item.addEventListener("click", function() {
+          menu.remove();
+          var action = item.getAttribute("data-action");
+          if (action === "copy-source") canvasCopySource();
+          else if (action === "download-file") canvasDownloadFile();
+          else if (action === "download-zip") canvasDownloadZip();
+          else if (action === "share-link") canvasShareLink();
+        });
+      })(items[i]);
+    }
+
+    setTimeout(function() {
+      function closeMenu(e) {
+        if (!menu.contains(e.target) && e.target !== anchorEl) {
+          menu.remove();
+          document.removeEventListener("click", closeMenu);
+        }
+      }
+      document.addEventListener("click", closeMenu);
+    }, 0);
+  };
+
+  function canvasCopySource() {
+    fetch("/api/canvas/preview/" + encodeURIComponent(canvasCurrentFileName), { credentials: "same-origin" })
+      .then(function(r) {
+        if (!r.ok) throw new Error("File not found");
+        return r.text();
+      })
+      .then(function(text) {
+        return navigator.clipboard.writeText(text);
+      })
+      .then(function() {
+        pawModal.alert("Copied", "Source code for <strong>" + esc(canvasCurrentFileName) + "</strong> copied to clipboard.");
+      })
+      .catch(function(err) {
+        pawModal.alert("Error", "Failed to copy: " + err.message);
+      });
+  }
+
+  function canvasDownloadFile() {
+    var a = document.createElement("a");
+    a.href = "/api/canvas/preview/" + encodeURIComponent(canvasCurrentFileName);
+    a.download = canvasCurrentFileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function canvasDownloadZip() {
+    var a = document.createElement("a");
+    a.href = "/api/canvas/download";
+    a.download = "canvas.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function canvasShareLink() {
     fetch("/api/canvas/share", { method: "POST", credentials: "same-origin" })
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -915,7 +1001,7 @@ export function getChatScript(): string {
       .catch(function(err) {
         pawModal.alert("Share Error", "Failed to share: " + err.message);
       });
-  };
+  }
 
   // Override sendMessage when canvas mode is on
   var _origSendMessage = window.sendMessage;

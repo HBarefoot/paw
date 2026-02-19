@@ -123,11 +123,11 @@ export const SkillsPage: FC<SkillsPageProps> = ({ skills, totalTools, success, e
 
       <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px">
         <div class="card" style="text-align:center">
-          <div style="font-size:28px;font-weight:700;color:var(--accent)">{skills.length}</div>
+          <div style="font-size:28px;font-weight:700;color:var(--text-primary)">{skills.length}</div>
           <div style="font-size:13px;color:var(--text-muted)">Total Skills</div>
         </div>
         <div class="card" style="text-align:center">
-          <div style="font-size:28px;font-weight:700;color:var(--success)">{alwaysActiveCount}</div>
+          <div style="font-size:28px;font-weight:700;color:var(--text-primary)">{alwaysActiveCount}</div>
           <div style="font-size:13px;color:var(--text-muted)">Always Active</div>
         </div>
         <div class="card" style="text-align:center">

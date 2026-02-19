@@ -179,10 +179,7 @@ const cssDesignSystem = `
   .logo-text {
     font-weight: 700;
     font-size: 17px;
-    background: var(--accent-gradient);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--text-primary);
   }
 
   .sidebar-nav {
@@ -306,10 +303,7 @@ const cssDesignSystem = `
   .stat-value {
     font-size: 30px;
     font-weight: 700;
-    background: var(--accent-gradient);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--text-primary);
     line-height: 1.2;
   }
 
