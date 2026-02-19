@@ -4,6 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { csrf } from "hono/csrf";
 import { setCookie, getCookie } from "hono/cookie";
 import { resolve, relative, extname } from "node:path";
+import { resolveProjectPath } from "../paths.js";
 import { existsSync, statSync, readdirSync, readFileSync, watch, mkdirSync, rmSync, realpathSync } from "node:fs";
 import { DashboardPage } from "./views/dashboard.js";
 import { ConfigPage } from "./views/config-page.js";
@@ -332,7 +333,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
   // --- Canvas ---
 
-  const canvasRoot = resolve(config.web.canvas?.root ?? "./data/canvas");
+  const canvasRoot = resolveProjectPath(config.web.canvas?.root ?? "./data/canvas");
 
   // In-memory event buffer for canvas polling (replaces SSE which Bun can't sustain)
   const canvasEvents = new Map<string, Array<{ id: number; event: string; data: unknown; ts: number }>>();

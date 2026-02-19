@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { resolveProjectPath } from "../paths.js";
 import { mkdirSync } from "node:fs";
 import { EventBus } from "./bus.js";
 import { Sandbox } from "./sandbox.js";
@@ -61,7 +61,7 @@ export class Kernel {
     this.bus = new EventBus();
     this.toolRegistry = new ToolRegistry();
     this.sandbox = new Sandbox(createLogger("sandbox"));
-    this.db = getDb(config.store.dbPath, config.store.customSqlitePath);
+    this.db = getDb(resolveProjectPath(config.store.dbPath), config.store.customSqlitePath);
 
     // Security
     if (config.security.requireApproval) {
@@ -122,7 +122,7 @@ export class Kernel {
 
     // Register canvas tools
     if (config.web.canvas?.enabled) {
-      const canvasRoot = resolve(config.web.canvas.root);
+      const canvasRoot = resolveProjectPath(config.web.canvas.root);
       mkdirSync(canvasRoot, { recursive: true });
       // Register sandbox manifest so permission checks pass
       this.sandbox.registerManifest({

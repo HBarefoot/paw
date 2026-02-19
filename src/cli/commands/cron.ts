@@ -1,5 +1,6 @@
 import { getDb, closeDb } from "../../store/db.js";
 import { loadConfig } from "../../config/loader.js";
+import { resolveProjectPath } from "../../paths.js";
 import { EventBus } from "../../kernel/bus.js";
 import { ToolRegistry } from "../../ai/tools.js";
 import { CronScheduler } from "../../cron/scheduler.js";
@@ -8,7 +9,7 @@ import { createLogger } from "../../observability/logger.js";
 
 export async function cronCommand(subcommand: string | undefined, args: string[]): Promise<void> {
   const config = loadConfig();
-  const db = getDb(config.store.dbPath, config.store.customSqlitePath);
+  const db = getDb(resolveProjectPath(config.store.dbPath), config.store.customSqlitePath);
   const bus = new EventBus();
   const toolRegistry = new ToolRegistry();
   const logger = createLogger("cron-cli");

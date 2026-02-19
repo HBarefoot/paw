@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import { getDb } from "../../store/db.js";
 import { WebAuthManager } from "../../security/web-auth.js";
 import { loadConfig } from "../../config/loader.js";
+import { resolveProjectPath } from "../../paths.js";
 
 function ask(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
   return new Promise((resolve) => {
@@ -16,7 +17,7 @@ export async function webAuthCommand(): Promise<void> {
     console.log("\n  🐾 Paw Web Admin Setup\n");
 
     const config = loadConfig();
-    const db = getDb(config.store.dbPath, config.store.customSqlitePath);
+    const db = getDb(resolveProjectPath(config.store.dbPath), config.store.customSqlitePath);
     const authManager = new WebAuthManager(db, {
       maxAgeMinutes: config.web.session.maxAgeMinutes,
       idleTimeoutMinutes: config.web.session.idleTimeoutMinutes,
