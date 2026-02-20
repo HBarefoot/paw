@@ -30,6 +30,7 @@ import { parseUploadedFiles } from "./file-parser.js";
 import type { Kernel } from "../kernel/kernel.js";
 import type { PawConfig } from "../types/config.js";
 import type { Database } from "bun:sqlite";
+import { CANVAS_TEMPLATES } from "./canvas-templates.js";
 
 // Fields that cannot be modified through the web config form
 const BLOCKED_CONFIG_FIELDS = new Set([
@@ -394,7 +395,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
   }
 
   // Share tokens (in-memory, expire after 24 hours)
-  const canvasShareTokens = new Map<string, { createdAt: number }>();
+  const canvasShareTokens = new Map<string, { createdAt: number; path: string }>();
   const CANVAS_SHARE_TTL = 24 * 60 * 60_000; // 24 hours
 
   // Periodic cleanup of abandoned canvas sessions and expired share tokens (every 5 minutes)
@@ -582,9 +583,23 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
   });
 
   // Canvas share — generate a shareable read-only link
-  app.post("/api/canvas/share", (c) => {
+  app.post("/api/canvas/share", async (c) => {
     const token = crypto.randomUUID();
-    canvasShareTokens.set(token, { createdAt: Date.now() });
+    let path = "index.html";
+    try {
+      const body = await c.req.json<{ path?: string }>();
+      if (body.path && typeof body.path === "string") {
+        // Validate path is within canvas root
+        const full = resolve(canvasRoot, body.path);
+        const rel = relative(canvasRoot, full);
+        if (!rel.startsWith("..") && !full.includes("\0")) {
+          path = body.path;
+        }
+      }
+    } catch {
+      // No body or invalid JSON — use default
+    }
+    canvasShareTokens.set(token, { createdAt: Date.now(), path });
     return c.json({ token, url: `/canvas/share/${token}` });
   });
 
@@ -612,8 +627,8 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
           .header strong { color: #f4f4f5; }
         }
       </style></head><body>
-      <div class="header"><strong>Paw Canvas</strong> &mdash; Shared preview (read-only)</div>
-      <iframe src="/api/canvas/preview/index.html"></iframe>
+      <div class="header"><strong>Paw Canvas</strong> &mdash; Shared preview (read-only) &mdash; <code>${meta.path.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</code></div>
+      <iframe src="/api/canvas/preview/${encodeURIComponent(meta.path)}"></iframe>
     </body></html>`);
   });
 
@@ -759,12 +774,114 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     return c.json({ cleared: true });
   });
 
+  // B1: Canvas version history — list versions for a file
+  app.get("/api/canvas/versions/:path{.+}", (c) => {
+    const filePath = c.req.param("path");
+    const versions = database.prepare(
+      "SELECT id, path, created_at FROM canvas_versions WHERE path = ? ORDER BY created_at DESC LIMIT 10",
+    ).all(filePath) as Array<{ id: number; path: string; created_at: string }>;
+    return c.json({ versions });
+  });
+
+  // B1: Restore a canvas version
+  app.post("/api/canvas/restore/:id", async (c) => {
+    const id = parseInt(c.req.param("id"), 10);
+    if (isNaN(id)) return c.json({ error: "Invalid version ID" }, 400);
+
+    const version = database.prepare(
+      "SELECT id, path, content FROM canvas_versions WHERE id = ?",
+    ).get(id) as { id: number; path: string; content: string } | null;
+
+    if (!version) return c.json({ error: "Version not found" }, 404);
+
+    // Validate path
+    const fullPath = resolve(canvasRoot, version.path);
+    const rel = relative(canvasRoot, fullPath);
+    if (rel.startsWith("..") || fullPath.includes("\0")) {
+      return c.json({ error: "Invalid path" }, 400);
+    }
+
+    // Save current content as a version before restoring
+    if (existsSync(fullPath)) {
+      try {
+        const current = readFileSync(fullPath, "utf-8");
+        database.run(
+          "INSERT INTO canvas_versions (path, content) VALUES (?, ?)",
+          [version.path, current],
+        );
+        database.run(
+          `DELETE FROM canvas_versions WHERE path = ? AND id NOT IN (
+            SELECT id FROM canvas_versions WHERE path = ? ORDER BY created_at DESC LIMIT 10
+          )`,
+          [version.path, version.path],
+        );
+      } catch { /* best-effort */ }
+    }
+
+    // Write the restored content
+    const dir = resolve(fullPath, "..");
+    mkdirSync(dir, { recursive: true });
+    await Bun.write(fullPath, version.content);
+
+    return c.json({ restored: true, path: version.path });
+  });
+
+  // B1: Get version content (for diff view)
+  app.get("/api/canvas/version-content/:id", (c) => {
+    const id = parseInt(c.req.param("id"), 10);
+    if (isNaN(id)) return c.json({ error: "Invalid version ID" }, 400);
+
+    const version = database.prepare(
+      "SELECT id, path, content, created_at FROM canvas_versions WHERE id = ?",
+    ).get(id) as { id: number; path: string; content: string; created_at: string } | null;
+
+    if (!version) return c.json({ error: "Version not found" }, 404);
+    return c.json({ id: version.id, path: version.path, content: version.content, created_at: version.created_at });
+  });
+
+  // B3: Canvas templates — list available templates
+  app.get("/api/canvas/templates", (c) => {
+    return c.json({
+      templates: CANVAS_TEMPLATES.map((t) => ({
+        name: t.name,
+        description: t.description,
+        files: Object.keys(t.files),
+      })),
+    });
+  });
+
+  // B3: Apply a template to the canvas
+  app.post("/api/canvas/template", async (c) => {
+    const body = await c.req.json<{ name: string }>();
+    const template = CANVAS_TEMPLATES.find((t) => t.name === body.name);
+    if (!template) return c.json({ error: "Template not found" }, 404);
+
+    // Clear existing canvas files
+    if (existsSync(canvasRoot)) {
+      rmSync(canvasRoot, { recursive: true, force: true });
+    }
+    mkdirSync(canvasRoot, { recursive: true });
+
+    // Write template files
+    for (const [filePath, content] of Object.entries(template.files)) {
+      const fullPath = resolve(canvasRoot, filePath);
+      const dir = resolve(fullPath, "..");
+      mkdirSync(dir, { recursive: true });
+      await Bun.write(fullPath, content);
+    }
+
+    // Clear event buffers
+    canvasEvents.clear();
+
+    return c.json({ applied: true, files: Object.keys(template.files) });
+  });
+
   app.get("/api/canvas/files", (c) => {
     if (!existsSync(canvasRoot)) {
       return c.json({ files: [] });
     }
 
-    const files: Array<{ path: string; size: number }> = [];
+    const files: Array<{ path: string; size: number; mtime: number }> = [];
     function walk(dir: string): void {
       if (files.length >= 200) return;
       const items = readdirSync(dir, { withFileTypes: true });
@@ -774,7 +891,8 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
         if (item.isDirectory()) {
           walk(full);
         } else {
-          files.push({ path: relative(canvasRoot, full), size: statSync(full).size });
+          const stat = statSync(full);
+          files.push({ path: relative(canvasRoot, full), size: stat.size, mtime: stat.mtimeMs });
         }
       }
     }
@@ -838,11 +956,25 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     const contentType = mimeMap[ext] || "application/octet-stream";
 
     const file = Bun.file(fullPath);
-    let content = await file.arrayBuffer();
+
+    // B2: Inject error overlay script into HTML files at serve time
+    if (ext === ".html" || ext === ".htm") {
+      let html = await file.text();
+      const errorOverlay = `<script>(function(){var d=document,o=null;function show(msg){if(o)o.remove();o=d.createElement("div");o.style.cssText="position:fixed;bottom:0;left:0;right:0;background:#fef2f2;border-top:2px solid #ef4444;color:#991b1b;font:13px/1.5 ui-monospace,monospace;padding:12px 16px;z-index:99999;max-height:40vh;overflow:auto";o.innerHTML='<div style="display:flex;justify-content:space-between;align-items:start"><pre style="margin:0;white-space:pre-wrap">'+msg.replace(/</g,"&lt;")+'</pre><button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:#991b1b;padding:0 4px">&times;</button></div>';d.body.appendChild(o)}window.onerror=function(m,f,l,c){show(m+"\\n  at "+(f||"?")+":"+(l||"?"));};window.onunhandledrejection=function(e){show("Unhandled rejection: "+(e.reason&&e.reason.message||e.reason||e))};})();</script>`;
+      // Inject before </body> if present, otherwise append
+      if (html.includes("</body>")) {
+        html = html.replace("</body>", errorOverlay + "</body>");
+      } else {
+        html += errorOverlay;
+      }
+      c.header("Content-Type", contentType);
+      c.header("Cache-Control", "no-cache");
+      return c.body(html);
+    }
 
     c.header("Content-Type", contentType);
     c.header("Cache-Control", "no-cache");
-    return c.body(content);
+    return c.body(await file.arrayBuffer());
   });
 
   // --- Cron Page ---

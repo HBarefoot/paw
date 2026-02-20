@@ -131,7 +131,7 @@ export class Kernel {
         description: "Live canvas workspace for HTML/CSS/JS preview",
         permissions: ["canvas"],
       });
-      this.toolRegistry.register(createCanvasTools({ canvasRoot }));
+      this.toolRegistry.register(createCanvasTools({ canvasRoot, database: this.database }));
       this.logger.info("Canvas tools registered", { canvasRoot });
     }
 

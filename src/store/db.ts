@@ -140,6 +140,15 @@ function runMigrations(db: Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS canvas_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_canvas_versions_path ON canvas_versions(path, created_at DESC);
   `);
 
   // Add title column to sessions (migration-safe)

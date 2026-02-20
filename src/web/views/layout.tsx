@@ -811,6 +811,12 @@ const cssDesignSystem = `
   .canvas-tab.active { background: var(--bg-card); color: var(--text-primary); font-weight: 500; }
   .canvas-tab .tab-close { opacity: 0.5; cursor: pointer; font-size: 14px; line-height: 1; }
   .canvas-tab .tab-close:hover { opacity: 1; color: var(--error); }
+  .canvas-tab .tab-history { opacity: 0.4; cursor: pointer; display: inline-flex; align-items: center; margin-left: 2px; }
+  .canvas-tab .tab-history:hover { opacity: 1; color: var(--accent); }
+  .canvas-tab .save-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; flex-shrink: 0; }
+  .canvas-tab .save-dot-green { background: #16a34a; animation: save-flash 0.5s ease-in-out; }
+  .canvas-tab .save-dot-orange { background: #f59e0b; animation: save-flash 0.5s ease-in-out; }
+  @keyframes save-flash { 0% { transform: scale(1.8); opacity: 0.5; } 100% { transform: scale(1); opacity: 1; } }
   .canvas-tab-add { color: var(--text-tertiary); font-size: 16px; font-weight: 500; padding: 4px 10px; font-family: var(--font-sans); }
   .canvas-tab-add:hover { color: var(--accent); background: var(--bg-hover); }
   .canvas-tab-content { flex: 1; position: relative; }

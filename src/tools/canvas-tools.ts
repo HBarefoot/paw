@@ -1,9 +1,11 @@
 import { resolve, relative } from "node:path";
-import { existsSync, statSync, readdirSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, statSync, readdirSync, mkdirSync, realpathSync, readFileSync } from "node:fs";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
+import type { Database } from "bun:sqlite";
 
 interface CanvasToolsConfig {
   canvasRoot: string;
+  database?: Database;
 }
 
 function safePath(filePath: string, root: string): string | null {
@@ -44,13 +46,34 @@ export function createCanvasTools(config: CanvasToolsConfig): ToolDefinition[] {
       if (!filePath) return { content: "Error: path is outside canvas root", is_error: true };
 
       const content = input.content as string;
+      const relPath = input.path as string;
+
+      // Save current content as a version before overwriting (B1: version history)
+      if (config.database && existsSync(filePath)) {
+        try {
+          const oldContent = readFileSync(filePath, "utf-8");
+          config.database.run(
+            "INSERT INTO canvas_versions (path, content) VALUES (?, ?)",
+            [relPath, oldContent],
+          );
+          // Prune to keep only last 10 versions per file
+          config.database.run(
+            `DELETE FROM canvas_versions WHERE path = ? AND id NOT IN (
+              SELECT id FROM canvas_versions WHERE path = ? ORDER BY created_at DESC LIMIT 10
+            )`,
+            [relPath, relPath],
+          );
+        } catch {
+          // Version save is best-effort — don't block the write
+        }
+      }
 
       // Create parent directories
       const dir = resolve(filePath, "..");
       mkdirSync(dir, { recursive: true });
 
       await Bun.write(filePath, content);
-      return { content: JSON.stringify({ written: true, path: input.path }) };
+      return { content: JSON.stringify({ written: true, path: relPath }) };
     },
   };
 

@@ -13,6 +13,8 @@ const refreshIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="no
 const trashIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 const shareIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>`;
 const exportIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
+const templateIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`;
+const historyIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
 
 export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
   return (
@@ -50,6 +52,7 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
         {raw(`<div class="canvas-panel" id="canvas-panel">
           <div class="canvas-toolbar">
             <span class="current-file" id="current-file">index.html</span>
+            <button onclick="canvasTemplateMenu(this)" title="Templates" id="canvas-template-btn">${templateIconSvg}</button>
             <button onclick="canvasExportMenu(this)" title="Export / Share" id="canvas-export-btn">${exportIconSvg}</button>
             <button onclick="canvasRefresh()" title="Refresh preview">${refreshIconSvg}</button>
             <button onclick="canvasClear()" title="Clear canvas" style="color:var(--error)">${trashIconSvg}</button>
@@ -1016,7 +1019,7 @@ export function getChatScript(): string {
   }
 
   function canvasShareLink() {
-    fetch("/api/canvas/share", { method: "POST", credentials: "same-origin" })
+    fetch("/api/canvas/share", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: canvasCurrentFileName }) })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.error) { pawModal.alert("Share Error", data.error); return; }
@@ -1074,6 +1077,370 @@ export function getChatScript(): string {
       hideCanvasThinking();
       appendMsg("assistant", "Failed to send: " + err.message);
     });
+  };
+
+  // B1: Version history — show history dropdown for current tab
+  window.canvasShowHistory = function(anchorEl) {
+    var existing = document.getElementById("canvas-history-picker");
+    if (existing) { existing.remove(); return; }
+
+    fetch("/api/canvas/versions/" + encodeURIComponent(canvasCurrentFileName), { credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var versions = data.versions || [];
+        var picker = document.createElement("div");
+        picker.id = "canvas-history-picker";
+        var rect = anchorEl.getBoundingClientRect();
+        picker.style.cssText = "position:fixed;z-index:9000;min-width:260px;max-height:300px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);padding:4px 0;"
+          + "top:" + rect.bottom + "px;left:" + rect.left + "px;";
+
+        if (versions.length === 0) {
+          picker.innerHTML = '<div style="padding:10px 14px;font-size:12px;color:var(--text-tertiary);text-align:center">No version history yet</div>';
+        } else {
+          var html = '<div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px">Version History</div>';
+          for (var i = 0; i < versions.length; i++) {
+            var v = versions[i];
+            var time = new Date(v.created_at + "Z").toLocaleString();
+            html += '<div class="canvas-history-item" data-id="' + v.id + '" style="padding:6px 12px;font-size:12px;cursor:pointer;color:var(--text-secondary);display:flex;justify-content:space-between;align-items:center">'
+              + '<span>' + esc(time) + '</span>'
+              + '<span class="canvas-history-restore" data-id="' + v.id + '" style="color:var(--primary);font-size:11px;font-weight:500">Restore</span>'
+              + '</div>';
+          }
+          picker.innerHTML = html;
+        }
+        document.body.appendChild(picker);
+
+        var restoreBtns = picker.querySelectorAll(".canvas-history-restore");
+        for (var j = 0; j < restoreBtns.length; j++) {
+          (function(btn) {
+            btn.addEventListener("click", function(e) {
+              e.stopPropagation();
+              var vId = btn.getAttribute("data-id");
+              canvasRestoreVersion(vId);
+              picker.remove();
+            });
+          })(restoreBtns[j]);
+        }
+
+        var items = picker.querySelectorAll(".canvas-history-item");
+        for (var k = 0; k < items.length; k++) {
+          (function(item) {
+            item.addEventListener("mouseenter", function() { item.style.background = "var(--bg-hover)"; });
+            item.addEventListener("mouseleave", function() { item.style.background = "transparent"; });
+          })(items[k]);
+        }
+
+        setTimeout(function() {
+          function closeH(e) {
+            if (!picker.contains(e.target) && e.target !== anchorEl) { picker.remove(); document.removeEventListener("click", closeH); }
+          }
+          document.addEventListener("click", closeH);
+        }, 0);
+      });
+  };
+
+  function canvasRestoreVersion(id) {
+    fetch("/api/canvas/restore/" + id, { method: "POST", credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) { pawModal.alert("Restore Error", data.error); return; }
+        canvasRefresh();
+        appendMsg("assistant", "Restored previous version of " + esc(data.path));
+      })
+      .catch(function(err) { pawModal.alert("Error", "Failed to restore: " + err.message); });
+  }
+
+  // B3: Templates menu
+  window.canvasTemplateMenu = function(anchorEl) {
+    var existing = document.getElementById("canvas-template-picker");
+    if (existing) { existing.remove(); return; }
+
+    fetch("/api/canvas/templates", { credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var templates = data.templates || [];
+        var picker = document.createElement("div");
+        picker.id = "canvas-template-picker";
+        var rect = anchorEl.getBoundingClientRect();
+        picker.style.cssText = "position:fixed;z-index:9000;min-width:220px;max-height:300px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);padding:4px 0;"
+          + "top:" + rect.bottom + 4 + "px;right:" + (window.innerWidth - rect.right) + "px;";
+
+        var html = '<div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px">Templates</div>';
+        for (var i = 0; i < templates.length; i++) {
+          var t = templates[i];
+          html += '<div class="canvas-template-item" data-name="' + esc(t.name) + '" style="padding:8px 12px;cursor:pointer;color:var(--text-secondary)">'
+            + '<div style="font-size:13px;font-weight:500">' + esc(t.name) + '</div>'
+            + '<div style="font-size:11px;color:var(--text-tertiary)">' + esc(t.description) + '</div>'
+            + '</div>';
+        }
+        picker.innerHTML = html;
+        document.body.appendChild(picker);
+
+        var items = picker.querySelectorAll(".canvas-template-item");
+        for (var j = 0; j < items.length; j++) {
+          (function(item) {
+            item.addEventListener("mouseenter", function() { item.style.background = "var(--bg-hover)"; });
+            item.addEventListener("mouseleave", function() { item.style.background = "transparent"; });
+            item.addEventListener("click", async function() {
+              picker.remove();
+              var name = item.getAttribute("data-name");
+              var ok = await pawModal.confirm("Apply Template", 'This will clear all existing canvas files and apply the "' + name + '" template. Continue?', { confirmLabel: "Apply", danger: true });
+              if (!ok) return;
+              canvasApplyTemplate(name);
+            });
+          })(items[j]);
+        }
+
+        setTimeout(function() {
+          function closeT(e) {
+            if (!picker.contains(e.target) && e.target !== anchorEl) { picker.remove(); document.removeEventListener("click", closeT); }
+          }
+          document.addEventListener("click", closeT);
+        }, 0);
+      });
+  };
+
+  function canvasApplyTemplate(name) {
+    fetch("/api/canvas/template", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) { pawModal.alert("Template Error", data.error); return; }
+      for (var i = 0; i < canvasTabs.length; i++) canvasTabs[i].iframeEl.remove();
+      canvasTabs = [];
+      canvasTabIdSeq = 0;
+      createCanvasTab("index.html");
+      refreshCanvasFiles();
+      appendMsg("assistant", "Applied template. Files: " + data.files.join(", "));
+    })
+    .catch(function(err) { pawModal.alert("Error", "Failed to apply template: " + err.message); });
+  }
+
+  // B4: Simple line diff algorithm (LCS-based)
+  function computeLineDiff(oldText, newText) {
+    var oldLines = oldText.split("\\n");
+    var newLines = newText.split("\\n");
+    var maxLines = 500;
+    if (oldLines.length > maxLines || newLines.length > maxLines) {
+      return [{ type: "info", text: "(file too large for inline diff)" }];
+    }
+    var dp = [];
+    for (var i = 0; i <= oldLines.length; i++) {
+      dp[i] = [];
+      for (var j = 0; j <= newLines.length; j++) {
+        if (i === 0 || j === 0) dp[i][j] = 0;
+        else if (oldLines[i-1] === newLines[j-1]) dp[i][j] = dp[i-1][j-1] + 1;
+        else dp[i][j] = Math.max(dp[i-1][j], dp[i][j-1]);
+      }
+    }
+    var diffs = [];
+    var i = oldLines.length, j = newLines.length;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldLines[i-1] === newLines[j-1]) {
+        diffs.unshift({ type: "same", text: oldLines[i-1] });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+        diffs.unshift({ type: "add", text: newLines[j-1] });
+        j--;
+      } else {
+        diffs.unshift({ type: "del", text: oldLines[i-1] });
+        i--;
+      }
+    }
+    return diffs;
+  }
+
+  // B4: Show diff in chat after file changes
+  function showFileDiff(path, oldContent, newContent) {
+    var diffs = computeLineDiff(oldContent, newContent);
+    var hasChanges = diffs.some(function(d) { return d.type !== "same"; });
+    if (!hasChanges) return;
+
+    var html = '<details class="canvas-diff"><summary style="cursor:pointer;font-size:12px;color:var(--text-tertiary);margin:4px 0">View changes to ' + esc(path) + '</summary>'
+      + '<pre style="font-size:11px;line-height:1.4;margin:4px 0;padding:8px;background:var(--bg-secondary);border-radius:var(--radius-sm);overflow-x:auto;max-height:300px">';
+    for (var k = 0; k < diffs.length; k++) {
+      var d = diffs[k];
+      if (d.type === "add") html += '<span style="color:#16a34a;background:#dcfce7">+ ' + esc(d.text) + '</span>\\n';
+      else if (d.type === "del") html += '<span style="color:#dc2626;background:#fee2e2">- ' + esc(d.text) + '</span>\\n';
+      else if (d.type === "info") html += '<span style="color:var(--text-tertiary)">' + esc(d.text) + '</span>\\n';
+    }
+    html += '</pre></details>';
+
+    var wrapper = document.createElement("div");
+    wrapper.className = "msg-wrapper";
+    wrapper.innerHTML = '<div class="avatar bot-avatar">P</div><div class="msg assistant"><div class="md-content">' + html + '</div></div>';
+    messagesDiv.insertBefore(wrapper, typingDiv);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  // B5: Save indicator + conflict detection
+  var canvasFileMtimes = {};
+  var canvasSaveIndicators = {};
+
+  function updateSaveIndicator(path, status) {
+    canvasSaveIndicators[path] = status;
+    renderCanvasTabs();
+    if (status === "saved") {
+      setTimeout(function() {
+        if (canvasSaveIndicators[path] === "saved") {
+          canvasSaveIndicators[path] = null;
+          renderCanvasTabs();
+        }
+      }, 3000);
+    }
+  }
+
+  // Override renderCanvasTabs to include history button and save indicators
+  var _origRenderCanvasTabs = renderCanvasTabs;
+  renderCanvasTabs = function() {
+    var html = "";
+    for (var i = 0; i < canvasTabs.length; i++) {
+      var t = canvasTabs[i];
+      var active = t.path === canvasCurrentFileName ? " active" : "";
+      var indicator = "";
+      var si = canvasSaveIndicators[t.path];
+      if (si === "saved") indicator = '<span class="save-dot save-dot-green" title="Saved"></span>';
+      else if (si === "external") indicator = '<span class="save-dot save-dot-orange" title="Changed externally"></span>';
+      var closeBtn = canvasTabs.length > 1
+        ? ' <span class="tab-close" data-tab-id="' + t.id + '">\\u00d7</span>'
+        : "";
+      var histBtn = active ? ' <span class="tab-history" data-tab-id="' + t.id + '" title="Version history">${historyIconSvg}</span>' : "";
+      html += '<div class="canvas-tab' + active + '" data-tab-id="' + t.id + '">'
+        + indicator + esc(t.path) + histBtn + closeBtn + '</div>';
+    }
+    html += '<div class="canvas-tab canvas-tab-add" id="canvas-tab-add" title="Open file">+</div>';
+    canvasTabsBar.innerHTML = html;
+
+    var tabEls = canvasTabsBar.querySelectorAll(".canvas-tab:not(.canvas-tab-add)");
+    for (var j = 0; j < tabEls.length; j++) {
+      (function(el) {
+        el.addEventListener("click", function(e) {
+          if (e.target.classList.contains("tab-close")) {
+            closeCanvasTab(parseInt(e.target.getAttribute("data-tab-id")));
+          } else if (e.target.closest && e.target.closest(".tab-history")) {
+            canvasShowHistory(e.target.closest(".tab-history"));
+          } else if (e.target.classList.contains("tab-history") || e.target.tagName === "svg" || e.target.tagName === "circle" || e.target.tagName === "polyline") {
+            var histEl = el.querySelector(".tab-history");
+            if (histEl) canvasShowHistory(histEl);
+          } else {
+            activateCanvasTab(parseInt(el.getAttribute("data-tab-id")));
+          }
+        });
+      })(tabEls[j]);
+    }
+
+    var addBtn = document.getElementById("canvas-tab-add");
+    if (addBtn) {
+      addBtn.addEventListener("click", function() {
+        showTabFilePicker(addBtn);
+      });
+    }
+  };
+
+  // B5: Track file mtimes from file list refreshes
+  var _origRefreshCanvasFiles = refreshCanvasFiles;
+  refreshCanvasFiles = function() {
+    fetch("/api/canvas/files", { credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.files || data.files.length === 0) {
+          canvasFileList.innerHTML = '<span class="text-xs text-muted">No files</span>';
+          return;
+        }
+        var html = "";
+        data.files.forEach(function(f) {
+          var active = f.path === canvasCurrentFileName ? " active" : "";
+          html += '<a class="canvas-file-item' + active + '" data-path="' + esc(f.path) + '" onclick="canvasOpenFile(this)">' + esc(f.path) + '</a>';
+
+          if (canvasFileMtimes[f.path] !== undefined && f.mtime > canvasFileMtimes[f.path]) {
+            if (!canvasWaitingForResponse) {
+              updateSaveIndicator(f.path, "external");
+            } else {
+              updateSaveIndicator(f.path, "saved");
+            }
+          }
+          canvasFileMtimes[f.path] = f.mtime;
+        });
+        canvasFileList.innerHTML = html;
+      })
+      .catch(function() {});
+  };
+
+  // B4: Enhanced polling to track file changes for diff view
+  pollCanvasEvents = function() {
+    if (!canvasPolling) return;
+    fetch("/api/canvas/events?sessionId=" + encodeURIComponent(canvasSessionId) + "&since=" + canvasLastEventId, { credentials: "same-origin" })
+      .then(function(r) {
+        if (r.status === 401) {
+          stopCanvasPolling();
+          if (canvasStatusDot) { canvasStatusDot.className = "dot"; }
+          if (canvasStatusText) { canvasStatusText.textContent = "Session expired — please refresh"; }
+          return null;
+        }
+        return r.json();
+      })
+      .then(function(data) {
+        if (!data) return;
+        var events = data.events || [];
+        var hadFileChange = false;
+        var changedPaths = [];
+        for (var i = 0; i < events.length; i++) {
+          var evt = events[i];
+          if (evt.id > canvasLastEventId) canvasLastEventId = evt.id;
+          if (evt.event === "message" && evt.data) {
+            hideCanvasThinking();
+            canvasWaitingForResponse = false;
+            canvasPollInterval = CANVAS_POLL_IDLE;
+            appendMsg("assistant", evt.data.content || "(empty response)");
+          } else if (evt.event === "error" && evt.data) {
+            hideCanvasThinking();
+            canvasWaitingForResponse = false;
+            canvasPollInterval = CANVAS_POLL_IDLE;
+            appendMsg("assistant", "Error: " + (evt.data.message || "Unknown error"));
+          } else if (evt.event === "file-changed") {
+            hadFileChange = true;
+            var changed = evt.data && evt.data.path ? evt.data.path : "";
+            if (changed) changedPaths.push(changed);
+            if (changed === canvasCurrentFileName || canvasCurrentFileName === "index.html") {
+              debouncedCanvasRefresh();
+            }
+          }
+        }
+        if (hadFileChange) debouncedRefreshFiles();
+        // B4: Show diffs for changed files
+        for (var ci = 0; ci < changedPaths.length; ci++) {
+          (function(cpath) {
+            fetch("/api/canvas/versions/" + encodeURIComponent(cpath), { credentials: "same-origin" })
+              .then(function(r) { return r.json(); })
+              .then(function(vdata) {
+                var versions = vdata.versions || [];
+                if (versions.length === 0) return;
+                fetch("/api/canvas/version-content/" + versions[0].id, { credentials: "same-origin" })
+                  .then(function(r) { return r.json(); })
+                  .then(function(vc) {
+                    if (!vc.content) return;
+                    fetch("/api/canvas/preview/" + encodeURIComponent(cpath), { credentials: "same-origin" })
+                      .then(function(r) { return r.text(); })
+                      .then(function(currentContent) {
+                        showFileDiff(cpath, vc.content, currentContent);
+                      });
+                  });
+              });
+          })(changedPaths[ci]);
+        }
+        if (canvasStatusDot) { canvasStatusDot.className = "dot connected"; }
+        if (canvasStatusText) { canvasStatusText.textContent = canvasWaitingForResponse ? "Working..." : "Connected"; }
+      })
+      .catch(function() {
+        if (canvasStatusDot) { canvasStatusDot.className = "dot"; }
+        if (canvasStatusText) { canvasStatusText.textContent = "Reconnecting..."; }
+      })
+      .finally(function() {
+        scheduleNextPoll();
+      });
   };
 
   // Initialize canvas mode on page load
