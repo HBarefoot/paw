@@ -558,6 +558,10 @@ export class Kernel {
     return this.cronScheduler;
   }
 
+  get heartbeat(): HeartbeatChecker | null {
+    return this.heartbeatChecker;
+  }
+
   get mcpManager(): MCPClientManager {
     return this.mcpClientManager;
   }

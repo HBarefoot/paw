@@ -11,6 +11,7 @@ import { ConfigPage } from "./views/config-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
 // canvas-page.tsx removed — canvas is now merged into chat
 import { CronPage } from "./views/cron-page.js";
+import { HeartbeatPage } from "./views/heartbeat-page.js";
 import { MemoryPage } from "./views/memory-page.js";
 import { SessionsListPage, SessionDetailPage } from "./views/sessions-page.js";
 import { MCPPage } from "./views/mcp-page.js";
@@ -813,6 +814,51 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
   app.get("/cron", (c) => {
     const jobs = kernel.cron?.listJobs() ?? [];
     return c.html(CronPage({ jobs }));
+  });
+
+  // --- Heartbeat Page ---
+
+  app.get("/heartbeat", (c) => {
+    const lastResult = kernel.heartbeat?.lastResult ?? null;
+    const history: Array<{ id: string; text: string; created_at: string }> = kernel.memory
+      ? kernel.memory.list({ limit: 50, category: "summary" }).filter((m: { text: string; [k: string]: unknown }) => m.text.includes("Heartbeat"))
+      : [];
+    const hbConfig = {
+      enabled: config.heartbeat.enabled,
+      intervalMinutes: config.heartbeat.intervalMinutes,
+      triggerAiOnFailure: config.heartbeat.triggerAiOnFailure,
+    };
+    const success = c.req.query("success") ? "Configuration saved." : undefined;
+    return c.html(HeartbeatPage({ lastResult, history, config: hbConfig, success }));
+  });
+
+  app.post("/api/heartbeat/trigger", async (c) => {
+    if (!kernel.heartbeat) {
+      return c.json({ error: "Heartbeat is disabled" }, 400);
+    }
+    const result = await kernel.heartbeat.runCheck();
+    const contentType = c.req.header("Content-Type") ?? "";
+    if (contentType.includes("application/json")) {
+      return c.json(result);
+    }
+    return c.redirect("/heartbeat");
+  });
+
+  app.get("/api/heartbeat/status", (c) => {
+    const lastResult = kernel.heartbeat?.lastResult ?? null;
+    return c.json({ enabled: config.heartbeat.enabled, lastResult });
+  });
+
+  app.post("/api/heartbeat/config", async (c) => {
+    const body = await c.req.parseBody();
+    const overrides = readConfigOverrides();
+    const hb = (overrides.heartbeat ?? {}) as Record<string, unknown>;
+    if (body.enabled !== undefined) hb.enabled = body.enabled === "true";
+    if (body.intervalMinutes !== undefined) hb.intervalMinutes = parseInt(String(body.intervalMinutes), 10);
+    if (body.triggerAiOnFailure !== undefined) hb.triggerAiOnFailure = body.triggerAiOnFailure === "true";
+    overrides.heartbeat = hb;
+    saveConfigOverrides(overrides);
+    return c.redirect("/heartbeat?success=1");
   });
 
   // --- Memory Page ---

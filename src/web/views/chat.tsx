@@ -214,8 +214,8 @@ export function getChatScript(): string {
 
   loadSessions();
 
-  // If page loaded with a saved session, load its messages (skip canvas sessions — they're in-memory only)
-  if (savedSession && !sessionId.startsWith("canvas-")) {
+  // If page loaded with a saved session, load its messages
+  if (savedSession) {
     fetch("/api/sessions/" + sessionId + "/messages")
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -292,6 +292,10 @@ export function getChatScript(): string {
     sessionId = "web-" + Date.now();
     document.getElementById("chat-container").dataset.sessionId = sessionId;
     localStorage.removeItem(STORAGE_KEY);
+    // Reset canvas session so next canvas use gets a fresh one
+    canvasSessionId = "canvas-" + crypto.randomUUID();
+    localStorage.setItem(CANVAS_SESSION_KEY, canvasSessionId);
+    canvasLastEventId = 0;
     selector.value = "";
     clearMessages();
     input.focus();
@@ -526,7 +530,9 @@ export function getChatScript(): string {
   var canvasCurrentFile = document.getElementById("current-file");
   var canvasStatusDot = document.getElementById("status-dot");
   var canvasStatusText = document.getElementById("status-text");
-  var canvasSessionId = "canvas-" + crypto.randomUUID();
+  var CANVAS_SESSION_KEY = "paw-canvas-session-id";
+  var canvasSessionId = localStorage.getItem(CANVAS_SESSION_KEY) || "canvas-" + crypto.randomUUID();
+  localStorage.setItem(CANVAS_SESSION_KEY, canvasSessionId);
   var canvasLastEventId = 0;
   var canvasPolling = false;
   var canvasCurrentFileName = "index.html";

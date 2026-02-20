@@ -33,6 +33,7 @@ export class HeartbeatChecker {
   private memoryStore: MemoryStore | null;
   private dbPath: string;
   private _timer: ReturnType<typeof setInterval> | null = null;
+  private _lastResult: HeartbeatResult | null = null;
 
   constructor(opts: {
     bus: EventBus;
@@ -173,6 +174,12 @@ export class HeartbeatChecker {
       await this.memoryStore.store(summary, { scope: "global", category: "summary", source: "heartbeat" }).catch(() => {});
     }
 
-    return { timestamp, checks, overallOk, aiTriggered };
+    const result: HeartbeatResult = { timestamp, checks, overallOk, aiTriggered };
+    this._lastResult = result;
+    return result;
+  }
+
+  get lastResult(): HeartbeatResult | null {
+    return this._lastResult;
   }
 }
