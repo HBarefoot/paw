@@ -266,8 +266,12 @@ export class Kernel {
   private async handleInbound(msg: InboundMessage): Promise<void> {
     this.logger.info("Inbound message", { channel: msg.channel, sessionId: msg.sessionId, user: msg.user.id });
 
-    // Rate limiting
-    if (this.rateLimiter) {
+    // Internal system channels (cron, heartbeat) bypass rate limiting and access control
+    const INTERNAL_CHANNELS = new Set(["cron", "heartbeat"]);
+    const isInternal = INTERNAL_CHANNELS.has(msg.channel);
+
+    // Rate limiting (skip for internal channels)
+    if (!isInternal && this.rateLimiter) {
       const { allowed, retryAfterMs } = this.rateLimiter.check(msg.user.id);
       if (!allowed) {
         this.logger.warn("Rate limited", { user: msg.user.id, retryAfterMs });
@@ -280,8 +284,8 @@ export class Kernel {
       }
     }
 
-    // Access control (pairing code system)
-    if (this.accessController && !this.accessController.isUserApproved(msg.user.id, msg.channel)) {
+    // Access control (pairing code system) — skip for internal channels
+    if (!isInternal && this.accessController && !this.accessController.isUserApproved(msg.user.id, msg.channel)) {
       // Check if this message IS a pairing code
       const code = msg.content.trim();
       if (/^\d{6}$/.test(code) && this.accessController.verifyPairingCode(msg.user.id, code)) {

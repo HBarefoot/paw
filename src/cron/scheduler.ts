@@ -208,20 +208,30 @@ export class CronScheduler {
   private async executeAction(jobId: string, jobName: string, action: CronAction): Promise<void> {
     switch (action.type) {
       case "prompt":
-        if (action.prompt && this.onPromptAction) {
-          await this.onPromptAction(jobId, action.prompt);
+        if (!action.prompt) {
+          this.logger.warn("Cron prompt action has empty prompt", { jobId, jobName });
+          break;
         }
+        if (!this.onPromptAction) {
+          this.logger.warn("Cron prompt handler not registered", { jobId, jobName });
+          break;
+        }
+        await this.onPromptAction(jobId, action.prompt);
         break;
       case "tool":
-        if (action.tool) {
-          await this.toolRegistry.execute(action.tool, action.input ?? {});
+        if (!action.tool) {
+          this.logger.warn("Cron tool action has empty tool name", { jobId, jobName });
+          break;
         }
+        await this.toolRegistry.execute(action.tool, action.input ?? {});
         break;
       case "event":
-        if (action.event) {
-          // Emit as a generic event - the bus will type-check at runtime
-          await (this.bus as any).emit(action.event, action.payload);
+        if (!action.event) {
+          this.logger.warn("Cron event action has empty event name", { jobId, jobName });
+          break;
         }
+        // Emit as a generic event - the bus will type-check at runtime
+        await (this.bus as any).emit(action.event, action.payload);
         break;
     }
   }
