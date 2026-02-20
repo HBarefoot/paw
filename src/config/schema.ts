@@ -77,6 +77,7 @@ export const configSchema = z.object({
       enabled: z.boolean().default(true),
       root: z.string().default("./data/canvas"),
     }).default({}),
+    trustedProxy: z.boolean().default(false),
   }),
   workspace: z.object({
     path: z.string().default("."),

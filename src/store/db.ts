@@ -59,6 +59,7 @@ function runMigrations(db: Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS plugin_kv (
       plugin TEXT NOT NULL,
@@ -79,6 +80,7 @@ function runMigrations(db: Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope);
     CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
+    CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
 
     CREATE TABLE IF NOT EXISTS cron_jobs (
       id TEXT PRIMARY KEY,

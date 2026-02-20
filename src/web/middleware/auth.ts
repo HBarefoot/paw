@@ -14,6 +14,15 @@ function isApiRoute(path: string): boolean {
   return path.startsWith("/api/");
 }
 
+/** Timing-safe comparison to prevent token length/content leaking via timing */
+function timingSafeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  return crypto.subtle.timingSafeEqual(bufA, bufB);
+}
+
 export interface AuthMiddlewareOptions {
   authManager: WebAuthManager;
   bearerToken?: string;
@@ -25,8 +34,9 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
   return async (c: Context, next) => {
     const path = new URL(c.req.url).pathname;
 
-    // Allow public routes
+    // Allow public routes (but mark as unauthenticated for downstream handlers)
     if (isPublicRoute(path)) {
+      c.set("authenticated", false);
       return next();
     }
 
@@ -45,11 +55,15 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
       return next();
     }
 
-    // Check Bearer token for API access
+    // Check Bearer token for API access (timing-safe comparison)
     const authHeader = c.req.header("Authorization");
-    if (bearerToken && authHeader === `Bearer ${bearerToken}`) {
-      c.set("authMethod", "bearer");
-      return next();
+    if (bearerToken && authHeader?.startsWith("Bearer ")) {
+      const provided = authHeader.slice(7);
+      if (timingSafeCompare(provided, bearerToken)) {
+        c.set("authMethod", "bearer");
+        c.set("authenticated", true);
+        return next();
+      }
     }
 
     // If no admins exist yet, allow access to setup
@@ -67,6 +81,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
           c.set("session", session);
           c.set("admin", admin);
           c.set("authMethod", "session");
+          c.set("authenticated", true);
           return next();
         }
       }

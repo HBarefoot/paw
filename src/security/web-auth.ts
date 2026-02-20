@@ -29,6 +29,10 @@ export class WebAuthManager {
   private db: Database;
   private sessionConfig: SessionConfig;
   readonly audit: AuditLogger;
+  /** TOTP attempt tracking: username → { count, lockedUntil } */
+  private totpAttempts: Map<string, { count: number; lockedUntil: number }> = new Map();
+  private readonly TOTP_MAX_ATTEMPTS = 5;
+  private readonly TOTP_LOCKOUT_MS = 15 * 60_000; // 15 minutes
 
   constructor(db: Database, sessionConfig: SessionConfig) {
     this.db = db;
@@ -183,10 +187,29 @@ export class WebAuthManager {
       if (!totpCode) {
         return { success: false, requireTotp: true };
       }
+
+      // Check TOTP lockout
+      const attempts = this.totpAttempts.get(username);
+      if (attempts && Date.now() < attempts.lockedUntil) {
+        this.audit.log("login.failed", admin.id, { reason: "totp_locked" }, ipAddress);
+        return { success: false, error: "Too many TOTP attempts. Please wait 15 minutes." };
+      }
+
       if (!this.verifyTotpCode(admin, totpCode)) {
+        // Track failed TOTP attempt
+        const current = this.totpAttempts.get(username) ?? { count: 0, lockedUntil: 0 };
+        current.count++;
+        if (current.count >= this.TOTP_MAX_ATTEMPTS) {
+          current.lockedUntil = Date.now() + this.TOTP_LOCKOUT_MS;
+          current.count = 0;
+        }
+        this.totpAttempts.set(username, current);
         this.audit.log("login.failed", admin.id, { reason: "invalid_totp" }, ipAddress);
         return { success: false, error: "Invalid TOTP code" };
       }
+
+      // Clear TOTP attempts on success
+      this.totpAttempts.delete(username);
     }
 
     const token = this.createSession(admin.id, ipAddress);

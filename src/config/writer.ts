@@ -6,14 +6,19 @@ import { configSchema } from "./schema.js";
 const CONFIG_DIR = join(homedir(), ".paw");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
+/** In-memory config cache — invalidated on save */
+let configCache: Record<string, unknown> | null = null;
+
 export function getConfigOverridesPath(): string {
   return CONFIG_FILE;
 }
 
 export function readConfigOverrides(): Record<string, unknown> {
+  if (configCache) return configCache;
   if (!existsSync(CONFIG_FILE)) return {};
   try {
-    return JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    configCache = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    return configCache!;
   } catch {
     return {};
   }
@@ -22,11 +27,13 @@ export function readConfigOverrides(): Record<string, unknown> {
 export function saveConfigOverrides(overrides: Record<string, unknown>): void {
   // Validate the overrides are valid partial config by parsing with defaults
   // We don't do a full parse here since overrides are partial
+  configCache = null; // Invalidate cache before reading
   const existing = readConfigOverrides();
   const merged = deepMergeOverrides(existing, overrides);
 
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
+  configCache = merged; // Update cache with the written value
 }
 
 function deepMergeOverrides(

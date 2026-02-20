@@ -75,6 +75,7 @@ export interface PawConfig {
       enabled: boolean;
       root: string;
     };
+    trustedProxy: boolean;
   };
   workspace: {
     path: string;

@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { logger as honoLogger } from "hono/logger";
 import { bodyLimit } from "hono/body-limit";
 import { csrf } from "hono/csrf";
@@ -54,6 +54,31 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
   // --- Login rate limiter (5 attempts/min per IP) ---
   const loginRateLimiter = new RateLimiter(5);
+  // --- Global API rate limiter (60 req/min per IP) ---
+  const apiRateLimiter = new RateLimiter(60);
+
+  // Trusted proxy config — only trust X-Forwarded-For when set
+  const trustedProxy = config.web.trustedProxy ?? false;
+
+  /** Extract client IP, respecting trustedProxy config */
+  function getClientIp(c: Context): string {
+    if (trustedProxy) {
+      const forwarded = c.req.header("x-forwarded-for");
+      if (forwarded) return forwarded.split(",")[0].trim();
+      const realIp = c.req.header("x-real-ip");
+      if (realIp) return realIp;
+    }
+    return (c.env as any)?.remoteAddress ?? "unknown";
+  }
+
+  // Build allowed origins for CSRF validation
+  const allowedOrigins = new Set<string>();
+  allowedOrigins.add(`http://${config.web.host}:${config.web.port}`);
+  allowedOrigins.add(`https://${config.web.host}:${config.web.port}`);
+  if (config.web.host === "0.0.0.0" || config.web.host === "127.0.0.1") {
+    allowedOrigins.add(`http://localhost:${config.web.port}`);
+    allowedOrigins.add(`https://localhost:${config.web.port}`);
+  }
 
   // --- Middleware Stack ---
 
@@ -76,7 +101,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
       return next();
     }
-    return csrf({ origin: (origin) => origin !== "" })(c, next);
+    return csrf({ origin: (origin) => allowedOrigins.has(origin) })(c, next);
   });
 
   // Session auth middleware
@@ -84,6 +109,17 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
     authManager,
     bearerToken: config.web.authToken,
   }));
+
+  // Global API rate limiting (60 req/min per IP)
+  app.use("/api/*", async (c, next) => {
+    const ip = getClientIp(c);
+    const { allowed, retryAfterMs } = apiRateLimiter.check(ip);
+    if (!allowed) {
+      c.header("Retry-After", String(Math.ceil((retryAfterMs ?? 60000) / 1000)));
+      return c.json({ error: "Too many requests" }, 429);
+    }
+    return next();
+  });
 
   // --- Auth Routes ---
 
@@ -96,7 +132,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
   });
 
   app.post("/login", async (c) => {
-    const ip = c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown";
+    const ip = getClientIp(c);
 
     // Rate limit check
     const { allowed } = loginRateLimiter.check(ip);
@@ -157,7 +193,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
     try {
       const adminId = await authManager.createAdmin(username, password);
-      const ip = c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown";
+      const ip = getClientIp(c);
       authManager.audit.log("admin.created", adminId, { username, via: "web-setup" }, ip);
 
       // Auto-login after setup
@@ -300,7 +336,7 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
 
       // Audit log config changes
       const session = c.get("session") as { user_id: number } | undefined;
-      const ip = c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown";
+      const ip = getClientIp(c);
       authManager.audit.log("config.update", session?.user_id ?? null, { fields: Object.keys(body) }, ip);
 
       saveConfigOverrides(overrides);
@@ -1358,6 +1394,10 @@ export function createWebApp(kernel: Kernel, config: PawConfig, db?: Database): 
   app.get("/api/health", async (c) => {
     const health = await kernel.healthCheck();
     const allOk = Object.values(health).every((h) => h.ok);
+    // Unauthenticated requests get minimal info (no internal details)
+    if (!c.get("authenticated")) {
+      return c.json({ ok: allOk }, allOk ? 200 : 503);
+    }
     return c.json({ ok: allOk, checks: health }, allOk ? 200 : 503);
   });
 

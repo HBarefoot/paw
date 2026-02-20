@@ -177,28 +177,33 @@ export class Kernel {
       }
     }
 
-    for (const plugin of this.plugins) {
-      try {
-        await plugin.start();
-        await this.bus.emit("plugin:started", { name: plugin.name });
-        this.logger.info("Plugin started", { name: plugin.name });
-      } catch (err) {
-        this.logger.error("Plugin start failed", { name: plugin.name, error: String(err) });
-        await this.bus.emit("plugin:error", { name: plugin.name, error: err as Error });
-      }
-    }
+    // Start all plugins in parallel
+    await Promise.allSettled(
+      this.plugins.map(async (plugin) => {
+        try {
+          await plugin.start();
+          await this.bus.emit("plugin:started", { name: plugin.name });
+          this.logger.info("Plugin started", { name: plugin.name });
+        } catch (err) {
+          this.logger.error("Plugin start failed", { name: plugin.name, error: String(err) });
+          await this.bus.emit("plugin:error", { name: plugin.name, error: err as Error });
+        }
+      }),
+    );
 
-    // Connect MCP servers
+    // Connect MCP servers in parallel
     const mcpEntries = Object.entries(this.config.mcpServers ?? {});
     if (mcpEntries.length > 0) {
-      for (const [name, serverConfig] of mcpEntries) {
-        await this.mcpClientManager.connectServer(name, serverConfig);
-        const tools = await this.mcpClientManager.discoverTools(name);
-        if (tools.length > 0) {
-          this.registerTools(tools);
-          this.logger.info("MCP tools registered", { server: name, count: tools.length });
-        }
-      }
+      await Promise.allSettled(
+        mcpEntries.map(async ([name, serverConfig]) => {
+          await this.mcpClientManager.connectServer(name, serverConfig);
+          const tools = await this.mcpClientManager.discoverTools(name);
+          if (tools.length > 0) {
+            this.registerTools(tools);
+            this.logger.info("MCP tools registered", { server: name, count: tools.length });
+          }
+        }),
+      );
     }
 
     // Build skill catalog from all registered tools

@@ -50,7 +50,9 @@ export class AccessController {
   }
 
   generatePairingCode(userId: string): string {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    const code = String(100000 + (buf[0] % 900000));
     const expiresAt = new Date(Date.now() + this.pairingTtlMinutes * 60 * 1000).toISOString();
 
     this.db.run(

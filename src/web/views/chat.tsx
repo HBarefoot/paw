@@ -550,6 +550,7 @@ export function getChatScript(): string {
     iframe.src = "/api/canvas/preview/" + encodeURIComponent(path);
     iframe.className = "hidden";
     iframe.style.background = "#fff";
+    iframe.sandbox = "allow-scripts allow-same-origin";
     canvasTabContent.appendChild(iframe);
     var tab = { id: id, path: path, iframeEl: iframe };
     canvasTabs.push(tab);

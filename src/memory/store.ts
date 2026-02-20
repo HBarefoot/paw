@@ -99,7 +99,11 @@ export class MemoryStore {
     // 2. FTS5 keyword search
     const ftsResults = this.db.prepare<{ rowid: number; rank: number }, [string, number]>(
       `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`,
-    ).all(query.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim(), limit * 2);
+    ).all(
+      query.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim()
+        .split(/\s+/).filter(Boolean).map(t => `"${t}"`).join(" "),
+      limit * 2,
+    );
 
     // Map FTS rowids to memory IDs (batch query instead of N individual lookups)
     const ftsScores = new Map<string, number>();
@@ -172,7 +176,11 @@ export class MemoryStore {
     const result = this.db.run("DELETE FROM memories WHERE id = ?", [memoryId]);
     if (result.changes > 0) {
       if (this.vecAvailable) {
-        try { this.db.run("DELETE FROM memories_vec WHERE memory_id = ?", [memoryId]); } catch {}
+        try {
+          this.db.run("DELETE FROM memories_vec WHERE memory_id = ?", [memoryId]);
+        } catch (err) {
+          console.warn(`[memory] Failed to delete vector for ${memoryId}:`, err);
+        }
       }
       return true;
     }
