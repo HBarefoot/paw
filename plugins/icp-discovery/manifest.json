@@ -1,0 +1,6 @@
+{
+	"name": "icp-discovery",
+	"version": "0.1.0",
+	"description": "ICP franchise discovery pipeline — NAICS lookup, revenue estimation, HQ mapping, contact enrichment",
+	"permissions": ["net:*", "icp-discovery"]
+}

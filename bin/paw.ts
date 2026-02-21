@@ -26,50 +26,52 @@ const USAGE = `
 `;
 
 async function main(): Promise<void> {
-  switch (command) {
-    case "start": {
-      const { startCommand } = await import("../src/cli/commands/start.js");
-      await startCommand();
-      break;
-    }
-    case "init": {
-      const { initCommand } = await import("../src/cli/commands/init.js");
-      await initCommand();
-      break;
-    }
-    case "auth": {
-      if (subcommand === "web") {
-        const { webAuthCommand } = await import("../src/cli/commands/web-auth.js");
-        await webAuthCommand();
-      } else {
-        const { authCommand } = await import("../src/cli/commands/auth.js");
-        await authCommand(subcommand);
-      }
-      break;
-    }
-    case "config": {
-      const { configCommand } = await import("../src/cli/commands/config.js");
-      await configCommand();
-      break;
-    }
-    case "status": {
-      const { statusCommand } = await import("../src/cli/commands/status.js");
-      await statusCommand();
-      break;
-    }
-    case "cron": {
-      const { cronCommand } = await import("../src/cli/commands/cron.js");
-      const args = process.argv.slice(4);
-      await cronCommand(subcommand, args);
-      break;
-    }
-    default:
-      console.log(USAGE);
-      break;
-  }
+	switch (command) {
+		case "start": {
+			const { startCommand } = await import("../src/cli/commands/start.js");
+			await startCommand();
+			break;
+		}
+		case "init": {
+			const { initCommand } = await import("../src/cli/commands/init.js");
+			await initCommand();
+			break;
+		}
+		case "auth": {
+			if (subcommand === "web") {
+				const { webAuthCommand } = await import(
+					"../src/cli/commands/web-auth.js"
+				);
+				await webAuthCommand();
+			} else {
+				const { authCommand } = await import("../src/cli/commands/auth.js");
+				await authCommand(subcommand);
+			}
+			break;
+		}
+		case "config": {
+			const { configCommand } = await import("../src/cli/commands/config.js");
+			await configCommand();
+			break;
+		}
+		case "status": {
+			const { statusCommand } = await import("../src/cli/commands/status.js");
+			await statusCommand();
+			break;
+		}
+		case "cron": {
+			const { cronCommand } = await import("../src/cli/commands/cron.js");
+			const args = process.argv.slice(4);
+			await cronCommand(subcommand, args);
+			break;
+		}
+		default:
+			console.log(USAGE);
+			break;
+	}
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
+	console.error("Fatal error:", err);
+	process.exit(1);
 });

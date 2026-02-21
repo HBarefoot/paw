@@ -2,10 +2,10 @@ import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 
 interface LoginPageProps {
-  error?: string;
-  requireTotp?: boolean;
-  csrfToken?: string;
-  setupMode?: boolean;
+	error?: string;
+	requireTotp?: boolean;
+	csrfToken?: string;
+	setupMode?: boolean;
 }
 
 const loginCss = `
@@ -135,110 +135,121 @@ const loginCss = `
   }
 `;
 
-export const LoginPage: FC<LoginPageProps> = ({ error, requireTotp, csrfToken, setupMode }) => (
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <link rel="preconnect" href="https://fonts.googleapis.com" />
-      {raw(`<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`)}
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-      <title>{setupMode ? "Setup" : "Login"} - Paw</title>
-      {raw(`<style>${loginCss}</style>`)}
-    </head>
-    <body>
-      <div class="login-card">
-        <div class="login-header">
-          <div class="login-logo">P</div>
-          {setupMode ? (
-            <>
-              <h1>Create Admin Account</h1>
-              <p>Set up your first admin to secure the web UI</p>
-            </>
-          ) : (
-            <>
-              <h1>Sign in to Paw</h1>
-              <p>Enter your credentials to continue</p>
-            </>
-          )}
-        </div>
+export const LoginPage: FC<LoginPageProps> = ({
+	error,
+	requireTotp,
+	csrfToken,
+	setupMode,
+}) => (
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<link rel="preconnect" href="https://fonts.googleapis.com" />
+			{raw(
+				`<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`,
+			)}
+			<link
+				href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+				rel="stylesheet"
+			/>
+			<title>{setupMode ? "Setup" : "Login"} - Paw</title>
+			{raw(`<style>${loginCss}</style>`)}
+		</head>
+		<body>
+			<div class="login-card">
+				<div class="login-header">
+					<div class="login-logo">P</div>
+					{setupMode ? (
+						<>
+							<h1>Create Admin Account</h1>
+							<p>Set up your first admin to secure the web UI</p>
+						</>
+					) : (
+						<>
+							<h1>Sign in to Paw</h1>
+							<p>Enter your credentials to continue</p>
+						</>
+					)}
+				</div>
 
-        {error && <div class="error-msg">{error}</div>}
+				{error && <div class="error-msg">{error}</div>}
 
-        {setupMode && (
-          <div class="setup-note">
-            You can also create an admin from the terminal:<br />
-            <code>paw auth web</code>
-          </div>
-        )}
+				{setupMode && (
+					<div class="setup-note">
+						You can also create an admin from the terminal:
+						<br />
+						<code>paw auth web</code>
+					</div>
+				)}
 
-        <form method="POST" action={setupMode ? "/login/setup" : "/login"}>
-          {csrfToken && <input type="hidden" name="_csrf" value={csrfToken} />}
+				<form method="POST" action={setupMode ? "/login/setup" : "/login"}>
+					{csrfToken && <input type="hidden" name="_csrf" value={csrfToken} />}
 
-          <div class="form-group">
-            <label for="username">Username</label>
-            <input
-              type="text"
-              id="username"
-              name="username"
-              required
-              autocomplete="username"
-              placeholder="admin"
-              autofocus
-            />
-          </div>
+					<div class="form-group">
+						<label for="username">Username</label>
+						<input
+							type="text"
+							id="username"
+							name="username"
+							required
+							autocomplete="username"
+							placeholder="admin"
+							autofocus
+						/>
+					</div>
 
-          <div class="form-group">
-            <label for="password">Password{setupMode ? " (min 8 characters)" : ""}</label>
-            <input
-              type="password"
-              id="password"
-              name="password"
-              required
-              minLength={setupMode ? 8 : undefined}
-              autocomplete={setupMode ? "new-password" : "current-password"}
-            />
-          </div>
+					<div class="form-group">
+						<label for="password">
+							Password{setupMode ? " (min 8 characters)" : ""}
+						</label>
+						<input
+							type="password"
+							id="password"
+							name="password"
+							required
+							minLength={setupMode ? 8 : undefined}
+							autocomplete={setupMode ? "new-password" : "current-password"}
+						/>
+					</div>
 
-          {setupMode && (
-            <div class="form-group">
-              <label for="confirm_password">Confirm Password</label>
-              <input
-                type="password"
-                id="confirm_password"
-                name="confirm_password"
-                required
-                minLength={8}
-                autocomplete="new-password"
-              />
-            </div>
-          )}
+					{setupMode && (
+						<div class="form-group">
+							<label for="confirm_password">Confirm Password</label>
+							<input
+								type="password"
+								id="confirm_password"
+								name="confirm_password"
+								required
+								minLength={8}
+								autocomplete="new-password"
+							/>
+						</div>
+					)}
 
-          {requireTotp && (
-            <div class="form-group">
-              <label for="totp">Authenticator Code</label>
-              <input
-                type="text"
-                id="totp"
-                name="totp"
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                placeholder="000000"
-                autocomplete="one-time-code"
-              />
-            </div>
-          )}
+					{requireTotp && (
+						<div class="form-group">
+							<label for="totp">Authenticator Code</label>
+							<input
+								type="text"
+								id="totp"
+								name="totp"
+								inputMode="numeric"
+								pattern="[0-9]{6}"
+								maxLength={6}
+								placeholder="000000"
+								autocomplete="one-time-code"
+							/>
+						</div>
+					)}
 
-          <button type="submit" class="login-btn">
-            {setupMode ? "Create Account" : "Sign in"}
-          </button>
-        </form>
+					<button type="submit" class="login-btn">
+						{setupMode ? "Create Account" : "Sign in"}
+					</button>
+				</form>
 
-        <div class="login-footer">
-          Paw v0.1.0
-        </div>
-      </div>
-    </body>
-  </html>
+				<div class="login-footer">Paw v0.1.0</div>
+			</div>
+		</body>
+	</html>
 );

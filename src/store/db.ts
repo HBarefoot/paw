@@ -7,40 +7,42 @@ let db: Database | null = null;
 let customSqliteLoaded = false;
 
 function loadCustomSqlite(customPath?: string): void {
-  if (customSqliteLoaded) return;
-  const sqlitePath = customPath ?? (process.platform === "darwin"
-    ? "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib"
-    : undefined);
-  if (sqlitePath && existsSync(sqlitePath)) {
-    try {
-      Database.setCustomSQLite(sqlitePath);
-    } catch {
-      // SQLite may already be loaded (e.g. if another Database was created before us)
-    }
-  }
-  customSqliteLoaded = true;
+	if (customSqliteLoaded) return;
+	const sqlitePath =
+		customPath ??
+		(process.platform === "darwin"
+			? "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib"
+			: undefined);
+	if (sqlitePath && existsSync(sqlitePath)) {
+		try {
+			Database.setCustomSQLite(sqlitePath);
+		} catch {
+			// SQLite may already be loaded (e.g. if another Database was created before us)
+		}
+	}
+	customSqliteLoaded = true;
 }
 
 export function getDb(dbPath: string, customSqlitePath?: string): Database {
-  if (db) return db;
+	if (db) return db;
 
-  loadCustomSqlite(customSqlitePath);
-  mkdirSync(dirname(dbPath), { recursive: true });
-  db = new Database(dbPath, { create: true });
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  try {
-    sqliteVec.load(db);
-  } catch {
-    // sqlite-vec requires custom SQLite with extension support.
-    // Falls back gracefully — vector search will be unavailable.
-  }
-  runMigrations(db);
-  return db;
+	loadCustomSqlite(customSqlitePath);
+	mkdirSync(dirname(dbPath), { recursive: true });
+	db = new Database(dbPath, { create: true });
+	db.exec("PRAGMA journal_mode = WAL;");
+	db.exec("PRAGMA foreign_keys = ON;");
+	try {
+		sqliteVec.load(db);
+	} catch {
+		// sqlite-vec requires custom SQLite with extension support.
+		// Falls back gracefully — vector search will be unavailable.
+	}
+	runMigrations(db);
+	return db;
 }
 
 function runMigrations(db: Database): void {
-  db.exec(`
+	db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       channel TEXT NOT NULL,
@@ -151,18 +153,20 @@ function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_canvas_versions_path ON canvas_versions(path, created_at DESC);
   `);
 
-  // Add title column to sessions (migration-safe)
-  try {
-    db.exec("ALTER TABLE sessions ADD COLUMN title TEXT");
-  } catch {
-    // Column already exists
-  }
+	// Add title column to sessions (migration-safe)
+	try {
+		db.exec("ALTER TABLE sessions ADD COLUMN title TEXT");
+	} catch {
+		// Column already exists
+	}
 
-  // FTS5 for memory full-text search
-  db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='memories', content_rowid='rowid');`);
+	// FTS5 for memory full-text search
+	db.exec(
+		`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='memories', content_rowid='rowid');`,
+	);
 
-  // Triggers to keep FTS in sync
-  db.exec(`
+	// Triggers to keep FTS in sync
+	db.exec(`
     CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
       INSERT INTO memories_fts(rowid, text) VALUES (new.rowid, new.text);
     END;
@@ -175,17 +179,19 @@ function runMigrations(db: Database): void {
     END;
   `);
 
-  // sqlite-vec virtual table for vector similarity search
-  try {
-    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(memory_id TEXT PRIMARY KEY, embedding float[384]);`);
-  } catch {
-    // vec0 not available — vector search will be disabled
-  }
+	// sqlite-vec virtual table for vector similarity search
+	try {
+		db.exec(
+			`CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(memory_id TEXT PRIMARY KEY, embedding float[384]);`,
+		);
+	} catch {
+		// vec0 not available — vector search will be disabled
+	}
 }
 
 export function closeDb(): void {
-  if (db) {
-    db.close();
-    db = null;
-  }
+	if (db) {
+		db.close();
+		db = null;
+	}
 }

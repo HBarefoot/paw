@@ -3,7 +3,7 @@ import { raw } from "hono/html";
 import { Layout } from "./layout.js";
 
 interface ChatPageProps {
-  sessionId: string;
+	sessionId: string;
 }
 
 const sendIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
@@ -17,39 +17,64 @@ const templateIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="n
 const historyIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
 
 export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
-  return (
-    <Layout title="Chat" currentPath="/chat">
-      {raw(`<script>document.querySelector(".content").classList.add("content-full")</script>`)}
-      <div class="chat-toolbar">
-        <select id="session-selector">
-          <option value="">New conversation</option>
-        </select>
-        {raw(`<button class="chat-toolbar-btn primary" id="new-chat-btn" onclick="newChat()">+ New Chat</button>`)}
-        {raw(`<button class="chat-toolbar-btn" id="canvas-toggle" onclick="toggleCanvasMode()">${canvasIconSvg} Canvas</button>`)}
-      </div>
-      <div class="chat-with-canvas" id="chat-with-canvas">
-        <div class="chat-container" id="chat-container" data-session-id={sessionId}>
-          <div class="chat-messages" id="messages">
-            <div class="chat-welcome">
-              <div class="welcome-icon">💬</div>
-              <p>Send a message to start chatting with Paw</p>
-            </div>
-            <div id="typing" class="msg-wrapper" style="display: none">
-              <div class="avatar bot-avatar">P</div>
-              <div class="typing-indicator">
-                <span></span><span></span><span></span>
-              </div>
-            </div>
-          </div>
-          {raw(`<div class="chat-attachments" id="chat-attachments" style="display:none"></div>`)}
-          <div class="chat-input">
-            {raw(`<input type="file" id="file-input" accept="image/*,.csv,.xlsx,.xls" multiple style="display:none" />`)}
-            {raw(`<button class="attach-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files">${attachIconSvg}</button>`)}
-            <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off" />
-            {raw(`<button class="send-btn" id="send-btn" onclick="sendMessage()">${sendIconSvg}</button>`)}
-          </div>
-        </div>
-        {raw(`<div class="canvas-panel" id="canvas-panel">
+	return (
+		<Layout title="Chat" currentPath="/chat">
+			{raw(
+				`<script>document.querySelector(".content").classList.add("content-full")</script>`,
+			)}
+			<div class="chat-toolbar">
+				<select id="session-selector">
+					<option value="">New conversation</option>
+				</select>
+				{raw(
+					`<button class="chat-toolbar-btn primary" id="new-chat-btn" onclick="newChat()">+ New Chat</button>`,
+				)}
+				{raw(
+					`<button class="chat-toolbar-btn" id="canvas-toggle" onclick="toggleCanvasMode()">${canvasIconSvg} Canvas</button>`,
+				)}
+			</div>
+			<div class="chat-with-canvas" id="chat-with-canvas">
+				<div
+					class="chat-container"
+					id="chat-container"
+					data-session-id={sessionId}
+				>
+					<div class="chat-messages" id="messages">
+						<div class="chat-welcome">
+							<div class="welcome-icon">💬</div>
+							<p>Send a message to start chatting with Paw</p>
+						</div>
+						<div id="typing" class="msg-wrapper" style="display: none">
+							<div class="avatar bot-avatar">P</div>
+							<div class="typing-indicator">
+								<span></span>
+								<span></span>
+								<span></span>
+							</div>
+						</div>
+					</div>
+					{raw(
+						`<div class="chat-attachments" id="chat-attachments" style="display:none"></div>`,
+					)}
+					<div class="chat-input">
+						{raw(
+							`<input type="file" id="file-input" accept="image/*,.csv,.xlsx,.xls" multiple style="display:none" />`,
+						)}
+						{raw(
+							`<button class="attach-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files">${attachIconSvg}</button>`,
+						)}
+						<input
+							type="text"
+							id="chat-input"
+							placeholder="Type a message..."
+							autocomplete="off"
+						/>
+						{raw(
+							`<button class="send-btn" id="send-btn" onclick="sendMessage()">${sendIconSvg}</button>`,
+						)}
+					</div>
+				</div>
+				{raw(`<div class="canvas-panel" id="canvas-panel">
           <div class="canvas-toolbar">
             <span class="current-file" id="current-file">index.html</span>
             <button onclick="canvasTemplateMenu(this)" title="Templates" id="canvas-template-btn">${templateIconSvg}</button>
@@ -68,15 +93,15 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
             </div>
           </div>
         </div>`)}
-      </div>
-      {raw(`<script src="/js/chat.js"></script>`)}
-    </Layout>
-  );
+			</div>
+			{raw(`<script src="/js/chat.js"></script>`)}
+		</Layout>
+	);
 };
 
 /** Returns the chat page JavaScript as a plain string, served via /js/chat.js */
 export function getChatScript(): string {
-  return `(function() {
+	return `(function() {
   var STORAGE_KEY = "paw-session-id";
   var savedSession = localStorage.getItem(STORAGE_KEY);
   var sessionId = savedSession || document.getElementById("chat-container").dataset.sessionId;

@@ -1,6 +1,6 @@
 {
-  "name": "slack",
-  "version": "0.1.0",
-  "description": "Slack channel plugin using Socket Mode",
-  "permissions": ["net:*.slack.com"]
+	"name": "slack",
+	"version": "0.1.0",
+	"description": "Slack channel plugin using Socket Mode",
+	"permissions": ["net:*.slack.com"]
 }

@@ -12,31 +12,34 @@ Conversation:
 `;
 
 export async function extractMemories(
-  provider: AIProvider,
-  messages: ChatMessage[],
+	provider: AIProvider,
+	messages: ChatMessage[],
 ): Promise<string[]> {
-  if (messages.length === 0) return [];
+	if (messages.length === 0) return [];
 
-  const conversationText = messages
-    .map((m) => `${m.role}: ${m.content}`)
-    .join("\n");
+	const conversationText = messages
+		.map((m) => `${m.role}: ${m.content}`)
+		.join("\n");
 
-  const extractMessages: ChatMessage[] = [
-    { role: "user", content: EXTRACT_PROMPT + conversationText },
-  ];
+	const extractMessages: ChatMessage[] = [
+		{ role: "user", content: EXTRACT_PROMPT + conversationText },
+	];
 
-  try {
-    const response = await provider.chat(extractMessages, "You are a concise memory extraction system. Return one memory per line, or NONE.");
-    const lines = response
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && l.toUpperCase() !== "NONE");
+	try {
+		const response = await provider.chat(
+			extractMessages,
+			"You are a concise memory extraction system. Return one memory per line, or NONE.",
+		);
+		const lines = response
+			.split("\n")
+			.map((l) => l.trim())
+			.filter((l) => l.length > 0 && l.toUpperCase() !== "NONE");
 
-    // Clean up lines - remove leading bullets/dashes/numbers
-    return lines
-      .map((l) => l.replace(/^[\-\*\d.)\]]+\s*/, "").trim())
-      .filter((l) => l.length > 5); // Skip very short fragments
-  } catch {
-    return [];
-  }
+		// Clean up lines - remove leading bullets/dashes/numbers
+		return lines
+			.map((l) => l.replace(/^[\-\*\d.)\]]+\s*/, "").trim())
+			.filter((l) => l.length > 5); // Skip very short fragments
+	} catch {
+		return [];
+	}
 }

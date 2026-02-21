@@ -1,6 +1,6 @@
 {
-  "name": "web-pilot",
-  "version": "0.1.0",
-  "description": "Browser automation plugin using Playwright",
-  "permissions": ["browser"]
+	"name": "web-pilot",
+	"version": "0.1.0",
+	"description": "Browser automation plugin using Playwright",
+	"permissions": ["browser"]
 }

@@ -11,9 +11,9 @@
 // module will implement the PKCE flow.
 
 export async function startOAuthFlow(): Promise<never> {
-  throw new Error(
-    "Anthropic currently blocks third-party apps from using Max/Pro subscription OAuth.\n" +
-    "  Use an API key instead: https://console.anthropic.com/settings/keys\n" +
-    "  Track the feature request: https://github.com/anthropics/claude-code/issues/18340",
-  );
+	throw new Error(
+		"Anthropic currently blocks third-party apps from using Max/Pro subscription OAuth.\n" +
+			"  Use an API key instead: https://console.anthropic.com/settings/keys\n" +
+			"  Track the feature request: https://github.com/anthropics/claude-code/issues/18340",
+	);
 }

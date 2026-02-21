@@ -2,10 +2,10 @@ import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 
 interface TotpSetupPageProps {
-  secret: string;
-  otpauthUri: string;
-  error?: string;
-  csrfToken?: string;
+	secret: string;
+	otpauthUri: string;
+	error?: string;
+	csrfToken?: string;
 }
 
 const totpCss = `
@@ -155,68 +155,82 @@ const totpCss = `
   }
 `;
 
-export const TotpSetupPage: FC<TotpSetupPageProps> = ({ secret, otpauthUri, error, csrfToken }) => (
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <link rel="preconnect" href="https://fonts.googleapis.com" />
-      {raw(`<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`)}
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-      <title>TOTP Setup - Paw</title>
-      {raw(`<style>${totpCss}</style>`)}
-    </head>
-    <body>
-      <div class="setup-card">
-        <div class="setup-header">
-          <h1>Set Up Two-Factor Authentication</h1>
-          <p>
-            Add this account to your authenticator app (Google Authenticator, Authy, 1Password, etc.)
-            using the secret below.
-          </p>
-        </div>
+export const TotpSetupPage: FC<TotpSetupPageProps> = ({
+	secret,
+	otpauthUri,
+	error,
+	csrfToken,
+}) => (
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<link rel="preconnect" href="https://fonts.googleapis.com" />
+			{raw(
+				`<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`,
+			)}
+			<link
+				href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+				rel="stylesheet"
+			/>
+			<title>TOTP Setup - Paw</title>
+			{raw(`<style>${totpCss}</style>`)}
+		</head>
+		<body>
+			<div class="setup-card">
+				<div class="setup-header">
+					<h1>Set Up Two-Factor Authentication</h1>
+					<p>
+						Add this account to your authenticator app (Google Authenticator,
+						Authy, 1Password, etc.) using the secret below.
+					</p>
+				</div>
 
-        {error && <div class="error-msg">{error}</div>}
+				{error && <div class="error-msg">{error}</div>}
 
-        <div class="secret-box">
-          <div class="secret-label">Your Secret Key</div>
-          <div class="secret-value">{secret}</div>
-        </div>
+				<div class="secret-box">
+					<div class="secret-label">Your Secret Key</div>
+					<div class="secret-value">{secret}</div>
+				</div>
 
-        <div class="uri-box">
-          Or use this URI: <code>{otpauthUri}</code>
-        </div>
+				<div class="uri-box">
+					Or use this URI: <code>{otpauthUri}</code>
+				</div>
 
-        <form method="POST" action="/login/totp-setup">
-          {csrfToken && <input type="hidden" name="_csrf" value={csrfToken} />}
+				<form method="POST" action="/login/totp-setup">
+					{csrfToken && <input type="hidden" name="_csrf" value={csrfToken} />}
 
-          <div class="form-group">
-            <label for="code">Enter the 6-digit code from your app to verify</label>
-            <input
-              type="text"
-              id="code"
-              name="code"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              placeholder="000000"
-              required
-              autocomplete="one-time-code"
-              autofocus
-            />
-          </div>
+					<div class="form-group">
+						<label for="code">
+							Enter the 6-digit code from your app to verify
+						</label>
+						<input
+							type="text"
+							id="code"
+							name="code"
+							inputMode="numeric"
+							pattern="[0-9]{6}"
+							maxLength={6}
+							placeholder="000000"
+							required
+							autocomplete="one-time-code"
+							autofocus
+						/>
+					</div>
 
-          <button type="submit" class="setup-btn">
-            Verify &amp; Enable TOTP
-          </button>
-        </form>
+					<button type="submit" class="setup-btn">
+						Verify &amp; Enable TOTP
+					</button>
+				</form>
 
-        <a href="/" class="skip-link">Skip for now</a>
+				<a href="/" class="skip-link">
+					Skip for now
+				</a>
 
-        <div class="setup-footer">
-          You can always set up TOTP later from the settings.
-        </div>
-      </div>
-    </body>
-  </html>
+				<div class="setup-footer">
+					You can always set up TOTP later from the settings.
+				</div>
+			</div>
+		</body>
+	</html>
 );

@@ -1,15 +1,15 @@
 export interface CanvasTemplate {
-  name: string;
-  description: string;
-  files: Record<string, string>;
+	name: string;
+	description: string;
+	files: Record<string, string>;
 }
 
 export const CANVAS_TEMPLATES: CanvasTemplate[] = [
-  {
-    name: "Blank HTML",
-    description: "A minimal HTML page",
-    files: {
-      "index.html": `<!DOCTYPE html>
+	{
+		name: "Blank HTML",
+		description: "A minimal HTML page",
+		files: {
+			"index.html": `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -20,13 +20,13 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   <h1>Hello, Canvas!</h1>
 </body>
 </html>`,
-    },
-  },
-  {
-    name: "HTML + CSS + JS",
-    description: "HTML with separate CSS and JS files",
-    files: {
-      "index.html": `<!DOCTYPE html>
+		},
+	},
+	{
+		name: "HTML + CSS + JS",
+		description: "HTML with separate CSS and JS files",
+		files: {
+			"index.html": `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -39,7 +39,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   <script src="app.js"></script>
 </body>
 </html>`,
-      "style.css": `* {
+			"style.css": `* {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
@@ -59,17 +59,17 @@ h1 {
   font-size: 2rem;
 }
 `,
-      "app.js": `document.addEventListener("DOMContentLoaded", () => {
+			"app.js": `document.addEventListener("DOMContentLoaded", () => {
   console.log("Canvas app loaded");
 });
 `,
-    },
-  },
-  {
-    name: "React Component",
-    description: "A single-file React app using CDN",
-    files: {
-      "index.html": `<!DOCTYPE html>
+		},
+	},
+	{
+		name: "React Component",
+		description: "A single-file React app using CDN",
+		files: {
+			"index.html": `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -102,13 +102,13 @@ h1 {
   </script>
 </body>
 </html>`,
-    },
-  },
-  {
-    name: "SVG Drawing",
-    description: "An interactive SVG canvas",
-    files: {
-      "index.html": `<!DOCTYPE html>
+		},
+	},
+	{
+		name: "SVG Drawing",
+		description: "An interactive SVG canvas",
+		files: {
+			"index.html": `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -131,6 +131,6 @@ h1 {
   </svg>
 </body>
 </html>`,
-    },
-  },
+		},
+	},
 ];
