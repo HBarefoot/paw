@@ -94,6 +94,7 @@ export function createFilterIcpHandler(store: PluginStore) {
 				qualified.push({
 					companyName: brand.name,
 					naicsCode: brand.naicsCode,
+					naicsDescription: brand.naicsDescription,
 					estimatedLocations: brand.estimatedLocations,
 					revenueEstimate: revenue,
 					contacts: [],

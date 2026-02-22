@@ -123,6 +123,7 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 					brands.push({
 						name: brand,
 						naicsCode,
+						naicsDescription,
 						estimatedLocations,
 						locationMethodology: `Google Maps metro sampling x${sampleCities.length} cities, avg ${cappedAvg.toFixed(1)} per city x200 metros`,
 						sources: searchResults.flatMap((r) =>

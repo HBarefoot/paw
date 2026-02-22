@@ -20,6 +20,7 @@ function flattenCompany(
 	return {
 		companyName: company.companyName,
 		naicsCode: company.naicsCode,
+		naicsDescription: company.naicsDescription ?? "",
 		estimatedLocations: company.estimatedLocations,
 		locationMethodology: "Google Maps metro sampling",
 		estimatedRevenueLow: company.revenueEstimate.revenueLow,
@@ -57,6 +58,7 @@ function toCsv(companies: QualifiedCompany[]): string {
 	const headers = [
 		"company_name",
 		"naics_code",
+		"naics_description",
 		"est_locations",
 		"location_methodology",
 		"est_revenue_low",
@@ -82,6 +84,7 @@ function toCsv(companies: QualifiedCompany[]): string {
 		return [
 			flat.companyName,
 			flat.naicsCode,
+			flat.naicsDescription,
 			flat.estimatedLocations,
 			flat.locationMethodology,
 			flat.estimatedRevenueLow,

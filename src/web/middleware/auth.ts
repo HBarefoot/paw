@@ -7,6 +7,7 @@ const PUBLIC_ROUTES = new Set([
 	"/login/setup",
 	"/login/totp-setup",
 	"/api/health",
+	"/paw-logo.jpg",
 ]);
 const PUBLIC_PREFIXES = [
 	"/api/canvas/events",

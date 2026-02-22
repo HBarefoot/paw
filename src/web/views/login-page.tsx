@@ -50,15 +50,9 @@ const loginCss = `
   .login-logo {
     width: 48px;
     height: 48px;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
     border-radius: 12px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-weight: 700;
-    font-size: 20px;
     margin-bottom: 16px;
+    object-fit: cover;
   }
   .login-header h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; color: #111827; }
   .login-header p { font-size: 14px; color: #4b5563; margin: 0; }
@@ -159,7 +153,7 @@ export const LoginPage: FC<LoginPageProps> = ({
 		<body>
 			<div class="login-card">
 				<div class="login-header">
-					<div class="login-logo">P</div>
+					<img src="/paw-logo.jpg" class="login-logo" alt="Paw" />
 					{setupMode ? (
 						<>
 							<h1>Create Admin Account</h1>

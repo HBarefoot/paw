@@ -9,6 +9,7 @@ export interface ICPConfig {
 export interface DiscoveredBrand {
 	name: string;
 	naicsCode: string;
+	naicsDescription?: string;
 	estimatedLocations: number;
 	locationMethodology: string;
 	sources: string[];
@@ -43,6 +44,7 @@ export interface ContactInfo {
 export interface QualifiedCompany {
 	companyName: string;
 	naicsCode: string;
+	naicsDescription?: string;
 	estimatedLocations: number;
 	revenueEstimate: RevenueEstimate;
 	hqAddress?: string;
