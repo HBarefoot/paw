@@ -20,6 +20,12 @@ Extract a JSON array of franchise brands with estimated location counts.
 - **Ignore non-franchise businesses**: Filter out individual restaurants, local chains, or businesses that aren't franchise systems.
 - **Note parent companies**: If a franchise is owned by a parent company (e.g., Inspire Brands owns Arby's, Sonic, Jimmy John's), list each brand separately.
 
+## Important
+
+- **ALWAYS return valid JSON**, even if the search results seem off-topic or irrelevant to the requested NAICS code.
+- If the search results contain brands from a different industry, extract any brands that ARE relevant to the requested industry. If none are relevant, return an empty array: `[]`
+- **NEVER** refuse or explain — just return the JSON array.
+
 ## Output Format
 
 Return ONLY valid JSON, no markdown fencing:

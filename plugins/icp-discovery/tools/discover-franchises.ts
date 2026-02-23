@@ -2,8 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { stripCodeFences } from "../lib/parse-json";
-import type { SerpApiConfig } from "../lib/serpapi";
-import { createSerpApiClient } from "../lib/serpapi";
+import type { CachedSearchClient } from "../lib/search-cache";
 import type { DiscoveredBrand } from "../types";
 
 // NAICS code to human-readable description
@@ -23,15 +22,15 @@ const NAICS_DESCRIPTIONS: Record<string, string> = {
 };
 
 interface PluginDeps {
-	serpApiConfig: SerpApiConfig;
+	searchClient: CachedSearchClient;
 	anthropicApiKey: string;
 }
 
 const PROMPT_PATH = resolve(import.meta.dir, "../prompts/franchise-parser.md");
 
 export function createDiscoverFranchisesHandler(deps: PluginDeps) {
-	const serpapi = createSerpApiClient(deps.serpApiConfig);
-	const claude = new Anthropic({ apiKey: deps.anthropicApiKey });
+	const serpapi = deps.searchClient;
+	const claude = new Anthropic({ apiKey: deps.anthropicApiKey, timeout: 60_000 });
 	const systemPrompt = readFileSync(PROMPT_PATH, "utf-8");
 
 	return async (
@@ -47,6 +46,7 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				`"top franchise brands" "${naicsDescription}"`,
 				`"franchise 500" "${naicsDescription}" 2025`,
 				`largest franchise companies ${naicsDescription} locations`,
+				`top ${naicsDescription} franchise chains in the US`,
 			];
 
 			const searchResults = [];
@@ -81,13 +81,40 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 			let candidateBrands: string[];
 			try {
 				const parsed = JSON.parse(stripCodeFences(extractionText));
-				candidateBrands = parsed.map((b: { brandName: string }) => b.brandName);
+				if (Array.isArray(parsed)) {
+					candidateBrands = parsed
+						.map((b: { brandName: string }) => b.brandName)
+						.filter((name: string) => typeof name === "string" && name.length > 0);
+				} else {
+					candidateBrands = [];
+				}
 			} catch {
-				// Fallback: extract brand names with a simpler approach
+				// Fallback: extract brand names — reject lines that look like prose
 				candidateBrands = extractionText
 					.split("\n")
-					.filter((line) => line.trim().length > 0)
-					.slice(0, 30);
+					.map((line) => line.replace(/^[-*•\d.)\s]+/, "").trim())
+					.filter((line) => {
+						if (!line || line.length > 60) return false;
+						// Reject sentences (prose refusals, explanations)
+						if (/^(I |The |This |These |No |Unfortunately|However|Note|Based)/i.test(line)) return false;
+						if (/\b(cannot|because|results|provided|search|extract)\b/i.test(line)) return false;
+						return true;
+					})
+					.slice(0, 20);
+			}
+
+			if (candidateBrands.length === 0) {
+				return {
+					content: JSON.stringify({
+						naicsCode,
+						naicsDescription,
+						totalCandidates: 0,
+						qualifiedBrands: 0,
+						brands: [],
+						allCandidates: [],
+						note: `No franchise brands found for NAICS ${naicsCode} (${naicsDescription}). Search results may not contain relevant franchises for this industry.`,
+					}, null, 2),
+				};
 			}
 
 			// Step 3: Google Maps sampling for location counts
@@ -96,31 +123,39 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				"Los Angeles",
 				"Chicago",
 				"Dallas",
-				"Miami",
 			];
-			const brands: DiscoveredBrand[] = [];
+			const allBrands: DiscoveredBrand[] = [];
 
-			for (const brand of candidateBrands.slice(0, 30)) {
-				const cityCounts: number[] = [];
+			const MAX_BRANDS = 20;
+			const BATCH_SIZE = 5;
+			const brandsToProcess = candidateBrands.slice(0, MAX_BRANDS);
 
-				for (const city of sampleCities) {
-					try {
-						const mapsResult = await serpapi.googleMaps(brand, city);
-						cityCounts.push(mapsResult.local_results?.length ?? 0);
-					} catch {
-						cityCounts.push(0);
-					}
-				}
+			for (let i = 0; i < brandsToProcess.length; i += BATCH_SIZE) {
+				const batch = brandsToProcess.slice(i, i + BATCH_SIZE);
+				const batchResults = await Promise.all(
+					batch.map(async (brand) => {
+						const cityCounts: number[] = [];
+						for (const city of sampleCities) {
+							try {
+								const mapsResult = await serpapi.googleMaps(brand, city);
+								cityCounts.push(mapsResult.local_results?.length ?? 0);
+							} catch {
+								cityCounts.push(0);
+							}
+						}
+						return { brand, cityCounts };
+					}),
+				);
 
-				const avgPerCity =
-					cityCounts.reduce((a, b) => a + b, 0) / cityCounts.length;
-				// Scale: avg per city * 200 (approximate US metro areas with franchise presence)
-				// Cap per-city at 20 to avoid SerpApi result limit skewing
-				const cappedAvg = Math.min(avgPerCity, 20);
-				const estimatedLocations = Math.round(cappedAvg * 200);
+				for (const { brand, cityCounts } of batchResults) {
+					const avgPerCity =
+						cityCounts.reduce((a, b) => a + b, 0) / cityCounts.length;
+					// Scale: avg per city * 200 (approximate US metro areas with franchise presence)
+					// Cap per-city at 20 to avoid SerpApi result limit skewing
+					const cappedAvg = Math.min(avgPerCity, 20);
+					const estimatedLocations = Math.round(cappedAvg * 200);
 
-				if (estimatedLocations >= minLocations) {
-					brands.push({
+					allBrands.push({
 						name: brand,
 						naicsCode,
 						naicsDescription,
@@ -138,7 +173,11 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 			}
 
 			// Sort by estimated locations descending
-			brands.sort((a, b) => b.estimatedLocations - a.estimatedLocations);
+			allBrands.sort((a, b) => b.estimatedLocations - a.estimatedLocations);
+
+			const qualifiedBrands = allBrands.filter(
+				(b) => b.estimatedLocations >= minLocations,
+			);
 
 			return {
 				content: JSON.stringify(
@@ -146,8 +185,9 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 						naicsCode,
 						naicsDescription,
 						totalCandidates: candidateBrands.length,
-						qualifiedBrands: brands.length,
-						brands,
+						qualifiedBrands: qualifiedBrands.length,
+						brands: qualifiedBrands,
+						allCandidates: allBrands,
 					},
 					null,
 					2,

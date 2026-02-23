@@ -26,7 +26,9 @@ function flattenCompany(
 		estimatedRevenueLow: company.revenueEstimate.revenueLow,
 		estimatedRevenueMid: company.revenueEstimate.revenueMid,
 		estimatedRevenueHigh: company.revenueEstimate.revenueHigh,
-		revenueConfidence: company.revenueEstimate.confidence,
+		revenueConfidence: (
+			company.revenueEstimate.confidence || "LOW"
+		).toUpperCase(),
 		revenueSources: JSON.stringify(company.revenueEstimate.sources),
 		revenueReasoning: company.revenueEstimate.reasoning,
 		hqAddress: company.hqAddress ?? "",
@@ -126,10 +128,18 @@ export function createExportResultsHandler(
 				| QualifiedCompany[]
 				| undefined;
 
-			if (!companies || companies.length === 0) {
+			if (companies === undefined) {
 				return {
 					content:
 						"No qualified companies found in store. Run the discovery pipeline first (discover_franchises → estimate_revenue → filter_icp).",
+					is_error: true,
+				};
+			}
+
+			if (companies.length === 0) {
+				return {
+					content:
+						"The ICP pipeline ran but 0 companies passed the filters. Try lowering minRevenue or minLocations thresholds in filter_icp, or run discover_franchises for additional NAICS codes.",
 					is_error: true,
 				};
 			}
@@ -216,7 +226,10 @@ export function createExportResultsHandler(
 					};
 				}
 
-				// Fallback to individual creates
+				// Bulk import failed — capture reason, fall back to individual creates
+				const bulkErrText = await bulkRes.text();
+				const bulkStatus = bulkRes.status;
+
 				let created = 0;
 				const errors: string[] = [];
 
@@ -234,14 +247,24 @@ export function createExportResultsHandler(
 						created++;
 					} else {
 						const errText = await res.text();
-						errors.push(`${lead.companyName}: ${errText}`);
+						errors.push(
+							`${lead.companyName} (${res.status}): ${errText.slice(0, 200)}`,
+						);
 					}
 				}
 
-				const summary = `Pushed ${created}/${companies.length} leads to Strapi individually.`;
+				if (created === 0) {
+					return {
+						content: `Failed to push leads to Strapi. Bulk import failed (${bulkStatus}): ${bulkErrText.slice(0, 200)}. Individual creates also failed: ${errors.join("; ")}`,
+						is_error: true,
+					};
+				}
+
+				const summary = `Pushed ${created}/${companies.length} leads to Strapi individually (bulk import failed with ${bulkStatus}).`;
 				if (errors.length > 0) {
 					return {
 						content: `${summary} Errors: ${errors.join("; ")}`,
+						is_error: true,
 					};
 				}
 				return { content: summary };

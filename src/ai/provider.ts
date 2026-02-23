@@ -8,10 +8,16 @@ import type {
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import { withRetry } from "./retry.js";
-import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
-import type { ToolResultImage } from "../types/message.js";
+import type {
+	AIProvider,
+	ChatMessage,
+	ChatResponse,
+	StreamChunk,
+} from "./base-provider.js";
+import type { ToolResult, ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
+import { summarizeToolInput } from "./tool-summary.js";
 
 export interface ClaudeProviderConfig {
 	apiKey: string;
@@ -170,10 +176,24 @@ export class ClaudeProvider implements AIProvider {
 				}
 
 				this.logger.info("Executing tool", { tool: block.name, id: block.id });
-				const result = await this.toolRegistry.execute(
-					block.name,
-					block.input as Record<string, unknown>,
-				);
+				const TOOL_TIMEOUT_MS = 300_000;
+				let result: ToolResult;
+				try {
+					result = await Promise.race([
+						this.toolRegistry.execute(block.name, block.input as Record<string, unknown>),
+						new Promise<never>((_, reject) =>
+							setTimeout(
+								() => reject(new Error(`Tool "${block.name}" timed out after 5 minutes`)),
+								TOOL_TIMEOUT_MS,
+							),
+						),
+					]);
+				} catch (err) {
+					result = {
+						content: err instanceof Error ? err.message : String(err),
+						is_error: true,
+					};
+				}
 
 				if (result.images && result.images.length > 0) {
 					collectedImages.push(...result.images);
@@ -208,7 +228,7 @@ export class ClaudeProvider implements AIProvider {
 					toolResults.push({
 						type: "tool_result",
 						tool_use_id: block.id,
-						content: result.content,
+						content: result.content ?? "",
 						is_error: result.is_error,
 					});
 				}
@@ -222,5 +242,228 @@ export class ClaudeProvider implements AIProvider {
 			text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
 			images: collectedImages.length > 0 ? collectedImages : undefined,
 		};
+	}
+
+	private buildConversation(messages: ChatMessage[]): MessageParam[] {
+		return messages.map((m) => {
+			if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+				const contentParts: ContentBlockParam[] = [];
+				for (const att of m.attachments) {
+					if (att.type === "image" && att.data && att.mimeType) {
+						contentParts.push({
+							type: "image",
+							source: {
+								type: "base64",
+								media_type: att.mimeType as
+									| "image/png"
+									| "image/jpeg"
+									| "image/gif"
+									| "image/webp",
+								data: att.data.toString("base64"),
+							},
+						} as ContentBlockParam);
+					} else if (att.type === "text" && att.data) {
+						const header = att.name ? `[File: ${att.name}]\n` : "";
+						contentParts.push({
+							type: "text",
+							text: header + att.data.toString("utf-8"),
+						} as ContentBlockParam);
+					}
+				}
+				contentParts.push({
+					type: "text",
+					text: m.content,
+				} as ContentBlockParam);
+				return { role: m.role, content: contentParts };
+			}
+			return { role: m.role, content: m.content };
+		});
+	}
+
+	async *chatStream(
+		messages: ChatMessage[],
+		systemPrompt?: string,
+		sessionId?: string,
+	): AsyncGenerator<StreamChunk> {
+		let roundtrips = 0;
+		const conversation: MessageParam[] = this.buildConversation(messages);
+
+		while (roundtrips < this.maxToolRoundtrips) {
+			yield { type: "roundtrip_start", roundtrip: roundtrips };
+
+			const tools = this.getTools(sessionId);
+			this.logger.debug("Streaming request to Claude", {
+				roundtrip: roundtrips,
+				messageCount: conversation.length,
+				toolCount: tools.length,
+			});
+
+			const stream = this.client.messages.stream({
+				model: this.model,
+				max_tokens: this.maxTokens,
+				system: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+				messages: conversation,
+				...(tools.length > 0
+					? { tools: tools as Anthropic.Messages.Tool[] }
+					: {}),
+			});
+
+			for await (const event of stream) {
+				if (
+					event.type === "content_block_delta" &&
+					event.delta.type === "text_delta"
+				) {
+					yield { type: "text_delta", text: event.delta.text };
+				}
+			}
+
+			const response = await stream.finalMessage();
+			const toolUseBlocks = response.content.filter(
+				(b): b is ToolUseBlock => b.type === "tool_use",
+			);
+
+			if (response.stop_reason === "end_turn" || toolUseBlocks.length === 0) {
+				yield { type: "done" };
+				return;
+			}
+
+			conversation.push({
+				role: "assistant",
+				content: response.content as ContentBlockParam[],
+			});
+
+			yield { type: "thinking" };
+
+			const toolResults: ToolResultBlockParam[] = [];
+			for (const block of toolUseBlocks) {
+				const toolInput = block.input as Record<string, unknown>;
+
+				if (block.name === "activate_skill" && this.skillManager && sessionId) {
+					const skillName = toolInput.skill as string;
+					const entry = this.skillManager.activateSkill(sessionId, skillName);
+					if (entry) {
+						this.logger.info("Skill activated (stream)", {
+							skill: skillName,
+							tools: entry.toolNames,
+						});
+						toolResults.push({
+							type: "tool_result",
+							tool_use_id: block.id,
+							content: `Skill "${skillName}" activated. You now have access to: ${entry.toolNames.join(", ")}`,
+						});
+						const summary = summarizeToolInput(block.name, toolInput);
+						yield {
+							type: "tool_start",
+							toolName: block.name,
+							toolId: block.id,
+							toolInput,
+							toolSummary: summary,
+							roundtrip: roundtrips,
+						};
+						yield {
+							type: "tool_end",
+							toolName: block.name,
+							toolId: block.id,
+							toolResult: `Activated: ${entry.toolNames.join(", ")}`,
+							toolIsError: false,
+							durationMs: 0,
+						};
+						continue;
+					}
+				}
+
+				const summary = summarizeToolInput(block.name, toolInput);
+				yield {
+					type: "tool_start",
+					toolName: block.name,
+					toolId: block.id,
+					toolInput,
+					toolSummary: summary,
+					roundtrip: roundtrips,
+				};
+
+				this.logger.info("Executing tool (stream)", {
+					tool: block.name,
+					id: block.id,
+				});
+
+				const TOOL_TIMEOUT_MS = 300_000; // 5 minutes
+				const startTime = Date.now();
+				let result: ToolResult;
+				try {
+					result = await Promise.race([
+						this.toolRegistry.execute(block.name, toolInput),
+						new Promise<never>((_, reject) =>
+							setTimeout(
+								() => reject(new Error(`Tool "${block.name}" timed out after 5 minutes`)),
+								TOOL_TIMEOUT_MS,
+							),
+						),
+					]);
+				} catch (err) {
+					result = {
+						content: err instanceof Error ? err.message : String(err),
+						is_error: true,
+					};
+				}
+				const durationMs = Date.now() - startTime;
+
+				yield {
+					type: "tool_end",
+					toolName: block.name,
+					toolId: block.id,
+					toolResult: (result.content ?? "").slice(0, 500),
+					toolIsError: result.is_error,
+					durationMs,
+				};
+
+				if (result.images && result.images.length > 0) {
+					const contentParts: Array<
+						| { type: "text"; text: string }
+						| {
+								type: "image";
+								source: { type: "base64"; media_type: string; data: string };
+						  }
+					> = [];
+					if (result.content) {
+						contentParts.push({ type: "text", text: result.content });
+					}
+					for (const img of result.images) {
+						contentParts.push({
+							type: "image",
+							source: {
+								type: "base64",
+								media_type: img.media_type,
+								data: img.base64,
+							},
+						});
+					}
+					toolResults.push({
+						type: "tool_result",
+						tool_use_id: block.id,
+						content: contentParts as any,
+						is_error: result.is_error,
+					});
+				} else {
+					toolResults.push({
+						type: "tool_result",
+						tool_use_id: block.id,
+						content: result.content ?? "",
+						is_error: result.is_error,
+					});
+				}
+			}
+
+			conversation.push({ role: "user", content: toolResults });
+			roundtrips++;
+
+			yield { type: "thinking" };
+		}
+
+		yield {
+			type: "text_delta",
+			text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
+		};
+		yield { type: "done" };
 	}
 }
