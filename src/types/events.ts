@@ -1,8 +1,14 @@
+import type { StreamChunk } from "../ai/base-provider.js";
 import type { InboundMessage, OutboundMessage } from "./message.js";
 
 export interface EventMap {
 	"message:inbound": InboundMessage;
 	"message:outbound": OutboundMessage;
+	"message:stream": {
+		sessionId: string;
+		channel: string;
+		chunk: StreamChunk;
+	};
 	"plugin:started": { name: string };
 	"plugin:stopped": { name: string };
 	"plugin:error": { name: string; error: Error };

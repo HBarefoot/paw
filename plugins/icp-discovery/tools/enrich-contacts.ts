@@ -1,17 +1,16 @@
 import type { HunterConfig } from "../lib/hunter";
 import { createHunterClient } from "../lib/hunter";
-import type { SerpApiConfig } from "../lib/serpapi";
-import { createSerpApiClient } from "../lib/serpapi";
+import type { CachedSearchClient } from "../lib/search-cache";
 import type { ContactInfo } from "../types";
 
 interface PluginDeps {
 	hunterConfig: HunterConfig;
-	serpApiConfig: SerpApiConfig;
+	searchClient: CachedSearchClient;
 }
 
 export function createEnrichContactsHandler(deps: PluginDeps) {
 	const hunter = createHunterClient(deps.hunterConfig);
-	const serpapi = createSerpApiClient(deps.serpApiConfig);
+	const serpapi = deps.searchClient;
 
 	return async (
 		input: Record<string, unknown>,
@@ -24,25 +23,52 @@ export function createEnrichContactsHandler(deps: PluginDeps) {
 				return { content: "Error: domain is required", is_error: true };
 			}
 
+			if (!deps.hunterConfig.apiKey) {
+				return {
+					content: "Error: HUNTER_API_KEY not configured in .env",
+					is_error: true,
+				};
+			}
+
 			const contacts: ContactInfo[] = [];
 
 			// Step 1: Hunter.io domain search with marketing/executive filters
 			try {
+				// Fetch without department filter — Hunter.io often lacks accurate
+				// department tags, so we get all contacts and filter by title/seniority
+				// client-side. This avoids 0-result responses from overly narrow filters.
 				const hunterResults = await hunter.domainSearch(domain, {
-					department: ["marketing", "executive", "communication"],
-					seniority: ["director", "senior", "c-level"],
-					limit: 10,
+					limit: 20,
 				});
 
+				const MARKETING_TITLES =
+					/\b(marketing|cmo|brand|communication|pr|public.?relations|growth|demand.?gen|digital|media|content|advertising)\b/i;
+				const EXECUTIVE_TITLES =
+					/\b(chief|ceo|cfo|coo|president|vp|vice.?president|svp|evp|director|head|senior)\b/i;
+				const TARGET_DEPTS = new Set([
+					"marketing",
+					"executive",
+					"communication",
+					"management",
+				]);
+
 				for (const contact of hunterResults) {
-					contacts.push({
-						name: `${contact.first_name} ${contact.last_name}`.trim(),
-						title: contact.position || "Unknown",
-						email: contact.value,
-						emailConfidence: contact.confidence,
-						linkedIn: contact.linkedin || undefined,
-						department: contact.department || "marketing",
-					});
+					const title = contact.position || "";
+					const dept = (contact.department || "").toLowerCase();
+					const isTargetDept = !dept || TARGET_DEPTS.has(dept);
+					const isRelevantTitle =
+						MARKETING_TITLES.test(title) || EXECUTIVE_TITLES.test(title);
+
+					if (isTargetDept || isRelevantTitle) {
+						contacts.push({
+							name: `${contact.first_name} ${contact.last_name}`.trim(),
+							title: title || "Unknown",
+							email: contact.value,
+							emailConfidence: contact.confidence,
+							linkedIn: contact.linkedin || undefined,
+							department: contact.department || "marketing",
+						});
+					}
 				}
 			} catch (err) {
 				// Hunter.io failed — fall through to SerpApi fallback

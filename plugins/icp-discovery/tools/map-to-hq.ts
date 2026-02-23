@@ -2,11 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { stripCodeFences } from "../lib/parse-json";
-import type { SerpApiConfig } from "../lib/serpapi";
-import { createSerpApiClient } from "../lib/serpapi";
+import type { CachedSearchClient } from "../lib/search-cache";
 
 interface PluginDeps {
-	serpApiConfig: SerpApiConfig;
+	searchClient: CachedSearchClient;
 	anthropicApiKey: string;
 }
 
@@ -21,8 +20,8 @@ interface HqData {
 const PROMPT_PATH = resolve(import.meta.dir, "../prompts/hq-extractor.md");
 
 export function createMapToHqHandler(deps: PluginDeps) {
-	const serpapi = createSerpApiClient(deps.serpApiConfig);
-	const claude = new Anthropic({ apiKey: deps.anthropicApiKey });
+	const serpapi = deps.searchClient;
+	const claude = new Anthropic({ apiKey: deps.anthropicApiKey, timeout: 60_000 });
 	const systemPrompt = readFileSync(PROMPT_PATH, "utf-8");
 
 	return async (
@@ -34,21 +33,25 @@ export function createMapToHqHandler(deps: PluginDeps) {
 				return { content: "Error: companyName is required", is_error: true };
 			}
 
-			// Step 1: Google Search for HQ address
-			const searchResult = await serpapi.googleSearch(
-				`"${companyName}" corporate headquarters address`,
-			);
+			// Step 1: Google Search for HQ address (tolerate timeout)
+			let organicResults = "";
+			let knowledgeGraph = "No Knowledge Graph data available";
+			try {
+				const searchResult = await serpapi.googleSearch(
+					`"${companyName}" corporate headquarters address`,
+				);
+				organicResults = (searchResult.organic_results ?? [])
+					.slice(0, 5)
+					.map((r) => `${r.title}: ${r.snippet} (${r.link})`)
+					.join("\n");
+				if (searchResult.knowledge_graph) {
+					knowledgeGraph = JSON.stringify(searchResult.knowledge_graph, null, 2);
+				}
+			} catch (searchErr) {
+				organicResults = `Web search failed: ${searchErr instanceof Error ? searchErr.message : String(searchErr)}`;
+			}
 
-			const organicResults = (searchResult.organic_results ?? [])
-				.slice(0, 5)
-				.map((r) => `${r.title}: ${r.snippet} (${r.link})`)
-				.join("\n");
-
-			const knowledgeGraph = searchResult.knowledge_graph
-				? JSON.stringify(searchResult.knowledge_graph, null, 2)
-				: "No Knowledge Graph data available";
-
-			// Step 2: Fallback Maps search
+			// Step 2: Fallback Maps search (tolerate timeout)
 			let mapsData = "";
 			try {
 				const mapsResult = await serpapi.googleMaps(

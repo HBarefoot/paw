@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import { logger as honoLogger } from "hono/logger";
 import { bodyLimit } from "hono/body-limit";
 import { csrf } from "hono/csrf";
+import { streamSSE } from "hono/streaming";
 import { setCookie, getCookie } from "hono/cookie";
 import { resolve, relative, extname } from "node:path";
 import { resolveProjectPath } from "../paths.js";
@@ -468,6 +469,7 @@ export function createWebApp(
 	>();
 	const canvasSessionLastAccess = new Map<string, number>(); // tracks last poll time per session
 	let canvasEventSeq = 0;
+	const canvasStreamingSessions = new Set<string>(); // tracks sessions using handleInboundStream (to skip duplicate message:outbound)
 	const CANVAS_EVENT_TTL = 60_000; // events expire after 60s
 	const CANVAS_MAX_EVENTS = 200;
 	const CANVAS_SESSION_TTL = 60 * 60_000; // abandon sessions after 1 hour of inactivity
@@ -538,10 +540,14 @@ export function createWebApp(
 	}
 
 	// Listen for AI outbound messages bound for canvas sessions
+	// Skip sessions that are already streaming via handleInboundStream (they push chunks directly)
 	kernel.eventBus.on(
 		"message:outbound",
 		(outbound: { sessionId: string; content: string; channel?: string }) => {
-			if (outbound.sessionId?.startsWith("canvas-")) {
+			if (
+				outbound.sessionId?.startsWith("canvas-") &&
+				!canvasStreamingSessions.has(outbound.sessionId)
+			) {
 				pushCanvasEvent(outbound.sessionId, "message", {
 					content: outbound.content,
 				});
@@ -551,27 +557,21 @@ export function createWebApp(
 
 	// Canvas page routes removed — canvas is now integrated into the chat page
 
-	app.post("/api/canvas/chat", async (c) => {
-		if (!config.web.canvas?.enabled) {
-			return c.json({ error: "Canvas is disabled" }, 400);
-		}
-
-		const body = await c.req.json<{
-			sessionId: string;
-			message: string;
-			images?: Array<{ data: string; mimeType: string }>;
-			files?: Array<{ data: string; mimeType: string; name: string }>;
-		}>();
-		if (!body.message?.trim() && !body.images?.length && !body.files?.length) {
-			return c.json({ error: "Message is required" }, 400);
-		}
-
-		const sessionId = body.sessionId || "canvas-" + crypto.randomUUID();
-
-		// Ensure event buffer exists for this session
-		if (!canvasEvents.has(sessionId)) canvasEvents.set(sessionId, []);
-
-		// Parse file attachments into text content for the AI
+	/** Build the canvas instruction content and attachments from a request body */
+	async function buildCanvasMessage(body: {
+		sessionId?: string;
+		message?: string;
+		images?: Array<{ data: string; mimeType: string }>;
+		files?: Array<{ data: string; mimeType: string; name: string }>;
+	}): Promise<{
+		content: string;
+		attachments: Array<{
+			type: "image" | "text";
+			data: Buffer;
+			mimeType: string;
+			name?: string;
+		}>;
+	}> {
 		const attachments: Array<{
 			type: "image" | "text";
 			data: Buffer;
@@ -592,7 +592,6 @@ export function createWebApp(
 			attachments.push(...fileAttachments);
 		}
 
-		// Build inline file content so the AI can reference it in the instruction text
 		const fileContentSections: string[] = [];
 		for (const att of attachments) {
 			if (att.type === "text" && att.data) {
@@ -601,38 +600,17 @@ export function createWebApp(
 			}
 		}
 
-		// Read existing canvas files and inject contents so the AI doesn't need canvas_read
 		const BINARY_EXTS = new Set([
-			".png",
-			".jpg",
-			".jpeg",
-			".gif",
-			".ico",
-			".webp",
-			".svg",
-			".woff",
-			".woff2",
-			".ttf",
-			".eot",
-			".mp3",
-			".mp4",
-			".webm",
-			".ogg",
-			".wav",
-			".pdf",
-			".zip",
-			".tar",
-			".gz",
+			".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg",
+			".woff", ".woff2", ".ttf", ".eot",
+			".mp3", ".mp4", ".webm", ".ogg", ".wav",
+			".pdf", ".zip", ".tar", ".gz",
 		]);
-		const MAX_INJECT_BYTES = 50 * 1024; // 50KB total cap for injected content
+		const MAX_INJECT_BYTES = 50 * 1024;
 		let canvasFilesSummary = "";
 
 		if (existsSync(canvasRoot)) {
-			const canvasFiles: Array<{
-				path: string;
-				size: number;
-				fullPath: string;
-			}> = [];
+			const canvasFiles: Array<{ path: string; size: number; fullPath: string }> = [];
 			function walkCanvas(dir: string): void {
 				if (canvasFiles.length >= 50) return;
 				try {
@@ -650,9 +628,7 @@ export function createWebApp(
 							});
 						}
 					}
-				} catch {
-					/* ignore read errors */
-				}
+				} catch { /* ignore */ }
 			}
 			walkCanvas(canvasRoot);
 
@@ -662,13 +638,9 @@ export function createWebApp(
 				for (const f of canvasFiles) {
 					const ext = extname(f.path).toLowerCase();
 					const isBinary = BINARY_EXTS.has(ext);
-					if (
-						isBinary ||
-						f.size > MAX_INJECT_BYTES ||
-						injectedBytes + f.size > MAX_INJECT_BYTES
-					) {
+					if (isBinary || f.size > MAX_INJECT_BYTES || injectedBytes + f.size > MAX_INJECT_BYTES) {
 						sections.push(
-							`[${f.path}] (${isBinary ? "binary" : f.size + " bytes"} — use canvas_read if needed)`,
+							`[${f.path}] (${isBinary ? "binary" : `${f.size} bytes`} — use canvas_read if needed)`,
 						);
 					} else {
 						try {
@@ -676,20 +648,15 @@ export function createWebApp(
 							sections.push(`[${f.path}]\n${content}`);
 							injectedBytes += f.size;
 						} catch {
-							sections.push(
-								`[${f.path}] (unreadable — use canvas_read if needed)`,
-							);
+							sections.push(`[${f.path}] (unreadable — use canvas_read if needed)`);
 						}
 					}
 				}
-				canvasFilesSummary =
-					"\n\n--- Current Canvas Files ---\n" + sections.join("\n\n");
+				canvasFilesSummary = "\n\n--- Current Canvas Files ---\n" + sections.join("\n\n");
 			}
 		}
 
 		const hasExistingFiles = canvasFilesSummary.length > 0;
-
-		// Prepend canvas instructions so the AI uses canvas_write
 		const canvasInstruction = [
 			"[CANVAS MODE] You are working in a live canvas environment.",
 			"You MUST use the canvas_write tool to create/update files (HTML, CSS, JS).",
@@ -707,26 +674,112 @@ export function createWebApp(
 			...(canvasFilesSummary ? [canvasFilesSummary] : []),
 		].join("\n");
 
-		// Fire-and-forget — response arrives via polling /api/canvas/events
-		kernel.eventBus
-			.emit("message:inbound", {
+		return { content: canvasInstruction, attachments };
+	}
+
+	app.post("/api/canvas/chat", async (c) => {
+		if (!config.web.canvas?.enabled) {
+			return c.json({ error: "Canvas is disabled" }, 400);
+		}
+
+		const body = await c.req.json<{
+			sessionId: string;
+			message: string;
+			images?: Array<{ data: string; mimeType: string }>;
+			files?: Array<{ data: string; mimeType: string; name: string }>;
+		}>();
+		if (!body.message?.trim() && !body.images?.length && !body.files?.length) {
+			return c.json({ error: "Message is required" }, 400);
+		}
+
+		const sessionId = body.sessionId || "canvas-" + crypto.randomUUID();
+		if (!canvasEvents.has(sessionId)) canvasEvents.set(sessionId, []);
+
+		const { content, attachments } = await buildCanvasMessage(body);
+
+		const msg = {
+			id: crypto.randomUUID(),
+			sessionId,
+			channel: "canvas" as const,
+			content,
+			attachments: attachments.length > 0 ? attachments : undefined,
+			user: { id: "canvas-user", name: "Canvas User" },
+			timestamp: new Date().toISOString(),
+			metadata: { canvas: true },
+		};
+
+		// Consume stream in background, push each chunk as a canvas event
+		canvasStreamingSessions.add(sessionId);
+		(async () => {
+			try {
+				for await (const chunk of kernel.handleInboundStream(msg)) {
+					pushCanvasEvent(sessionId, "chunk", chunk);
+				}
+			} catch (err) {
+				pushCanvasEvent(sessionId, "error", {
+					message: err instanceof Error ? err.message : String(err),
+				});
+			} finally {
+				canvasStreamingSessions.delete(sessionId);
+			}
+		})();
+
+		return c.json({ sessionId }, 202);
+	});
+
+	app.post("/api/canvas/stream", async (c) => {
+		if (!config.web.canvas?.enabled) {
+			return c.json({ error: "Canvas is disabled" }, 400);
+		}
+
+		try {
+			const body = await c.req.json<{
+				sessionId: string;
+				message: string;
+				images?: Array<{ data: string; mimeType: string }>;
+				files?: Array<{ data: string; mimeType: string; name: string }>;
+			}>();
+			if (!body.message?.trim() && !body.images?.length && !body.files?.length) {
+				return c.json({ error: "Message is required" }, 400);
+			}
+
+			const sessionId = body.sessionId || "canvas-" + crypto.randomUUID();
+			if (!canvasEvents.has(sessionId)) canvasEvents.set(sessionId, []);
+
+			const { content, attachments } = await buildCanvasMessage(body);
+
+			const msg = {
 				id: crypto.randomUUID(),
 				sessionId,
-				channel: "canvas",
-				content: canvasInstruction,
+				channel: "canvas" as const,
+				content,
 				attachments: attachments.length > 0 ? attachments : undefined,
 				user: { id: "canvas-user", name: "Canvas User" },
 				timestamp: new Date().toISOString(),
 				metadata: { canvas: true },
-			})
-			.catch((err) => {
-				// Push error event so the frontend can clear "Generating..." state
-				pushCanvasEvent(sessionId, "error", {
-					message: err instanceof Error ? err.message : String(err),
-				});
-			});
+			};
 
-		return c.json({ sessionId }, 202);
+			return streamSSE(c, async (stream) => {
+				try {
+					for await (const chunk of kernel.handleInboundStream(msg)) {
+						await stream.writeSSE({
+							data: JSON.stringify(chunk),
+						});
+					}
+				} catch (err) {
+					const errMsg = err instanceof Error ? err.message : String(err);
+					await stream.writeSSE({
+						data: JSON.stringify({ type: "error", error: errMsg }),
+					});
+					await stream.writeSSE({
+						data: JSON.stringify({ type: "done" }),
+					});
+				}
+			});
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return c.json({ error: message }, 500);
+		}
 	});
 
 	// Polling endpoint — replaces SSE which Bun cannot sustain
@@ -1541,6 +1594,73 @@ export function createWebApp(
 		return c.json({ disabled });
 	});
 
+	app.post("/api/chat/stream", async (c) => {
+		try {
+			const body = await c.req.json<{
+				sessionId: string;
+				message: string;
+				images?: Array<{ data: string; mimeType: string }>;
+				files?: Array<{ data: string; mimeType: string; name: string }>;
+			}>();
+			if (!body.message?.trim()) {
+				return c.json({ error: "Message is required" }, 400);
+			}
+
+			const sessionId = body.sessionId || crypto.randomUUID();
+
+			const attachments: Array<{
+				type: "image" | "text";
+				data: Buffer;
+				mimeType: string;
+				name?: string;
+			}> = [];
+			if (body.images) {
+				for (const img of body.images) {
+					attachments.push({
+						type: "image" as const,
+						data: Buffer.from(img.data, "base64"),
+						mimeType: img.mimeType,
+					});
+				}
+			}
+			if (body.files) {
+				const fileAttachments = await parseUploadedFiles(body.files);
+				attachments.push(...fileAttachments);
+			}
+
+			const msg = {
+				id: crypto.randomUUID(),
+				sessionId,
+				channel: "web" as const,
+				content: body.message.trim(),
+				attachments: attachments.length > 0 ? attachments : undefined,
+				user: { id: "web-user", name: "Web User" },
+				timestamp: new Date().toISOString(),
+			};
+
+			return streamSSE(c, async (stream) => {
+				try {
+					for await (const chunk of kernel.handleInboundStream(msg)) {
+						await stream.writeSSE({
+							data: JSON.stringify(chunk),
+						});
+					}
+				} catch (err) {
+					const errMsg = err instanceof Error ? err.message : String(err);
+					await stream.writeSSE({
+						data: JSON.stringify({ type: "error", error: errMsg }),
+					});
+					await stream.writeSSE({
+						data: JSON.stringify({ type: "done" }),
+					});
+				}
+			});
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return c.json({ error: message }, 500);
+		}
+	});
+
 	app.post("/api/chat", async (c) => {
 		try {
 			const body = await c.req.json<{
@@ -1618,7 +1738,7 @@ export function createWebApp(
 				const timeout = setTimeout(() => {
 					kernel.eventBus.off("message:outbound", handler); // prevent listener leak
 					reject(new Error("Response timeout"));
-				}, 600_000); // 10 minutes — tool pipelines (e.g. ICP discovery) can take 3-5 min
+				}, 1_800_000); // 30 minutes — large model tool pipelines can take 10-20 min
 
 				kernel.eventBus.on("message:outbound", handler);
 			});
@@ -1818,6 +1938,10 @@ export function createWebApp(
 
 	app.get("/api/sessions/:id/messages", (c) => {
 		const id = c.req.param("id");
+		// Canvas sessions are in-memory only, not in SQLite
+		if (id.startsWith("canvas-")) {
+			return c.json({ session: { id }, messages: [] });
+		}
 		const data = getSessionWithMessages(kernel.database, id);
 		if (!data) return c.json({ error: "Session not found" }, 404);
 		return c.json({ session: data.session, messages: data.messages });

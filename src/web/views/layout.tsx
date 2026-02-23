@@ -2,25 +2,25 @@ import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 
 interface LayoutProps {
-	title: string;
-	currentPath?: string;
-	children: any;
+  title: string;
+  currentPath?: string;
+  children: any;
 }
 
 function navIcon(name: string): string {
-	const icons: Record<string, string> = {
-		dashboard: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>`,
-		config: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
-		cron: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
-		memory: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`,
-		sessions: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
-		mcp: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6m0 8v6M4.93 4.93l4.24 4.24m5.66 5.66l4.24 4.24M2 12h6m8 0h6M4.93 19.07l4.24-4.24m5.66-5.66l4.24-4.24"/></svg>`,
-		heartbeat: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`,
-		skills: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
-		chat: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
-		canvas: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
-	};
-	return icons[name] ?? "";
+  const icons: Record<string, string> = {
+    dashboard: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>`,
+    config: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+    cron: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+    memory: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`,
+    sessions: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+    mcp: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6m0 8v6M4.93 4.93l4.24 4.24m5.66 5.66l4.24 4.24M2 12h6m8 0h6M4.93 19.07l4.24-4.24m5.66-5.66l4.24-4.24"/></svg>`,
+    heartbeat: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`,
+    skills: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+    chat: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
+    canvas: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+  };
+  return icons[name] ?? "";
 }
 
 const cssDesignSystem = `
@@ -34,35 +34,36 @@ const cssDesignSystem = `
     --bg-tertiary: #f0f2f5;
     --bg-card: #ffffff;
     --bg-input: #ffffff;
-    --bg-hover: #f4f5f7;
+    --bg-hover: #f4f6f8;
     --bg-sidebar: #fafbfc;
 
-    --border-primary: #e2e4e9;
-    --border-secondary: #eff0f3;
-    --border-focus: #6366f1;
+    --border-primary: #e2e8f0;
+    --border-secondary: #eef0f3;
+    --border-focus: #2594d0;
 
-    --text-primary: #111827;
-    --text-secondary: #6b7280;
-    --text-tertiary: #9ca3af;
+    --text-primary: #0f172a;
+    --text-secondary: #64748b;
+    --text-tertiary: #94a3b8;
     --text-inverse: #ffffff;
 
-    --accent: #4f46e5;
-    --accent-hover: #4338ca;
-    --accent-subtle: #e8e5ff;
-    --accent-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
+    /* Paw brand blue */
+    --accent: #2594d0;
+    --accent-hover: #1a7ab5;
+    --accent-subtle: rgba(37,148,208,0.09);
+    --accent-gradient: linear-gradient(135deg, #2594d0, #1a7ab5);
 
-    --success: #10b981;
-    --success-bg: #ecfdf5;
+    --success: #22c55e;
+    --success-bg: #f0fdf4;
     --error: #ef4444;
     --error-bg: #fef2f2;
     --warning: #f59e0b;
     --warning-bg: #fffbeb;
-    --info: #3b82f6;
-    --info-bg: #eff6ff;
+    --info: #2594d0;
+    --info-bg: rgba(37,148,208,0.08);
 
-    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.05);
-    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.04);
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.04);
+    --shadow-lg: 0 12px 24px rgba(0,0,0,0.09), 0 4px 8px rgba(0,0,0,0.04);
 
     --radius-sm: 6px;
     --radius-md: 8px;
@@ -89,21 +90,22 @@ const cssDesignSystem = `
 
       --border-primary: #27272a;
       --border-secondary: #1e1e22;
-      --border-focus: #a5b4fc;
+      --border-focus: #60b8e8;
 
       --text-primary: #f4f4f5;
       --text-secondary: #a1a1aa;
       --text-tertiary: #71717a;
       --text-inverse: #09090b;
 
-      --accent: #a5b4fc;
-      --accent-hover: #818cf8;
-      --accent-subtle: rgba(165,180,252,0.10);
+      --accent: #60b8e8;
+      --accent-hover: #3aa3d8;
+      --accent-subtle: rgba(96,184,232,0.12);
+      --accent-gradient: linear-gradient(135deg, #60b8e8, #3aa3d8);
 
-      --success-bg: rgba(16,185,129,0.1);
+      --success-bg: rgba(34,197,94,0.1);
       --error-bg: rgba(239,68,68,0.1);
       --warning-bg: rgba(245,158,11,0.1);
-      --info-bg: rgba(59,130,246,0.1);
+      --info-bg: rgba(96,184,232,0.1);
 
       --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
       --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.4);
@@ -200,18 +202,21 @@ const cssDesignSystem = `
     text-decoration: none;
     font-size: 14px;
     border-radius: var(--radius-sm);
+    border-left: 3px solid transparent;
     transition: all var(--transition);
   }
 
   .nav-item:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+    border-left-color: var(--border-primary);
   }
 
   .nav-item.active {
     background: var(--accent-subtle);
     color: var(--accent);
     font-weight: 500;
+    border-left-color: var(--accent);
   }
 
   .nav-icon {
@@ -276,19 +281,20 @@ const cssDesignSystem = `
     padding: 20px;
     margin-bottom: 16px;
     box-shadow: var(--shadow-sm);
-    transition: box-shadow var(--transition);
+    transition: box-shadow var(--transition), transform var(--transition);
   }
 
   .card:hover {
     box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
   }
 
   .card h3 {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-tertiary);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-weight: 500;
+    letter-spacing: 0.07em;
+    font-weight: 600;
     margin-bottom: 12px;
   }
 
@@ -365,7 +371,10 @@ const cssDesignSystem = `
   }
   input:focus, textarea:focus, select:focus {
     border-color: var(--border-focus);
-    box-shadow: 0 0 0 3px var(--accent-subtle);
+    box-shadow: 0 0 0 3px rgba(37,148,208,0.15);
+  }
+  :root.dark input:focus, :root.dark textarea:focus, :root.dark select:focus {
+    box-shadow: 0 0 0 3px rgba(96,184,232,0.18);
   }
   input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
   label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; font-weight: 500; }
@@ -388,20 +397,21 @@ const cssDesignSystem = `
     border: none;
     transition: all var(--transition);
     font-family: var(--font-sans);
-    background: var(--accent);
-    color: var(--text-inverse);
+    background: var(--accent-gradient);
+    color: #ffffff;
   }
-  button:hover, .btn:hover { background: var(--accent-hover); }
-  button:disabled, .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:hover, .btn:hover { opacity: 0.92; }
+  button:active, .btn:active { transform: scale(0.97); }
+  button:disabled, .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-  .btn-primary { background: var(--accent); color: var(--text-inverse); }
-  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary { background: var(--accent-gradient); color: #ffffff; }
+  .btn-primary:hover { opacity: 0.9; }
 
   .btn-danger { background: var(--error-bg); color: var(--error); border: 1px solid transparent; }
-  .btn-danger:hover { border-color: var(--error); background: var(--error-bg); }
+  .btn-danger:hover { border-color: var(--error); background: var(--error-bg); opacity: 1; }
 
   .btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-primary); }
-  .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); opacity: 1; }
 
   .btn-sm { padding: 4px 10px; font-size: 12px; }
 
@@ -486,15 +496,27 @@ const cssDesignSystem = `
     line-height: 1.5;
     font-size: 14px;
   }
+  /* Light mode: user bubble = crisp blue gradient; assistant = light gray */
   .msg.user {
-    background: var(--accent-subtle);
-    color: var(--text-primary);
+    background: var(--accent-gradient);
+    color: #ffffff;
     border-bottom-right-radius: var(--radius-sm);
   }
+  .msg.user .role { color: rgba(255,255,255,0.9); opacity: 1; }
   .msg.assistant {
-    background: var(--bg-tertiary);
+    background: var(--bg-secondary);
     color: var(--text-primary);
+    border: 1px solid var(--border-secondary);
     border-bottom-left-radius: var(--radius-sm);
+  }
+  /* Dark mode: deeper blue gradient for readable contrast */
+  :root.dark .msg.user {
+    background: linear-gradient(135deg, #1a6fa0, #0f5280);
+    color: #ffffff;
+  }
+  :root.dark .msg.assistant {
+    background: var(--bg-tertiary);
+    border-color: var(--border-primary);
   }
   .msg.tool {
     background: var(--bg-tertiary);
@@ -505,13 +527,12 @@ const cssDesignSystem = `
   }
   .msg .role {
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     margin-bottom: 4px;
-    opacity: 0.6;
+    opacity: 0.75;
   }
-  .msg.user .role { color: var(--text-tertiary); }
 
   /* Markdown rendering inside assistant messages */
   .msg.assistant .md-content h1,
@@ -685,6 +706,175 @@ const cssDesignSystem = `
     0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); }
     30% { opacity: 1; transform: scale(1); }
   }
+
+  /* ===== ACTIVITY TIMELINE ===== */
+  .activity-timeline {
+    margin-top: 10px;
+    padding-left: 16px;
+    border-left: 2px solid var(--border-secondary);
+    position: relative;
+  }
+
+  .activity-step {
+    position: relative;
+    padding: 4px 0 4px 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .activity-step::before {
+    content: "";
+    position: absolute;
+    left: -17px;
+    top: 10px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--border-primary);
+  }
+
+  .activity-step.running::before {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+  }
+  .activity-step.running .activity-label { color: var(--accent); }
+
+  .activity-step.done::before {
+    background: var(--success, #16a34a);
+  }
+
+  .activity-step.error::before {
+    background: var(--error);
+  }
+
+  .activity-step-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1.4;
+  }
+
+  .activity-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
+  .activity-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .activity-duration {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .activity-details {
+    margin-top: 2px;
+  }
+  .activity-details summary {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    user-select: none;
+  }
+  .activity-details summary:hover { color: var(--text-secondary); }
+
+  .activity-result-preview {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.4;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    margin-top: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-secondary);
+  }
+
+  .activity-thinking {
+    position: relative;
+    padding: 3px 0 3px 12px;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .activity-thinking::before {
+    content: "";
+    position: absolute;
+    left: -17px;
+    top: 9px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+    animation: thinking-pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes thinking-pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
+  .activity-roundtrip-divider {
+    padding: 4px 0 4px 12px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    border-top: 1px dashed var(--border-secondary);
+    margin-top: 4px;
+  }
+
+  .activity-error-card {
+    position: relative;
+    padding: 8px 12px;
+    margin: 4px 0;
+    border-radius: var(--radius-sm);
+    background: var(--error-bg);
+    border: 1px solid var(--error);
+    color: var(--error);
+    font-size: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .activity-error-card::before {
+    content: "";
+    position: absolute;
+    left: -17px;
+    top: 14px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--error);
+  }
+
+  .activity-spinner {
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid var(--border-primary); border-top-color: var(--accent);
+    border-radius: 50%; animation: activity-spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes activity-spin { to { transform: rotate(360deg); } }
 
   /* ===== MEMORY CARDS ===== */
   .memory-card {
@@ -896,10 +1086,14 @@ const cssDesignSystem = `
     cursor: pointer; white-space: nowrap; display: inline-flex;
     align-items: center; gap: 6px; border: 1px solid var(--border-primary);
     background: transparent; color: var(--text-secondary);
+    transition: all var(--transition);
   }
   .chat-toolbar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .chat-toolbar-btn.primary { background: var(--accent); color: var(--text-inverse); border-color: var(--accent); }
-  .chat-toolbar-btn.primary:hover { background: var(--accent-hover); }
+  .chat-toolbar-btn.primary {
+    background: var(--accent-gradient); color: #ffffff;
+    border-color: transparent;
+  }
+  .chat-toolbar-btn.primary:hover { opacity: 0.9; background: var(--accent-gradient); }
   .chat-toolbar-btn.active { background: var(--accent-subtle); color: var(--accent); border-color: var(--accent); }
 
   /* ===== RESPONSIVE ===== */
@@ -980,53 +1174,53 @@ window.pawModal = {
 `;
 
 const navItems = [
-	{ path: "/", label: "Dashboard", icon: "dashboard" },
-	{ path: "/config", label: "Config", icon: "config" },
-	{ path: "/cron", label: "Cron", icon: "cron" },
-	{ path: "/heartbeat", label: "Heartbeat", icon: "heartbeat" },
-	{ path: "/memory", label: "Memory", icon: "memory" },
-	{ path: "/sessions", label: "Sessions", icon: "sessions" },
-	{ path: "/mcp", label: "MCP", icon: "mcp" },
-	{ path: "/skills", label: "Skills", icon: "skills" },
-	{ path: "/chat", label: "Chat", icon: "chat" },
+  { path: "/", label: "Dashboard", icon: "dashboard" },
+  { path: "/config", label: "Config", icon: "config" },
+  { path: "/cron", label: "Cron", icon: "cron" },
+  { path: "/heartbeat", label: "Heartbeat", icon: "heartbeat" },
+  { path: "/memory", label: "Memory", icon: "memory" },
+  { path: "/sessions", label: "Sessions", icon: "sessions" },
+  { path: "/mcp", label: "MCP", icon: "mcp" },
+  { path: "/skills", label: "Skills", icon: "skills" },
+  { path: "/chat", label: "Chat", icon: "chat" },
 ];
 
 export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
-	<html lang="en">
-		<head>
-			<meta charset="UTF-8" />
-			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-			{raw(`<link rel="preconnect" href="https://fonts.googleapis.com">
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      {raw(`<link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">`)}
-			<title>{title} - Paw</title>
-			{raw(
-				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`,
-			)}
-			{raw(`<style>${cssDesignSystem}</style>`)}
-			{raw(`<script>${modalScript}</script>`)}
-		</head>
-		<body>
-			<div class="app-layout">
-				<aside class="sidebar">
-					<div class="sidebar-header">
-						{raw(
-							`<img src="/paw-logo.jpg" width="32" height="32" alt="Paw" style="border-radius:8px;flex-shrink:0" />`,
-						)}
-					</div>
-					<nav class="sidebar-nav">
-						{navItems.map((item) => (
-							<a
-								href={item.path}
-								class={`nav-item${currentPath === item.path ? " active" : ""}`}
-							>
-								{raw(`<span class="nav-icon">${navIcon(item.icon)}</span>`)}
-								<span class="nav-label">{item.label}</span>
-							</a>
-						))}
-					</nav>
-					<div class="sidebar-footer">
-						{raw(`<div class="theme-toggle">
+      <title>{title} - Paw</title>
+      {raw(
+        `<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`,
+      )}
+      {raw(`<style>${cssDesignSystem}</style>`)}
+      {raw(`<script>${modalScript}</script>`)}
+    </head>
+    <body>
+      <div class="app-layout">
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            {raw(
+              `<img src="/paw-logo.jpg" width="32" height="32" alt="Paw" style="border-radius:8px;flex-shrink:0" />`,
+            )}
+          </div>
+          <nav class="sidebar-nav">
+            {navItems.map((item) => (
+              <a
+                href={item.path}
+                class={`nav-item${currentPath === item.path ? " active" : ""}`}
+              >
+                {raw(`<span class="nav-icon">${navIcon(item.icon)}</span>`)}
+                <span class="nav-label">{item.label}</span>
+              </a>
+            ))}
+          </nav>
+          <div class="sidebar-footer">
+            {raw(`<div class="theme-toggle">
               <button class="theme-btn" data-theme="light" onclick="__pawSetTheme('light')" title="Light">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
               </button>
@@ -1037,29 +1231,29 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
               </button>
             </div>`)}
-						<span>Paw v0.1.0</span>
-						<a
-							href="/logout"
-							class="nav-item"
-							style="margin-top: 8px; font-size: 12px; padding: 6px 12px;"
-						>
-							{raw(
-								`<span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span>`,
-							)}
-							<span class="nav-label">Logout</span>
-						</a>
-					</div>
-				</aside>
-				<div class="main-area">
-					<header class="topbar">
-						<h1 class="page-title">{title}</h1>
-					</header>
-					<main class="content">{children}</main>
-				</div>
-			</div>
-			{raw(
-				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});})()</script>`,
-			)}
-		</body>
-	</html>
+            <span>Paw v0.1.0</span>
+            <a
+              href="/logout"
+              class="nav-item"
+              style="margin-top: 8px; font-size: 12px; padding: 6px 12px;"
+            >
+              {raw(
+                `<span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span>`,
+              )}
+              <span class="nav-label">Logout</span>
+            </a>
+          </div>
+        </aside>
+        <div class="main-area">
+          <header class="topbar">
+            <h1 class="page-title">{title}</h1>
+          </header>
+          <main class="content">{children}</main>
+        </div>
+      </div>
+      {raw(
+        `<script>(function(){var t=localStorage.getItem("paw-theme")||"system";document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});})()</script>`,
+      )}
+    </body>
+  </html>
 );

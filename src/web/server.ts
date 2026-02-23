@@ -22,6 +22,7 @@ export function startWebServer(
 		hostname: config.host,
 		port: config.port,
 		fetch: app.fetch,
+		idleTimeout: 255, // max value — prevents SSE streams from being killed mid-response
 	};
 
 	if (tlsConfig?.enabled && tlsConfig.certFile && tlsConfig.keyFile) {

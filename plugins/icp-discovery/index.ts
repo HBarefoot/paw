@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "../../src/types/message";
 import type { ChannelPlugin } from "../../src/types/plugin";
 import { createDiscoverFranchisesHandler } from "./tools/discover-franchises";
+import { createCachedSearchClient } from "./lib/search-cache";
 import { createEnrichContactsHandler } from "./tools/enrich-contacts";
 import { createEstimateRevenueHandler } from "./tools/estimate-revenue";
 import { createExportResultsHandler } from "./tools/export-results";
@@ -34,7 +35,7 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 
 		// Resolve API keys from plugin config or environment
 		const serpApiKey =
-			(config.serpApiKey as string) || process.env.SERP_API_KEY || "";
+			(config.braveApiKey as string) || process.env.BRAVE_API_KEY || "";
 		const hunterApiKey =
 			(config.hunterApiKey as string) || process.env.HUNTER_API_KEY || "";
 		const anthropicApiKey =
@@ -42,7 +43,7 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 
 		if (!serpApiKey) {
 			ctx.logger.warn(
-				"SERP_API_KEY not configured — discover_franchises and map_to_hq will fail",
+				"BRAVE_API_KEY not configured — discover_franchises and map_to_hq will fail",
 			);
 		}
 		if (!anthropicApiKey) {
@@ -50,8 +51,16 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 				"ANTHROPIC_API_KEY not configured — LLM parsing tools will fail",
 			);
 		}
+		if (!hunterApiKey) {
+			ctx.logger.warn(
+				"HUNTER_API_KEY not configured — enrich_contacts will fall back to LinkedIn search only",
+			);
+		}
 
-		const serpApiConfig = { apiKey: serpApiKey };
+		const searchClient = createCachedSearchClient(
+			{ apiKey: serpApiKey },
+			ctx.store,
+		);
 		const hunterConfig = { apiKey: hunterApiKey };
 
 		const exportConfig = {
@@ -63,33 +72,49 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 
 		// Create tool handlers with dependencies
 		const discoverFranchises = createDiscoverFranchisesHandler({
-			serpApiConfig,
+			searchClient,
 			anthropicApiKey,
 		});
 		const estimateRevenue = createEstimateRevenueHandler({
-			serpApiConfig,
+			searchClient,
 			anthropicApiKey,
 		});
 		const filterIcp = createFilterIcpHandler(ctx.store);
-		const mapToHq = createMapToHqHandler({ serpApiConfig, anthropicApiKey });
+		const mapToHq = createMapToHqHandler({ searchClient, anthropicApiKey });
 		const enrichContacts = createEnrichContactsHandler({
 			hunterConfig,
-			serpApiConfig,
+			searchClient,
 		});
 		const exportResults = createExportResultsHandler(ctx.store, exportConfig);
+
+		const logCacheStats = (toolName: string) => {
+			const { hits, misses } = searchClient.cacheStats;
+			ctx.logger.info(
+				`[${toolName}] Search cache: ${hits} hits, ${misses} misses`,
+			);
+		};
 
 		// Wrap handlers to persist intermediate results in plugin store
 		const wrappedDiscoverFranchises = async (
 			input: Record<string, unknown>,
 		) => {
+			// Don't clear any store state here — filter_icp rebuilds qualified_companies
+			// from discovered_brands + revenue_estimates each time it runs.
+			// Clearing here would wipe data if the AI retries discover mid-pipeline.
+
 			const result = await discoverFranchises(input);
+			logCacheStats("discover_franchises");
 			if (!result.is_error) {
 				try {
 					const parsed = JSON.parse(result.content);
-					if (parsed.brands) {
-						ctx.store.set("discovered_brands", parsed.brands);
-						ctx.logger.info(`Stored ${parsed.brands.length} discovered brands`);
-					}
+					// Merge new brands with existing for multi-NAICS pipelines
+					const existing =
+						(ctx.store.get("discovered_brands") as unknown[]) ?? [];
+					const toStore = parsed.allCandidates ?? parsed.brands ?? [];
+					ctx.store.set("discovered_brands", [...existing, ...toStore]);
+					ctx.logger.info(
+						`Stored ${toStore.length} new brands (${existing.length} existing, ${existing.length + toStore.length} total). ${parsed.qualifiedBrands} met location threshold.`,
+					);
 				} catch {
 					// Store result as-is if not JSON
 				}
@@ -99,6 +124,7 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 
 		const wrappedEstimateRevenue = async (input: Record<string, unknown>) => {
 			const result = await estimateRevenue(input);
+			logCacheStats("estimate_revenue");
 			if (!result.is_error) {
 				try {
 					const estimate = JSON.parse(result.content);
@@ -137,19 +163,27 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 
 		const wrappedMapToHq = async (input: Record<string, unknown>) => {
 			const result = await mapToHq(input);
+			logCacheStats("map_to_hq");
 			if (!result.is_error) {
 				try {
 					const hqData = JSON.parse(result.content);
-					// Update the matching qualified company in store
 					const companies =
 						(ctx.store.get("qualified_companies") as Array<
 							Record<string, unknown>
 						>) ?? [];
-					const idx = companies.findIndex(
-						(c) =>
-							(c.companyName as string)?.toLowerCase() ===
-							hqData.companyName?.toLowerCase(),
-					);
+					// Match on input name first (what the model passed), then output name
+					const inputName = (input.companyName as string)?.toLowerCase();
+					const outputName = hqData.companyName?.toLowerCase();
+					const idx = companies.findIndex((c) => {
+						const stored = (c.companyName as string)?.toLowerCase();
+						if (!stored) return false;
+						return (
+							stored === inputName ||
+							stored === outputName ||
+							(inputName && stored.includes(inputName)) ||
+							(inputName && inputName.includes(stored))
+						);
+					});
 					if (idx >= 0) {
 						companies[idx].hqAddress = hqData.hqAddress;
 						companies[idx].hqCity = hqData.hqCity;
@@ -157,9 +191,18 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 						companies[idx].hqDomain = hqData.hqDomain;
 						companies[idx].hqPhone = hqData.hqPhone;
 						ctx.store.set("qualified_companies", companies);
+						ctx.logger.info(
+							`Updated HQ data for ${companies[idx].companyName}`,
+						);
+					} else {
+						ctx.logger.warn(
+							`map_to_hq: no matching company in store for "${input.companyName}" (store has: ${companies.map((c) => c.companyName).join(", ")})`,
+						);
 					}
-				} catch {
-					// Ignore
+				} catch (err) {
+					ctx.logger.warn(
+						`map_to_hq wrapper failed to update store: ${err}`,
+					);
 				}
 			}
 			return result;
@@ -167,27 +210,48 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 
 		const wrappedEnrichContacts = async (input: Record<string, unknown>) => {
 			const result = await enrichContacts(input);
+			logCacheStats("enrich_contacts");
 			if (!result.is_error) {
 				try {
 					const contactData = JSON.parse(result.content);
-					// Update the matching qualified company in store
 					const companies =
 						(ctx.store.get("qualified_companies") as Array<
 							Record<string, unknown>
 						>) ?? [];
-					const idx = companies.findIndex(
-						(c) =>
-							(c.companyName as string)?.toLowerCase() ===
-								contactData.companyName?.toLowerCase() ||
-							(c.hqDomain as string)?.toLowerCase() ===
-								contactData.domain?.toLowerCase(),
-					);
+					// Match on input name/domain, output name/domain, or substring
+					const inputName = (input.companyName as string)?.toLowerCase();
+					const inputDomain = (input.domain as string)?.toLowerCase();
+					const outputName = contactData.companyName?.toLowerCase();
+					const outputDomain = contactData.domain?.toLowerCase();
+					const idx = companies.findIndex((c) => {
+						const storedName = (c.companyName as string)?.toLowerCase();
+						const storedDomain = (c.hqDomain as string)?.toLowerCase();
+						if (!storedName) return false;
+						return (
+							storedName === inputName ||
+							storedName === outputName ||
+							(storedDomain &&
+								(storedDomain === inputDomain ||
+									storedDomain === outputDomain)) ||
+							(inputName && storedName.includes(inputName)) ||
+							(inputName && inputName.includes(storedName))
+						);
+					});
 					if (idx >= 0) {
 						companies[idx].contacts = contactData.contacts ?? [];
 						ctx.store.set("qualified_companies", companies);
+						ctx.logger.info(
+							`Updated contacts for ${companies[idx].companyName}`,
+						);
+					} else {
+						ctx.logger.warn(
+							`enrich_contacts: no matching company in store for "${input.companyName ?? input.domain}" (store has: ${companies.map((c) => `${c.companyName}/${c.hqDomain}`).join(", ")})`,
+						);
 					}
-				} catch {
-					// Ignore
+				} catch (err) {
+					ctx.logger.warn(
+						`enrich_contacts wrapper failed to update store: ${err}`,
+					);
 				}
 			}
 			return result;
@@ -282,7 +346,7 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			{
 				name: "enrich_contacts",
 				description:
-					"Find VP Marketing / CMO contacts at a company HQ via Hunter.io domain search with LinkedIn fallback",
+					"Find VP Marketing / CMO contacts at a company HQ via Hunter.io domain search (pre-configured) with LinkedIn fallback. Call this for each qualified company BEFORE exporting.",
 				plugin: "icp-discovery",
 				input_schema: {
 					type: "object",
@@ -331,14 +395,14 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 
 	async health(): Promise<{ ok: boolean; details?: string }> {
 		const config = this.ctx?.config as Record<string, unknown> | undefined;
-		const hasSerpApi = !!(
-			(config?.serpApiKey as string) || process.env.SERP_API_KEY
+		const hasBraveApi = !!(
+			(config?.braveApiKey as string) || process.env.BRAVE_API_KEY
 		);
 
-		if (!hasSerpApi) {
+		if (!hasBraveApi) {
 			return {
 				ok: false,
-				details: "Missing API key: SERP_API_KEY",
+				details: "Missing API key: BRAVE_API_KEY",
 			};
 		}
 

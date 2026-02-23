@@ -3,13 +3,12 @@ import { resolve } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { scoreConfidence } from "../lib/confidence";
 import { stripCodeFences } from "../lib/parse-json";
+import type { CachedSearchClient } from "../lib/search-cache";
 import { searchEdgar } from "../lib/sec-edgar";
-import type { SerpApiConfig } from "../lib/serpapi";
-import { createSerpApiClient } from "../lib/serpapi";
 import type { RevenueEstimate, RevenueSource } from "../types";
 
 interface PluginDeps {
-	serpApiConfig: SerpApiConfig;
+	searchClient: CachedSearchClient;
 	anthropicApiKey: string;
 }
 
@@ -19,8 +18,8 @@ const PROMPT_PATH = resolve(
 );
 
 export function createEstimateRevenueHandler(deps: PluginDeps) {
-	const serpapi = createSerpApiClient(deps.serpApiConfig);
-	const claude = new Anthropic({ apiKey: deps.anthropicApiKey });
+	const serpapi = deps.searchClient;
+	const claude = new Anthropic({ apiKey: deps.anthropicApiKey, timeout: 60_000 });
 	const systemPrompt = readFileSync(PROMPT_PATH, "utf-8");
 
 	return async (

@@ -261,6 +261,162 @@ export function getChatScript(): string {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
 
+  function createStreamingBubble() {
+    var wrapper = document.createElement("div");
+    wrapper.className = "msg-wrapper";
+
+    var avatar = document.createElement("div");
+    avatar.className = "avatar bot-avatar";
+    avatar.textContent = "P";
+
+    var bubble = document.createElement("div");
+    bubble.className = "msg assistant";
+    bubble.innerHTML = '<div class="role">assistant</div>';
+
+    var mdDiv = document.createElement("div");
+    mdDiv.className = "md-content";
+    bubble.appendChild(mdDiv);
+
+    var activityDiv = document.createElement("div");
+    activityDiv.className = "activity-timeline";
+    activityDiv.style.display = "none";
+    bubble.appendChild(activityDiv);
+
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(bubble);
+    messagesDiv.insertBefore(wrapper, typingDiv);
+    return { wrapper: wrapper, mdDiv: mdDiv, activityDiv: activityDiv, _timers: [] };
+  }
+
+  function updateStreamContent(mdDiv, text) {
+    mdDiv.innerHTML = renderMarkdown(text);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  function addActivityStep(streamBubble, chunk) {
+    var activityDiv = streamBubble.activityDiv;
+    activityDiv.style.display = "";
+
+    if (chunk.type === "thinking") {
+      // Remove previous thinking indicator
+      var prev = activityDiv.querySelector(".activity-thinking");
+      if (prev) prev.remove();
+      var el = document.createElement("div");
+      el.className = "activity-thinking";
+      el.innerHTML = '<span class="activity-spinner"></span> Thinking...';
+      activityDiv.appendChild(el);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      return;
+    }
+
+    if (chunk.type === "roundtrip_start") {
+      // Remove previous thinking indicator
+      var thk = activityDiv.querySelector(".activity-thinking");
+      if (thk) thk.remove();
+      if (chunk.roundtrip > 0) {
+        var divider = document.createElement("div");
+        divider.className = "activity-roundtrip-divider";
+        divider.textContent = "Step " + (chunk.roundtrip + 1);
+        activityDiv.appendChild(divider);
+      }
+      // Always show a thinking indicator so the user sees immediate feedback
+      var thkEl = document.createElement("div");
+      thkEl.className = "activity-thinking";
+      thkEl.innerHTML = '<span class="activity-spinner"></span> Thinking...';
+      activityDiv.appendChild(thkEl);
+      // Hide the typing dots since the activity timeline now shows status
+      typingDiv.style.display = "none";
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      return;
+    }
+
+    if (chunk.type === "tool_start") {
+      // Remove thinking indicator
+      var thk2 = activityDiv.querySelector(".activity-thinking");
+      if (thk2) thk2.remove();
+
+      var id = "tool-" + (chunk.toolId || chunk.toolName).replace(/[^a-zA-Z0-9]/g, "_");
+      var step = document.createElement("div");
+      step.className = "activity-step running";
+      step.setAttribute("data-tool-id", id);
+
+      var label = chunk.toolSummary || chunk.toolName;
+      var durationSpan = '<span class="activity-duration" data-start="' + Date.now() + '">0.0s</span>';
+
+      step.innerHTML = '<div class="activity-step-header">'
+        + '<span class="activity-icon"><span class="activity-spinner"></span></span>'
+        + '<span class="activity-label">' + escapeHtml(label) + '</span>'
+        + durationSpan
+        + '</div>';
+
+      activityDiv.appendChild(step);
+
+      // Start live duration counter
+      var durEl = step.querySelector(".activity-duration");
+      var startTime = Date.now();
+      var timer = setInterval(function() {
+        var elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        durEl.textContent = elapsed + "s";
+      }, 100);
+      step._timer = timer;
+      streamBubble._timers.push(timer);
+
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      return;
+    }
+
+    if (chunk.type === "tool_end") {
+      var id2 = "tool-" + (chunk.toolId || chunk.toolName).replace(/[^a-zA-Z0-9]/g, "_");
+      var existing = activityDiv.querySelector("[data-tool-id='" + id2 + "']");
+      if (!existing) return;
+
+      // Stop timer
+      if (existing._timer) {
+        clearInterval(existing._timer);
+        existing._timer = null;
+      }
+
+      var isError = chunk.toolIsError;
+      existing.className = "activity-step " + (isError ? "error" : "done");
+
+      // Update icon
+      var iconEl = existing.querySelector(".activity-icon");
+      if (iconEl) {
+        iconEl.innerHTML = isError ? '<span style="color:var(--error);font-weight:600">\\u2717</span>' : '<span style="color:var(--success,#16a34a);font-weight:600">\\u2713</span>';
+      }
+
+      // Update duration
+      var durEl2 = existing.querySelector(".activity-duration");
+      if (durEl2 && chunk.durationMs !== undefined) {
+        var secs = (chunk.durationMs / 1000).toFixed(1);
+        durEl2.textContent = secs + "s";
+      }
+
+      // Add collapsible result preview
+      if (chunk.toolResult) {
+        var details = document.createElement("details");
+        details.className = "activity-details";
+        details.innerHTML = '<summary>Result</summary><div class="activity-result-preview">' + escapeHtml(chunk.toolResult) + '</div>';
+        existing.appendChild(details);
+      }
+
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      return;
+    }
+
+    if (chunk.type === "error") {
+      // Remove thinking indicator — error replaces it
+      var thk4 = activityDiv.querySelector(".activity-thinking");
+      if (thk4) thk4.remove();
+      var errCard = document.createElement("div");
+      errCard.className = "activity-error-card";
+      errCard.innerHTML = '<span style="font-weight:600;flex-shrink:0">\\u26A0</span> <span>' + escapeHtml(chunk.error || "Unknown error") + '</span>';
+      activityDiv.appendChild(errCard);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      return;
+    }
+  }
+
   window.sendMessage = function sendMessage() {
     var text = input.value.trim();
     if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
@@ -296,21 +452,94 @@ export function getChatScript(): string {
       payload.files = filesToSend.map(function(f) { return { data: f.data, mimeType: f.mimeType, name: f.name }; });
     }
 
-    fetch("/api/chat", {
+    var streamBubble = createStreamingBubble();
+    var fullText = "";
+
+    fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     })
-    .then(function(res) { return res.json(); })
-    .then(function(data) {
-      appendMsg("assistant", data.response || data.error || "No response", data.images);
-      localStorage.setItem(STORAGE_KEY, sessionId);
-      loadSessions();
+    .then(function(res) {
+      if (!res.ok) {
+        return res.json().then(function(d) { throw new Error(d.error || "Request failed"); });
+      }
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+
+      function pump() {
+        return reader.read().then(function(result) {
+          if (result.done) {
+            // Process any remaining buffer
+            if (buffer.trim()) {
+              processSSELines(buffer.split("\\n"));
+            }
+            finalize();
+            return;
+          }
+          buffer += decoder.decode(result.value, { stream: true });
+          var lines = buffer.split("\\n");
+          buffer = lines.pop() || "";
+          processSSELines(lines);
+          return pump();
+        });
+      }
+
+      function processSSELines(lines) {
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (line.startsWith("data: ")) {
+            try {
+              var chunk = JSON.parse(line.slice(6));
+              if (chunk.type === "text_delta" && chunk.text) {
+                fullText += chunk.text;
+                updateStreamContent(streamBubble.mdDiv, fullText);
+              } else if (chunk.type === "tool_start" || chunk.type === "tool_end" || chunk.type === "thinking" || chunk.type === "roundtrip_start") {
+                addActivityStep(streamBubble, chunk);
+              } else if (chunk.type === "error") {
+                addActivityStep(streamBubble, chunk);
+              }
+            } catch(e) { /* ignore parse errors */ }
+          }
+        }
+      }
+
+      function finalize() {
+        // Clean up: remove thinking indicator, stop timers
+        var thk = streamBubble.activityDiv.querySelector(".activity-thinking");
+        if (thk) thk.remove();
+        for (var t = 0; t < streamBubble._timers.length; t++) {
+          clearInterval(streamBubble._timers[t]);
+        }
+        streamBubble._timers = [];
+        // Mark any still-running steps as done
+        var running = streamBubble.activityDiv.querySelectorAll(".activity-step.running");
+        for (var r = 0; r < running.length; r++) {
+          running[r].className = "activity-step done";
+          var icon = running[r].querySelector(".activity-icon");
+          if (icon) icon.innerHTML = '<span style="color:var(--success,#16a34a);font-weight:600">\\u2713</span>';
+        }
+        // Only show fallback text if no text AND no activity content (errors/tools)
+        var hasActivity = streamBubble.activityDiv.children.length > 0;
+        if (!fullText && !hasActivity) {
+          streamBubble.mdDiv.innerHTML = "<p>No response</p>";
+        }
+        if (!hasActivity) {
+          streamBubble.activityDiv.style.display = "none";
+        }
+        localStorage.setItem(STORAGE_KEY, sessionId);
+        loadSessions();
+        sendBtn.disabled = false;
+        typingDiv.style.display = "none";
+      }
+
+      return pump();
     })
     .catch(function(err) {
-      appendMsg("assistant", "Error: " + err.message);
-    })
-    .finally(function() {
+      if (!fullText) {
+        streamBubble.mdDiv.innerHTML = "<p>Error: " + escapeHtml(err.message) + "</p>";
+      }
       sendBtn.disabled = false;
       typingDiv.style.display = "none";
     });
@@ -578,7 +807,7 @@ export function getChatScript(): string {
     iframe.src = "/api/canvas/preview/" + encodeURIComponent(path);
     iframe.className = "hidden";
     iframe.style.background = "#fff";
-    iframe.sandbox = "allow-scripts allow-same-origin";
+    iframe.sandbox = "allow-scripts";
     canvasTabContent.appendChild(iframe);
     var tab = { id: id, path: path, iframeEl: iframe };
     canvasTabs.push(tab);
@@ -791,7 +1020,7 @@ export function getChatScript(): string {
 
   var canvasWaitingForResponse = false;
   var canvasPollInterval = 10000; // idle: 10s
-  var CANVAS_POLL_FAST = 1000;   // active: 1s
+  var CANVAS_POLL_FAST = 2000;   // active: 2s (stays under 60 req/min API rate limit)
   var CANVAS_POLL_IDLE = 10000;  // idle: 10s
   var canvasPollTimer = null;
 
@@ -1079,7 +1308,13 @@ export function getChatScript(): string {
     if (welcome) welcome.remove();
 
     appendMsg("user", text, userImageUrls, userFileNames);
-    showCanvasThinking();
+
+    var sendBtn = document.getElementById("send-btn");
+    sendBtn.disabled = true;
+
+    // Show working status in canvas bar
+    if (canvasStatusDot) { canvasStatusDot.className = "dot working"; }
+    if (canvasStatusText) { canvasStatusText.textContent = "Working..."; }
 
     var payload = { sessionId: canvasSessionId, message: text };
     if (imagesToSend.length > 0) {
@@ -1089,6 +1324,7 @@ export function getChatScript(): string {
       payload.files = filesToSend.map(function(f) { return { data: f.data, mimeType: f.mimeType, name: f.name }; });
     }
 
+    // Use async POST + polling instead of SSE to avoid Bun chunked encoding issues on long-running streams
     fetch("/api/canvas/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1096,11 +1332,20 @@ export function getChatScript(): string {
       body: JSON.stringify(payload),
     })
     .then(function(res) {
-      if (!res.ok) return res.json().then(function(d) { throw new Error(d.error || "Request failed"); });
+      if (!res.ok) {
+        return res.json().then(function(d) { throw new Error(d.error || "Request failed"); });
+      }
+      // Start fast polling to pick up streaming chunks
+      canvasWaitingForResponse = true;
+      canvasPollInterval = CANVAS_POLL_FAST;
+      if (canvasPollTimer) clearTimeout(canvasPollTimer);
+      scheduleNextPoll();
     })
     .catch(function(err) {
-      hideCanvasThinking();
-      appendMsg("assistant", "Failed to send: " + err.message);
+      appendMsg("assistant", "Failed to send: " + escapeHtml(err.message));
+      sendBtn.disabled = false;
+      if (canvasStatusDot) { canvasStatusDot.className = "dot connected"; }
+      if (canvasStatusText) { canvasStatusText.textContent = "Connected"; }
     });
   };
 
@@ -1395,6 +1640,10 @@ export function getChatScript(): string {
   };
 
   // B4: Enhanced polling to track file changes for diff view
+  // Streaming state for chunk events received via polling
+  var canvasStreamBubble = null;
+  var canvasStreamFullText = "";
+
   pollCanvasEvents = function() {
     if (!canvasPolling) return;
     fetch("/api/canvas/events?sessionId=" + encodeURIComponent(canvasSessionId) + "&since=" + canvasLastEventId, { credentials: "same-origin" })
@@ -1404,6 +1653,16 @@ export function getChatScript(): string {
           if (canvasStatusDot) { canvasStatusDot.className = "dot"; }
           if (canvasStatusText) { canvasStatusText.textContent = "Session expired — please refresh"; }
           return null;
+        }
+        if (r.status === 429) {
+          // Rate limited — back off then retry
+          var retryAfter = parseInt(r.headers.get("Retry-After") || "5", 10);
+          canvasPollInterval = Math.max(retryAfter * 1000, 5000);
+          return null;
+        }
+        // Restore fast interval after successful poll if still waiting
+        if (canvasWaitingForResponse && canvasPollInterval > CANVAS_POLL_FAST) {
+          canvasPollInterval = CANVAS_POLL_FAST;
         }
         return r.json();
       })
@@ -1415,7 +1674,70 @@ export function getChatScript(): string {
         for (var i = 0; i < events.length; i++) {
           var evt = events[i];
           if (evt.id > canvasLastEventId) canvasLastEventId = evt.id;
-          if (evt.event === "message" && evt.data) {
+          if (evt.event === "chunk" && evt.data) {
+            var chunk = evt.data;
+            if (chunk.type === "text_delta" && chunk.text) {
+              if (!canvasStreamBubble) {
+                hideCanvasThinking();
+                canvasStreamBubble = createStreamingBubble();
+                canvasStreamFullText = "";
+              }
+              canvasStreamFullText += chunk.text;
+              updateStreamContent(canvasStreamBubble.mdDiv, canvasStreamFullText);
+            } else if (chunk.type === "tool_start" || chunk.type === "tool_end" || chunk.type === "thinking" || chunk.type === "roundtrip_start") {
+              if (!canvasStreamBubble) {
+                hideCanvasThinking();
+                canvasStreamBubble = createStreamingBubble();
+                canvasStreamFullText = "";
+              }
+              addActivityStep(canvasStreamBubble, chunk);
+              if (chunk.type === "tool_end" && chunk.toolName === "canvas_write") {
+                debouncedCanvasRefresh();
+                debouncedRefreshFiles();
+              }
+            } else if (chunk.type === "error") {
+              if (!canvasStreamBubble) {
+                hideCanvasThinking();
+                canvasStreamBubble = createStreamingBubble();
+                canvasStreamFullText = "";
+              }
+              addActivityStep(canvasStreamBubble, chunk);
+            } else if (chunk.type === "done") {
+              // Finalize the streaming bubble
+              if (canvasStreamBubble) {
+                var thk = canvasStreamBubble.activityDiv.querySelector(".activity-thinking");
+                if (thk) thk.remove();
+                for (var t = 0; t < canvasStreamBubble._timers.length; t++) {
+                  clearInterval(canvasStreamBubble._timers[t]);
+                }
+                canvasStreamBubble._timers = [];
+                var running = canvasStreamBubble.activityDiv.querySelectorAll(".activity-step.running");
+                for (var r = 0; r < running.length; r++) {
+                  running[r].className = "activity-step done";
+                  var icon = running[r].querySelector(".activity-icon");
+                  if (icon) icon.innerHTML = '<span style="color:var(--success,#16a34a);font-weight:600">\\u2713</span>';
+                }
+                var hasActivity = canvasStreamBubble.activityDiv.children.length > 0;
+                if (!canvasStreamFullText && !hasActivity) {
+                  canvasStreamBubble.mdDiv.innerHTML = "<p>Done — canvas updated.</p>";
+                }
+                if (!hasActivity) {
+                  canvasStreamBubble.activityDiv.style.display = "none";
+                }
+              }
+              hideCanvasThinking();
+              canvasStreamBubble = null;
+              canvasStreamFullText = "";
+              canvasWaitingForResponse = false;
+              canvasPollInterval = CANVAS_POLL_IDLE;
+              if (canvasStatusDot) { canvasStatusDot.className = "dot connected"; }
+              if (canvasStatusText) { canvasStatusText.textContent = "Connected"; }
+              var sendBtn = document.getElementById("send-btn");
+              if (sendBtn) sendBtn.disabled = false;
+              debouncedCanvasRefresh();
+              debouncedRefreshFiles();
+            }
+          } else if (evt.event === "message" && evt.data) {
             hideCanvasThinking();
             canvasWaitingForResponse = false;
             canvasPollInterval = CANVAS_POLL_IDLE;
@@ -1425,6 +1747,8 @@ export function getChatScript(): string {
             canvasWaitingForResponse = false;
             canvasPollInterval = CANVAS_POLL_IDLE;
             appendMsg("assistant", "Error: " + (evt.data.message || "Unknown error"));
+            var sendBtn2 = document.getElementById("send-btn");
+            if (sendBtn2) sendBtn2.disabled = false;
           } else if (evt.event === "file-changed") {
             hadFileChange = true;
             var changed = evt.data && evt.data.path ? evt.data.path : "";

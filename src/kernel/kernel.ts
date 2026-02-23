@@ -9,7 +9,11 @@ import { OpenAIProvider } from "../ai/openai-provider.js";
 import { GeminiProvider } from "../ai/gemini-provider.js";
 import { ToolRegistry } from "../ai/tools.js";
 import { buildSystemPrompt } from "../ai/system-prompt.js";
-import type { AIProvider, ChatMessage } from "../ai/base-provider.js";
+import type {
+	AIProvider,
+	ChatMessage,
+	StreamChunk,
+} from "../ai/base-provider.js";
 import type { ToolDefinition } from "../types/message.js";
 import { getDb, closeDb } from "../store/db.js";
 import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
@@ -96,23 +100,26 @@ export class Kernel {
 			this.toolRegistry.setSandbox(this.sandbox, true);
 		}
 
+		// ai.maxToolRoundtrips applies to ALL providers
+		const maxRoundtrips = config.ai.maxToolRoundtrips;
+
 		if (config.provider === "ollama") {
 			this.provider = new OllamaProvider(
-				config.ollama,
+				{ ...config.ollama, maxToolRoundtrips: maxRoundtrips },
 				this.toolRegistry,
 				aiLogger,
 				this.skillManager,
 			);
 		} else if (config.provider === "openai") {
 			this.provider = new OpenAIProvider(
-				config.openai,
+				{ ...config.openai, maxToolRoundtrips: maxRoundtrips },
 				this.toolRegistry,
 				aiLogger,
 				this.skillManager,
 			);
 		} else if (config.provider === "gemini") {
 			this.provider = new GeminiProvider(
-				config.gemini,
+				{ ...config.gemini, maxToolRoundtrips: maxRoundtrips },
 				this.toolRegistry,
 				aiLogger,
 				this.skillManager,
@@ -581,6 +588,186 @@ export class Kernel {
 				content: userMessage,
 				metadata: msg.metadata,
 			});
+		}
+	}
+
+	private async prepareChat(msg: InboundMessage): Promise<{
+		messages: ChatMessage[];
+		systemPrompt: string;
+	} | null> {
+		// Internal system channels (cron, heartbeat) bypass rate limiting and access control
+		const INTERNAL_CHANNELS = new Set(["cron", "heartbeat"]);
+		const isInternal = INTERNAL_CHANNELS.has(msg.channel);
+
+		// Rate limiting (skip for internal channels)
+		if (!isInternal && this.rateLimiter) {
+			const { allowed } = this.rateLimiter.check(msg.user.id);
+			if (!allowed) {
+				return null;
+			}
+		}
+
+		// Access control (pairing code system) — skip for internal channels
+		if (
+			!isInternal &&
+			this.accessController &&
+			!this.accessController.isUserApproved(msg.user.id, msg.channel)
+		) {
+			return null;
+		}
+
+		const session = getOrCreateSession(
+			this.db,
+			msg.sessionId,
+			msg.channel,
+			msg.user.id,
+		);
+		appendMessage(this.db, msg.sessionId, "user", msg.content);
+
+		if (!session.title) {
+			const title =
+				msg.content.length > 80
+					? msg.content.slice(0, 80) + "..."
+					: msg.content;
+			updateSessionTitle(this.db, msg.sessionId, title);
+		}
+
+		const history = getSessionMessages(
+			this.db,
+			msg.sessionId,
+			this.config.store.messageHistoryLimit,
+		);
+		const messages: ChatMessage[] = history.map((m) => ({
+			role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+			content: m.content,
+		}));
+
+		if (msg.attachments && msg.attachments.length > 0 && messages.length > 0) {
+			const lastMsg = messages[messages.length - 1];
+			if (lastMsg.role === "user") {
+				lastMsg.attachments = msg.attachments;
+			}
+		}
+
+		let memoryContext: string | undefined;
+		if (this.memoryStore && msg.channel !== "canvas") {
+			try {
+				const [userMemories, globalMemories] = await Promise.all([
+					this.memoryStore.recall(msg.content, {
+						limit: 3,
+						scope: msg.user.id,
+					}),
+					this.memoryStore.recall(msg.content, { limit: 3, scope: "global" }),
+				]);
+
+				const allMemories = [...userMemories, ...globalMemories];
+				const seen = new Set<string>();
+				const unique = allMemories.filter((m) => {
+					if (seen.has(m.id)) return false;
+					seen.add(m.id);
+					return true;
+				});
+
+				if (unique.length > 0) {
+					memoryContext = unique
+						.map((m) => `- [${m.metadata.category}] ${m.text}`)
+						.join("\n");
+					await this.bus.emit("memory:recalled", {
+						query: msg.content,
+						resultCount: unique.length,
+					});
+				}
+			} catch (err) {
+				this.logger.warn("Memory recall failed", { error: String(err) });
+			}
+		}
+
+		let agentName = this.config.agent.name;
+		let agentPrompt = this.config.agent.systemPrompt;
+		try {
+			const { readConfigOverrides } = await import("../config/writer.js");
+			const overrides = readConfigOverrides();
+			const agentOverrides = overrides.agent as
+				| { name?: string; systemPrompt?: string }
+				| undefined;
+			if (agentOverrides?.name) agentName = agentOverrides.name;
+			if (agentOverrides?.systemPrompt)
+				agentPrompt = agentOverrides.systemPrompt;
+		} catch {
+			/* use boot-time config */
+		}
+
+		const systemPrompt = buildSystemPrompt({
+			agentName,
+			customPrompt: agentPrompt || undefined,
+			memoryContext,
+			skillCatalog: this.skillManager.getCatalogPrompt(),
+		});
+
+		if (msg.channel === "canvas") {
+			this.skillManager.activateSkill(msg.sessionId, "canvas");
+		}
+
+		return { messages, systemPrompt };
+	}
+
+	async *handleInboundStream(msg: InboundMessage): AsyncGenerator<StreamChunk> {
+		this.logger.info("Inbound stream message", {
+			channel: msg.channel,
+			sessionId: msg.sessionId,
+			user: msg.user.id,
+		});
+
+		const prepared = await this.prepareChat(msg);
+		if (!prepared) {
+			yield { type: "error", error: "Access denied or rate limited" };
+			yield { type: "done" };
+			return;
+		}
+
+		const { messages, systemPrompt } = prepared;
+		let fullText = "";
+
+		try {
+			if (this.provider.chatStream) {
+				for await (const chunk of this.provider.chatStream(
+					messages,
+					systemPrompt,
+					msg.sessionId,
+				)) {
+					if (chunk.type === "text_delta" && chunk.text) {
+						fullText += chunk.text;
+					}
+					yield chunk;
+				}
+			} else {
+				yield { type: "thinking" } as StreamChunk;
+				const response = await this.provider.chat(
+					messages,
+					systemPrompt,
+					msg.sessionId,
+				);
+				fullText = response.text;
+				yield { type: "text_delta", text: response.text };
+				yield { type: "done" };
+			}
+
+			const replyText = fullText || "";
+			appendMessage(this.db, msg.sessionId, "assistant", replyText);
+
+			if (
+				this.memoryStore &&
+				this.config.memory.autoExtract &&
+				msg.channel !== "canvas"
+			) {
+				this.autoExtractMemories(msg, replyText).catch((err) => {
+					this.logger.warn("Auto-extract failed", { error: String(err) });
+				});
+			}
+		} catch (err) {
+			this.logger.error("Stream error", { error: String(err) });
+			yield { type: "error", error: String(err) };
+			yield { type: "done" };
 		}
 	}
 
