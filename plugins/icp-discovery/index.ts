@@ -109,11 +109,16 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 					const parsed = JSON.parse(result.content);
 					// Merge new brands with existing for multi-NAICS pipelines
 					const existing =
-						(ctx.store.get("discovered_brands") as unknown[]) ?? [];
+						(ctx.store.get("discovered_brands") as Array<{ name?: string }>) ?? [];
 					const toStore = parsed.allCandidates ?? parsed.brands ?? [];
-					ctx.store.set("discovered_brands", [...existing, ...toStore]);
+					// Filter out invalid entries (e.g. prose refusals stored by older code)
+					const isValidBrand = (b: { name?: string }) =>
+						b.name && b.name.length <= 60 && !/\b(cannot|because|extract|provided|results)\b/i.test(b.name);
+					const cleaned = [...existing.filter(isValidBrand), ...toStore];
+					ctx.store.set("discovered_brands", cleaned);
+					const removed = existing.length - (cleaned.length - toStore.length);
 					ctx.logger.info(
-						`Stored ${toStore.length} new brands (${existing.length} existing, ${existing.length + toStore.length} total). ${parsed.qualifiedBrands} met location threshold.`,
+						`Stored ${toStore.length} new brands (${cleaned.length} total${removed > 0 ? `, removed ${removed} invalid` : ""}). ${parsed.qualifiedBrands} met location threshold.`,
 					);
 				} catch {
 					// Store result as-is if not JSON
@@ -136,6 +141,26 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 					ctx.logger.info(
 						`Stored revenue estimate for ${estimate.companyName} (${existing.length} total)`,
 					);
+					// Auto-register brand in discovered_brands if not already there
+					// so filter_icp works even when AI bypasses discover_franchises
+					const brands =
+						(ctx.store.get("discovered_brands") as Array<{ name: string }>) ?? [];
+					const brandName = estimate.companyName as string;
+					if (
+						brandName &&
+						!brands.some(
+							(b) => b.name?.toLowerCase() === brandName.toLowerCase(),
+						)
+					) {
+						brands.push({
+							name: brandName,
+							naicsCode: "",
+							naicsDescription: "",
+							estimatedLocations: 0,
+							sources: [],
+						});
+						ctx.store.set("discovered_brands", brands);
+					}
 				} catch {
 					// Ignore parse errors
 				}
@@ -195,8 +220,23 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 							`Updated HQ data for ${companies[idx].companyName}`,
 						);
 					} else {
-						ctx.logger.warn(
-							`map_to_hq: no matching company in store for "${input.companyName}" (store has: ${companies.map((c) => c.companyName).join(", ")})`,
+						// Create new entry so data isn't lost when AI bypasses filter_icp
+						companies.push({
+							companyName: hqData.companyName || input.companyName,
+							naicsCode: "",
+							naicsDescription: "",
+							estimatedLocations: 0,
+							revenueEstimate: {},
+							contacts: [],
+							hqAddress: hqData.hqAddress,
+							hqCity: hqData.hqCity,
+							hqState: hqData.hqState,
+							hqDomain: hqData.hqDomain,
+							hqPhone: hqData.hqPhone,
+						});
+						ctx.store.set("qualified_companies", companies);
+						ctx.logger.info(
+							`Created new store entry with HQ data for ${input.companyName}`,
 						);
 					}
 				} catch (err) {
@@ -244,8 +284,25 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 							`Updated contacts for ${companies[idx].companyName}`,
 						);
 					} else {
-						ctx.logger.warn(
-							`enrich_contacts: no matching company in store for "${input.companyName ?? input.domain}" (store has: ${companies.map((c) => `${c.companyName}/${c.hqDomain}`).join(", ")})`,
+						// Create new entry so data isn't lost when AI bypasses filter_icp
+						companies.push({
+							companyName:
+								contactData.companyName ||
+								input.companyName ||
+								input.domain,
+							naicsCode: "",
+							naicsDescription: "",
+							estimatedLocations: 0,
+							revenueEstimate: {},
+							contacts: contactData.contacts ?? [],
+							hqDomain:
+								contactData.domain ||
+								(input.domain as string) ||
+								"",
+						});
+						ctx.store.set("qualified_companies", companies);
+						ctx.logger.info(
+							`Created new store entry with contacts for ${input.companyName ?? input.domain}`,
 						);
 					}
 				} catch (err) {
