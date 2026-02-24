@@ -94,6 +94,31 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			);
 		};
 
+		// Deduplicate qualified_companies by company name (keeps first/most complete entry)
+		const dedupeCompanies = (
+			companies: Array<Record<string, unknown>>,
+		): Array<Record<string, unknown>> => {
+			const seen = new Map<string, number>();
+			for (let i = 0; i < companies.length; i++) {
+				const name = (companies[i].companyName as string)?.toLowerCase();
+				if (!name) continue;
+				if (seen.has(name)) {
+					// Merge: copy non-null fields from duplicate into the first entry
+					const firstIdx = seen.get(name)!;
+					for (const [key, val] of Object.entries(companies[i])) {
+						if (val && !companies[firstIdx][key]) {
+							companies[firstIdx][key] = val;
+						}
+					}
+					companies.splice(i, 1);
+					i--;
+				} else {
+					seen.set(name, i);
+				}
+			}
+			return companies;
+		};
+
 		// Wrap handlers to persist intermediate results in plugin store
 		const wrappedDiscoverFranchises = async (
 			input: Record<string, unknown>,
@@ -144,12 +169,12 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 					// Auto-register brand in discovered_brands if not already there
 					// so filter_icp works even when AI bypasses discover_franchises
 					const brands =
-						(ctx.store.get("discovered_brands") as Array<{ name: string }>) ?? [];
+						(ctx.store.get("discovered_brands") as Array<Record<string, unknown>>) ?? [];
 					const brandName = estimate.companyName as string;
 					if (
 						brandName &&
 						!brands.some(
-							(b) => b.name?.toLowerCase() === brandName.toLowerCase(),
+							(b) => (b.name as string)?.toLowerCase() === brandName.toLowerCase(),
 						)
 					) {
 						brands.push({
@@ -210,11 +235,12 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 						);
 					});
 					if (idx >= 0) {
-						companies[idx].hqAddress = hqData.hqAddress;
-						companies[idx].hqCity = hqData.hqCity;
-						companies[idx].hqState = hqData.hqState;
-						companies[idx].hqDomain = hqData.hqDomain;
-						companies[idx].hqPhone = hqData.hqPhone;
+						// Only overwrite with non-null values to avoid clobbering good data
+						if (hqData.hqAddress) companies[idx].hqAddress = hqData.hqAddress;
+						if (hqData.hqCity) companies[idx].hqCity = hqData.hqCity;
+						if (hqData.hqState) companies[idx].hqState = hqData.hqState;
+						if (hqData.hqDomain) companies[idx].hqDomain = hqData.hqDomain;
+						if (hqData.hqPhone) companies[idx].hqPhone = hqData.hqPhone;
 						ctx.store.set("qualified_companies", companies);
 						ctx.logger.info(
 							`Updated HQ data for ${companies[idx].companyName}`,
@@ -234,6 +260,7 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 							hqDomain: hqData.hqDomain,
 							hqPhone: hqData.hqPhone,
 						});
+						dedupeCompanies(companies);
 						ctx.store.set("qualified_companies", companies);
 						ctx.logger.info(
 							`Created new store entry with HQ data for ${input.companyName}`,
@@ -300,6 +327,7 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 								(input.domain as string) ||
 								"",
 						});
+						dedupeCompanies(companies);
 						ctx.store.set("qualified_companies", companies);
 						ctx.logger.info(
 							`Created new store entry with contacts for ${input.companyName ?? input.domain}`,

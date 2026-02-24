@@ -144,26 +144,20 @@ export function createExportResultsHandler(
 				};
 			}
 
-			// Warn if HQ or contacts haven't been enriched yet
+			// Track incomplete entries but don't block export
 			const missingHq = companies.filter((c) => !c.hqDomain);
 			const missingContacts = companies.filter(
 				(c) => !c.contacts || c.contacts.length === 0,
 			);
-			if (missingHq.length > 0 || missingContacts.length > 0) {
-				const warnings: string[] = [];
-				if (missingHq.length > 0)
-					warnings.push(
-						`${missingHq.length} companies missing HQ data — run map_to_hq for each first`,
-					);
-				if (missingContacts.length > 0)
-					warnings.push(
-						`${missingContacts.length} companies missing contacts — run enrich_contacts for each first`,
-					);
-				return {
-					content: `Export blocked: ${warnings.join("; ")}. Run these tools before exporting.`,
-					is_error: true,
-				};
-			}
+			const warnings: string[] = [];
+			if (missingHq.length > 0)
+				warnings.push(
+					`${missingHq.length} companies missing HQ data`,
+				);
+			if (missingContacts.length > 0)
+				warnings.push(
+					`${missingContacts.length} companies missing contacts`,
+				);
 
 			const outputDir = config.outputDir ?? "./data";
 			const timestamp = new Date()
@@ -171,12 +165,17 @@ export function createExportResultsHandler(
 				.replace(/[:.]/g, "-")
 				.slice(0, 19);
 
+			const warnSuffix =
+				warnings.length > 0
+					? ` (Note: ${warnings.join("; ")})`
+					: "";
+
 			if (format === "csv") {
 				const csv = toCsv(companies);
 				const filePath = resolve(outputDir, `qualified_leads_${timestamp}.csv`);
 				writeFileSync(filePath, csv, "utf-8");
 				return {
-					content: `Exported ${companies.length} companies to CSV: ${filePath}`,
+					content: `Exported ${companies.length} companies to CSV: ${filePath}${warnSuffix}`,
 				};
 			}
 
@@ -187,7 +186,7 @@ export function createExportResultsHandler(
 				);
 				writeFileSync(filePath, JSON.stringify(companies, null, 2), "utf-8");
 				return {
-					content: `Exported ${companies.length} companies to JSON: ${filePath}`,
+					content: `Exported ${companies.length} companies to JSON: ${filePath}${warnSuffix}`,
 				};
 			}
 
