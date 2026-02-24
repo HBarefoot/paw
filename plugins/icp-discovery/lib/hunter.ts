@@ -1,4 +1,5 @@
 const BASE_URL = "https://api.hunter.io/v2/domain-search";
+const VERIFIER_URL = "https://api.hunter.io/v2/email-verifier";
 
 export interface HunterConfig {
 	apiKey: string;
@@ -21,7 +22,14 @@ export interface HunterResponse {
 		organization: string;
 		emails?: HunterContact[];
 	};
+	meta?: { params?: { remaining?: number } };
 	errors?: Array<{ id: string; detail: string }>;
+}
+
+export interface EmailVerifyResult {
+	status: string;
+	score: number;
+	email: string;
 }
 
 export interface DomainSearchOptions {
@@ -64,7 +72,7 @@ export function createHunterClient(config: HunterConfig) {
 			for (let attempt = 0; attempt < 3; attempt++) {
 				res = await fetch(`${BASE_URL}?${params}`);
 				if (res.status === 429) {
-					// Rate limited — wait with exponential backoff then retry
+					console.log(`[hunter.io] Rate limited for ${domain}, retry ${attempt + 1}/3`);
 					await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
 					continue;
 				}
@@ -72,16 +80,23 @@ export function createHunterClient(config: HunterConfig) {
 			}
 			if (!res || !res.ok) {
 				const text = await res?.text().catch(() => "unknown error");
+				console.error(`[hunter.io] API error for ${domain}: ${res?.status ?? "no response"} ${text}`);
 				throw new Error(`Hunter.io search failed (${res?.status ?? "no response"}): ${text}`);
 			}
 
 			const data = (await res.json()) as HunterResponse;
+			const emailCount = data.data?.emails?.length ?? 0;
+			const remaining = data.meta?.params?.remaining ?? "unknown";
+			console.log(`[hunter.io] Domain: ${domain}${dept ? ` dept=${dept}` : ""} | Status: ${res.status} | Results: ${emailCount} | Quota remaining: ${remaining}`);
+
 			if (data.errors?.length) {
+				console.error(`[hunter.io] Error for ${domain}: ${data.errors[0].detail}`);
 				throw new Error(`Hunter.io error: ${data.errors[0].detail}`);
 			}
 
 			for (const contact of data.data?.emails ?? []) {
-				if (contact.confidence >= 50 && !seenEmails.has(contact.value)) {
+				// Accept contacts with confidence >= 30 (lowered from 50 to improve hit rate)
+				if (contact.confidence >= 30 && !seenEmails.has(contact.value)) {
 					seenEmails.add(contact.value);
 					// If seniority filter has multiple values, filter client-side
 					if (
@@ -100,5 +115,24 @@ export function createHunterClient(config: HunterConfig) {
 		return allContacts;
 	}
 
-	return { domainSearch };
+	async function verifyEmail(email: string): Promise<EmailVerifyResult | null> {
+		try {
+			const params = new URLSearchParams({
+				email,
+				api_key: config.apiKey,
+			});
+			const res = await fetch(`${VERIFIER_URL}?${params}`);
+			if (!res.ok) {
+				console.log(`[hunter.io] Email verify failed for ${email}: ${res.status}`);
+				return null;
+			}
+			const data = (await res.json()) as { data?: { status: string; score: number; email: string } };
+			console.log(`[hunter.io] Email verify: ${email} → ${data.data?.status} (score: ${data.data?.score})`);
+			return data.data ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	return { domainSearch, verifyEmail };
 }

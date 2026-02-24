@@ -1938,10 +1938,6 @@ export function createWebApp(
 
 	app.get("/api/sessions/:id/messages", (c) => {
 		const id = c.req.param("id");
-		// Canvas sessions are in-memory only, not in SQLite
-		if (id.startsWith("canvas-")) {
-			return c.json({ session: { id }, messages: [] });
-		}
 		const data = getSessionWithMessages(kernel.database, id);
 		if (!data) return c.json({ error: "Session not found" }, 404);
 		return c.json({ session: data.session, messages: data.messages });

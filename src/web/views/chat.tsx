@@ -255,6 +255,37 @@ export function getChatScript(): string {
           });
         }
       });
+  } else {
+    // No saved session — try to auto-restore the most recent web session
+    fetch("/api/sessions?limit=20")
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var sessions = data.sessions || [];
+        // Find the most recent web or canvas session with messages
+        for (var i = 0; i < sessions.length; i++) {
+          var s = sessions[i];
+          if (s.channel === "web" || s.channel === "canvas") {
+            sessionId = s.id;
+            document.getElementById("chat-container").dataset.sessionId = sessionId;
+            localStorage.setItem(STORAGE_KEY, sessionId);
+            // Update selector
+            if (selector) selector.value = sessionId;
+            // Load messages for this session
+            return fetch("/api/sessions/" + sessionId + "/messages")
+              .then(function(r) { return r.json(); })
+              .then(function(msgData) {
+                if (msgData.messages && msgData.messages.length > 0) {
+                  var welcome = messagesDiv.querySelector(".chat-welcome");
+                  if (welcome) welcome.remove();
+                  msgData.messages.forEach(function(m) {
+                    appendMsg(m.role === "user" ? "user" : "assistant", m.content);
+                  });
+                }
+              });
+          }
+        }
+      })
+      .catch(function() { /* ignore — fresh session is fine */ });
   }
 
   input.addEventListener("keydown", function(e) {
@@ -443,6 +474,9 @@ export function getChatScript(): string {
     // Show typing indicator
     typingDiv.style.display = "flex";
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+    // Save session ID to localStorage BEFORE sending so it survives mid-stream reloads
+    localStorage.setItem(STORAGE_KEY, sessionId);
 
     var payload = { sessionId: sessionId, message: text };
     if (imagesToSend.length > 0) {

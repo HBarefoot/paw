@@ -12,25 +12,43 @@ interface ExportConfig {
 	outputDir?: string;
 }
 
+// Sanity check: does the contact title reference a different company?
+function isContactMismatch(contactTitle: string | undefined, companyName: string): boolean {
+	if (!contactTitle) return false;
+	const companyInTitle = contactTitle.match(/(?:\bat\b|[-–—],|\|)\s*(.+?)$/i);
+	if (!companyInTitle) return false;
+	const extracted = companyInTitle[1].trim().toLowerCase().replace(/[^a-z0-9\s]/g, "");
+	const target = companyName.toLowerCase().replace(/[^a-z0-9\s]/g, "");
+	if (!extracted || !target) return false;
+	if (extracted.includes(target) || target.includes(extracted)) return false;
+	const targetWords = target.split(/\s+/).filter(w => w.length > 2);
+	return targetWords.length > 0 && !targetWords.some(w => extracted.includes(w));
+}
+
 function flattenCompany(
 	company: QualifiedCompany,
 	runId: string,
 ): Record<string, unknown> {
-	const bestContact = company.contacts[0];
+	let bestContact = company.contacts[0];
+	// Clear mismatched contact at export time as a safety net
+	if (bestContact && isContactMismatch(bestContact.title, company.companyName)) {
+		console.warn(`[icp-discovery] Export mismatch: "${bestContact.name}" title "${bestContact.title}" doesn't match ${company.companyName} — clearing contact`);
+		bestContact = undefined as unknown as typeof bestContact;
+	}
 	return {
 		companyName: company.companyName,
 		naicsCode: company.naicsCode,
 		naicsDescription: company.naicsDescription ?? "",
 		estimatedLocations: company.estimatedLocations,
 		locationMethodology: "Google Maps metro sampling",
-		estimatedRevenueLow: company.revenueEstimate.revenueLow,
-		estimatedRevenueMid: company.revenueEstimate.revenueMid,
-		estimatedRevenueHigh: company.revenueEstimate.revenueHigh,
+		estimatedRevenueLow: company.revenueEstimate?.revenueLow ?? null,
+		estimatedRevenueMid: company.revenueEstimate?.revenueMid ?? null,
+		estimatedRevenueHigh: company.revenueEstimate?.revenueHigh ?? null,
 		revenueConfidence: (
-			company.revenueEstimate.confidence || "LOW"
+			company.revenueEstimate?.confidence || "LOW"
 		).toUpperCase(),
-		revenueSources: JSON.stringify(company.revenueEstimate.sources),
-		revenueReasoning: company.revenueEstimate.reasoning,
+		revenueSources: JSON.stringify(company.revenueEstimate?.sources ?? []),
+		revenueReasoning: company.revenueEstimate?.reasoning ?? "",
 		hqAddress: company.hqAddress ?? "",
 		hqCity: company.hqCity ?? "",
 		hqState: company.hqState ?? "",
@@ -142,6 +160,25 @@ export function createExportResultsHandler(
 						"The ICP pipeline ran but 0 companies passed the filters. Try lowering minRevenue or minLocations thresholds in filter_icp, or run discover_franchises for additional NAICS codes.",
 					is_error: true,
 				};
+			}
+
+			// Join revenue_estimates into companies missing revenue data
+			const revenueEstimates = (store.get("revenue_estimates") as Array<Record<string, unknown>>) ?? [];
+			if (revenueEstimates.length > 0) {
+				const revLookup = new Map<string, Record<string, unknown>>();
+				for (const rev of revenueEstimates) {
+					const name = (rev.companyName as string)?.toLowerCase();
+					if (name) revLookup.set(name, rev);
+				}
+				for (const company of companies) {
+					const rev = company.revenueEstimate;
+					if (!rev || !rev.revenueMid) {
+						const match = revLookup.get(company.companyName?.toLowerCase());
+						if (match) {
+							(company as Record<string, unknown>).revenueEstimate = match;
+						}
+					}
+				}
 			}
 
 			// Track incomplete entries but don't block export

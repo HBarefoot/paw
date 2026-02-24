@@ -106,7 +106,10 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 					// Merge: copy non-null fields from duplicate into the first entry
 					const firstIdx = seen.get(name)!;
 					for (const [key, val] of Object.entries(companies[i])) {
-						if (val && !companies[firstIdx][key]) {
+						if (!val) continue;
+						const existing = companies[firstIdx][key];
+						// Prefer non-empty objects (e.g. revenueEstimate with actual data)
+						if (!existing || (typeof existing === "object" && Object.keys(existing as object).length === 0)) {
 							companies[firstIdx][key] = val;
 						}
 					}
@@ -119,13 +122,29 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			return companies;
 		};
 
+		// Look up brand defaults from discovered_brands for stub entries
+		const lookupBrandDefaults = (brandName: string) => {
+			const brands = (ctx.store.get("discovered_brands") as Array<Record<string, unknown>>) ?? [];
+			const match = brands.find(
+				(b) => (b.name as string)?.toLowerCase() === brandName?.toLowerCase(),
+			);
+			return {
+				naicsCode: (match?.naicsCode as string) || "",
+				naicsDescription: (match?.naicsDescription as string) || "",
+				estimatedLocations: (match?.estimatedLocations as number) || 0,
+			};
+		};
+
 		// Wrap handlers to persist intermediate results in plugin store
 		const wrappedDiscoverFranchises = async (
 			input: Record<string, unknown>,
 		) => {
-			// Don't clear any store state here — filter_icp rebuilds qualified_companies
-			// from discovered_brands + revenue_estimates each time it runs.
-			// Clearing here would wipe data if the AI retries discover mid-pipeline.
+			// Clear previous pipeline data to prevent cross-run contamination.
+			// Multi-NAICS still works because the AI calls discover_franchises once
+			// per NAICS within the same run, and merge logic accumulates brands.
+			ctx.store.delete("discovered_brands");
+			ctx.store.delete("revenue_estimates");
+			ctx.store.delete("qualified_companies");
 
 			const result = await discoverFranchises(input);
 			logCacheStats("discover_franchises");
@@ -166,11 +185,31 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 					ctx.logger.info(
 						`Stored revenue estimate for ${estimate.companyName} (${existing.length} total)`,
 					);
+					// Also update qualified_companies with revenue data so it's
+					// available even when AI bypasses filter_icp
+					const companies = (ctx.store.get("qualified_companies") as Array<Record<string, unknown>>) ?? [];
+					const brandName = estimate.companyName as string;
+					const compIdx = companies.findIndex(c => (c.companyName as string)?.toLowerCase() === brandName?.toLowerCase());
+					if (compIdx >= 0) {
+						companies[compIdx].revenueEstimate = estimate;
+					} else {
+						const defaults = lookupBrandDefaults(brandName);
+						companies.push({
+							companyName: brandName,
+							naicsCode: defaults.naicsCode,
+							naicsDescription: defaults.naicsDescription,
+							estimatedLocations: defaults.estimatedLocations,
+							revenueEstimate: estimate,
+							contacts: [],
+						});
+					}
+					dedupeCompanies(companies);
+					ctx.store.set("qualified_companies", companies);
+
 					// Auto-register brand in discovered_brands if not already there
 					// so filter_icp works even when AI bypasses discover_franchises
 					const brands =
 						(ctx.store.get("discovered_brands") as Array<Record<string, unknown>>) ?? [];
-					const brandName = estimate.companyName as string;
 					if (
 						brandName &&
 						!brands.some(
@@ -198,10 +237,34 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			if (!result.is_error) {
 				try {
 					const parsed = JSON.parse(result.content);
-					if (parsed.companies) {
-						ctx.store.set("qualified_companies", parsed.companies);
+					if (parsed.companies && parsed.companies.length > 0) {
+						// Merge with existing qualified_companies to preserve
+						// revenue/HQ/contact data written by earlier pipeline steps
+						const existing = (ctx.store.get("qualified_companies") as Array<Record<string, unknown>>) ?? [];
+						const merged = [...parsed.companies] as Array<Record<string, unknown>>;
+						for (const entry of existing) {
+							const name = (entry.companyName as string)?.toLowerCase();
+							if (!name) continue;
+							const idx = merged.findIndex(c => (c.companyName as string)?.toLowerCase() === name);
+							if (idx >= 0) {
+								// Merge existing data (revenue, HQ, contacts) into filter result
+								for (const [key, val] of Object.entries(entry)) {
+									if (!val) continue;
+									const cur = merged[idx][key];
+									if (!cur || (typeof cur === "object" && Object.keys(cur as object).length === 0)) {
+										merged[idx][key] = val;
+									}
+								}
+							}
+						}
+						dedupeCompanies(merged);
+						ctx.store.set("qualified_companies", merged);
 						ctx.logger.info(
-							`Stored ${parsed.companies.length} qualified companies`,
+							`Stored ${merged.length} qualified companies`,
+						);
+					} else {
+						ctx.logger.info(
+							"filter_icp returned 0 companies — keeping existing qualified_companies",
 						);
 					}
 				} catch {
@@ -247,11 +310,13 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 						);
 					} else {
 						// Create new entry so data isn't lost when AI bypasses filter_icp
+						const mapBrandName = (hqData.companyName || input.companyName) as string;
+						const defaults = lookupBrandDefaults(mapBrandName);
 						companies.push({
-							companyName: hqData.companyName || input.companyName,
-							naicsCode: "",
-							naicsDescription: "",
-							estimatedLocations: 0,
+							companyName: mapBrandName,
+							naicsCode: defaults.naicsCode,
+							naicsDescription: defaults.naicsDescription,
+							estimatedLocations: defaults.estimatedLocations,
 							revenueEstimate: {},
 							contacts: [],
 							hqAddress: hqData.hqAddress,
@@ -312,14 +377,13 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 						);
 					} else {
 						// Create new entry so data isn't lost when AI bypasses filter_icp
+						const contactBrandName = (contactData.companyName || input.companyName || input.domain) as string;
+						const defaults = lookupBrandDefaults(contactBrandName);
 						companies.push({
-							companyName:
-								contactData.companyName ||
-								input.companyName ||
-								input.domain,
-							naicsCode: "",
-							naicsDescription: "",
-							estimatedLocations: 0,
+							companyName: contactBrandName,
+							naicsCode: defaults.naicsCode,
+							naicsDescription: defaults.naicsDescription,
+							estimatedLocations: defaults.estimatedLocations,
 							revenueEstimate: {},
 							contacts: contactData.contacts ?? [],
 							hqDomain:

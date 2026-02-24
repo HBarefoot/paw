@@ -103,6 +103,59 @@ ${mapsData}
 				};
 			}
 
+			// Retry with alternative queries if all HQ fields are null
+			const allNull = !hqData.hqAddress && !hqData.hqCity && !hqData.hqState && !hqData.hqDomain && !hqData.hqPhone;
+			if (allNull) {
+				const retryQueries = [
+					`"${companyName}" headquarters location address`,
+					`"${companyName}" franchise corporate office location`,
+				];
+				for (const query of retryQueries) {
+					try {
+						const retrySearch = await serpapi.googleSearch(query);
+						const retrySnippets = (retrySearch.organic_results ?? [])
+							.slice(0, 5)
+							.map((r) => `${r.title}: ${r.snippet} (${r.link})`)
+							.join("\n");
+						const retryKg = retrySearch.knowledge_graph
+							? JSON.stringify(retrySearch.knowledge_graph, null, 2)
+							: "No Knowledge Graph data available";
+
+						const retryMessage = `
+Extract HQ data for: ${companyName}
+
+Google Knowledge Graph:
+${retryKg}
+
+Google Search Results:
+${retrySnippets}
+`.trim();
+
+						const retryResponse = await claude.messages.create({
+							model: "claude-sonnet-4-5-20250929",
+							max_tokens: 512,
+							system: systemPrompt,
+							messages: [{ role: "user", content: retryMessage }],
+						});
+
+						const retryText =
+							retryResponse.content[0].type === "text" ? retryResponse.content[0].text : "";
+						try {
+							const retryData: HqData = JSON.parse(stripCodeFences(retryText));
+							const retryAllNull = !retryData.hqAddress && !retryData.hqCity && !retryData.hqState && !retryData.hqDomain && !retryData.hqPhone;
+							if (!retryAllNull) {
+								hqData = retryData;
+								break;
+							}
+						} catch {
+							// Parse failed on retry, continue to next query
+						}
+					} catch {
+						// Search failed on retry, continue to next query
+					}
+				}
+			}
+
 			return {
 				content: JSON.stringify({ companyName, ...hqData }, null, 2),
 			};

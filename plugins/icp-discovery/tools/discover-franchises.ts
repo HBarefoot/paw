@@ -19,6 +19,7 @@ const NAICS_DESCRIPTIONS: Record<string, string> = {
 	"611691": "Exam Preparation and Tutoring",
 	"721110": "Hotels and Motels",
 	"453910": "Pet and Pet Supplies Stores",
+	"713940": "Fitness and Recreational Sports Centers",
 };
 
 interface PluginDeps {
@@ -27,6 +28,22 @@ interface PluginDeps {
 }
 
 const PROMPT_PATH = resolve(import.meta.dir, "../prompts/franchise-parser.md");
+
+// Approximate number of US cities with 50K+ population
+const US_CITIES_FACTOR = 400;
+
+// Check if a Maps result title fuzzy-matches the brand name
+function isBrandMatch(resultTitle: string, brandName: string): boolean {
+	const title = resultTitle.toLowerCase();
+	const brand = brandName.toLowerCase();
+	// Direct inclusion: "Crunch Fitness - Midtown" matches "Crunch Fitness"
+	if (title.includes(brand)) return true;
+	// Brand words all appear in title (handles "Gold's Gym" vs "Golds Gym")
+	const brandWords = brand.replace(/['']/g, "").split(/\s+/).filter(w => w.length > 2);
+	const titleNorm = title.replace(/['']/g, "");
+	if (brandWords.length > 0 && brandWords.every(w => titleNorm.includes(w))) return true;
+	return false;
+}
 
 export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 	const serpapi = deps.searchClient;
@@ -123,6 +140,7 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				"Los Angeles",
 				"Chicago",
 				"Dallas",
+				"Houston",
 			];
 			const allBrands: DiscoveredBrand[] = [];
 
@@ -138,7 +156,14 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 						for (const city of sampleCities) {
 							try {
 								const mapsResult = await serpapi.googleMaps(brand, city);
-								cityCounts.push(mapsResult.local_results?.length ?? 0);
+								// Only count results that fuzzy-match the brand name
+								const matched = (mapsResult.local_results ?? []).filter(
+									(r) => isBrandMatch(r.title, brand),
+								);
+								console.log(
+									`[icp-discovery] Maps sampling for "${brand}" in ${city}: ${matched.length}/${mapsResult.local_results?.length ?? 0} results matched`,
+								);
+								cityCounts.push(matched.length);
 							} catch {
 								cityCounts.push(0);
 							}
@@ -150,17 +175,57 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				for (const { brand, cityCounts } of batchResults) {
 					const avgPerCity =
 						cityCounts.reduce((a, b) => a + b, 0) / cityCounts.length;
-					// Scale: avg per city * 200 (approximate US metro areas with franchise presence)
-					// Cap per-city at 20 to avoid SerpApi result limit skewing
-					const cappedAvg = Math.min(avgPerCity, 20);
-					const estimatedLocations = Math.round(cappedAvg * 200);
+					// Saturation ratio: avg results / 20-result API cap
+					const saturationRatio = Math.min(avgPerCity / 20, 1.0);
+					let estimatedLocations = Math.round(saturationRatio * US_CITIES_FACTOR);
+					let methodology = `Google Maps metro sampling x${sampleCities.length} cities, avg ${avgPerCity.toFixed(1)}/city, saturation ${(saturationRatio * 100).toFixed(0)}% x${US_CITIES_FACTOR} cities`;
+
+					// Fallback: if Maps returned 0 matches, try web search for location count
+					if (estimatedLocations === 0) {
+						try {
+							const webResult = await serpapi.googleSearch(
+								`"${brand}" "number of locations" OR "locations nationwide" OR "units open" OR "locations across"`,
+							);
+							const snippets = (webResult.organic_results ?? [])
+								.slice(0, 5)
+								.map((r) => `${r.title}: ${r.snippet}`)
+								.join("\n");
+
+							if (snippets) {
+								const fallbackResponse = await claude.messages.create({
+									model: "claude-sonnet-4-5-20250929",
+									max_tokens: 128,
+									messages: [
+										{
+											role: "user",
+											content: `Extract the number of locations/units for "${brand}" from these search results. Return ONLY a number (integer). If unclear, return 0.\n\n${snippets}`,
+										},
+									],
+								});
+								const numText =
+									fallbackResponse.content[0].type === "text"
+										? fallbackResponse.content[0].text.trim()
+										: "0";
+								const parsed = Number.parseInt(numText.replace(/[^0-9]/g, ""), 10);
+								if (parsed > 0) {
+									estimatedLocations = parsed;
+									methodology = `Web search extraction ("${brand}" location count from snippets)`;
+									console.log(
+										`[icp-discovery] Web fallback for "${brand}": ${estimatedLocations} locations`,
+									);
+								}
+							}
+						} catch {
+							// Web fallback failed, leave at 0
+						}
+					}
 
 					allBrands.push({
 						name: brand,
 						naicsCode,
 						naicsDescription,
 						estimatedLocations,
-						locationMethodology: `Google Maps metro sampling x${sampleCities.length} cities, avg ${cappedAvg.toFixed(1)} per city x200 metros`,
+						locationMethodology: methodology,
 						sources: searchResults.flatMap((r) =>
 							r.results
 								.filter((o) =>
