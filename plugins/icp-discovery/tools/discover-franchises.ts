@@ -25,6 +25,7 @@ const NAICS_DESCRIPTIONS: Record<string, string> = {
 interface PluginDeps {
 	searchClient: CachedSearchClient;
 	anthropicApiKey: string;
+	sampleCities?: string[];
 }
 
 const PROMPT_PATH = resolve(import.meta.dir, "../prompts/franchise-parser.md");
@@ -135,13 +136,14 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 			}
 
 			// Step 3: Google Maps sampling for location counts
-			const sampleCities = [
+			const defaultCities = [
 				"New York",
 				"Los Angeles",
 				"Chicago",
 				"Dallas",
 				"Houston",
 			];
+			const sampleCities = deps.sampleCities?.length ? deps.sampleCities : defaultCities;
 			const allBrands: DiscoveredBrand[] = [];
 
 			const MAX_BRANDS = 20;

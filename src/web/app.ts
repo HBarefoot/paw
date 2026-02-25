@@ -377,8 +377,14 @@ export function createWebApp(
 		} as PawConfig;
 	}
 
+	function getIcpSampleCities(): string[] | undefined {
+		const overrides = readConfigOverrides();
+		const icpConfig = overrides["icp-discovery"] as Record<string, unknown> | undefined;
+		return Array.isArray(icpConfig?.sampleCities) ? icpConfig.sampleCities as string[] : undefined;
+	}
+
 	app.get("/config", (c) => {
-		return c.html(ConfigPage({ config: liveConfig() }));
+		return c.html(ConfigPage({ config: liveConfig(), icpSampleCities: getIcpSampleCities() }));
 	});
 
 	app.post("/config", async (c) => {
@@ -394,6 +400,7 @@ export function createWebApp(
 						ConfigPage({
 							config: liveConfig(),
 							error: `Field "${key}" cannot be modified through the web UI`,
+							icpSampleCities: getIcpSampleCities(),
 						}),
 					);
 				}
@@ -417,6 +424,15 @@ export function createWebApp(
 				else target[lastKey] = value;
 			}
 
+			// Convert comma-separated sampleCities into a string array
+			const icpConfig = overrides["icp-discovery"] as Record<string, unknown> | undefined;
+			if (icpConfig && typeof icpConfig.sampleCities === "string") {
+				icpConfig.sampleCities = (icpConfig.sampleCities as string)
+					.split(",")
+					.map((s: string) => s.trim())
+					.filter(Boolean);
+			}
+
 			// Audit log config changes
 			const session = c.get("session") as { user_id: number } | undefined;
 			const ip = getClientIp(c);
@@ -428,10 +444,10 @@ export function createWebApp(
 			);
 
 			saveConfigOverrides(overrides);
-			return c.html(ConfigPage({ config: liveConfig(), saved: true }));
+			return c.html(ConfigPage({ config: liveConfig(), saved: true, icpSampleCities: getIcpSampleCities() }));
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			return c.html(ConfigPage({ config: liveConfig(), error: message }));
+			return c.html(ConfigPage({ config: liveConfig(), error: message, icpSampleCities: getIcpSampleCities() }));
 		}
 	});
 

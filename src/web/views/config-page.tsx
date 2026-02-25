@@ -6,9 +6,10 @@ interface ConfigPageProps {
 	config: PawConfig;
 	saved?: boolean;
 	error?: string;
+	icpSampleCities?: string[];
 }
 
-export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error }) => {
+export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error, icpSampleCities }) => {
 	return (
 		<Layout title="Configuration" currentPath="/config">
 			{saved && (
@@ -407,6 +408,32 @@ export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error }) => {
 							</tbody>
 						</table>
 					</div>
+				</div>
+
+				<div class="card mt-md">
+					<h3>ICP Discovery</h3>
+					<table>
+						<tbody>
+							<tr>
+								<td style="vertical-align: top; padding-top: 12px">
+									Sample Cities
+								</td>
+								<td>
+									<input
+										type="text"
+										name="icp-discovery.sampleCities"
+										value={(icpSampleCities ?? ["New York", "Los Angeles", "Chicago", "Dallas", "Houston"]).join(", ")}
+										class="w-full"
+										placeholder="New York, Los Angeles, Chicago, Dallas, Houston"
+									/>
+									<span class="text-muted text-xs">
+										Comma-separated list of US cities used for Google Maps
+										sampling when estimating franchise location counts.
+									</span>
+								</td>
+							</tr>
+						</tbody>
+					</table>
 				</div>
 
 				<div class="mt-md">
