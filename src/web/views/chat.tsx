@@ -242,10 +242,10 @@ export function getChatScript(): string {
 
   loadSessions();
 
-  // If page loaded with a saved session, load its messages
-  if (savedSession) {
+  // If page loaded with a saved session, load its messages (skip canvas sessions)
+  if (savedSession && !sessionId.startsWith("canvas-")) {
     fetch("/api/sessions/" + sessionId + "/messages")
-      .then(function(r) { return r.json(); })
+      .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
       .then(function(data) {
         if (data.messages && data.messages.length > 0) {
           var welcome = messagesDiv.querySelector(".chat-welcome");
@@ -254,7 +254,8 @@ export function getChatScript(): string {
             appendMsg(m.role === "user" ? "user" : "assistant", m.content);
           });
         }
-      });
+      })
+      .catch(function() { /* session may have been deleted */ });
   } else {
     // No saved session — try to auto-restore the most recent web session
     fetch("/api/sessions?limit=20")
@@ -264,7 +265,7 @@ export function getChatScript(): string {
         // Find the most recent web or canvas session with messages
         for (var i = 0; i < sessions.length; i++) {
           var s = sessions[i];
-          if (s.channel === "web" || s.channel === "canvas") {
+          if (s.channel === "web") {
             sessionId = s.id;
             document.getElementById("chat-container").dataset.sessionId = sessionId;
             localStorage.setItem(STORAGE_KEY, sessionId);
