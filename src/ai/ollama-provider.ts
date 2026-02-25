@@ -232,7 +232,7 @@ export class OllamaProvider implements AIProvider {
 						this.toolRegistry.execute(call.function.name, call.function.arguments),
 						new Promise<never>((_, reject) =>
 							setTimeout(
-								() => reject(new Error(`Tool "${call.function.name}" timed out after 5 minutes`)),
+								() => reject(new Error(`Tool "${call.function.name}" timed out after 10 minutes`)),
 								TOOL_TIMEOUT_MS,
 							),
 						),
@@ -504,7 +504,7 @@ export class OllamaProvider implements AIProvider {
 					tool: call.function.name,
 				});
 
-				const TOOL_TIMEOUT_MS = 300_000; // 5 minutes
+				const TOOL_TIMEOUT_MS = 600_000; // 10 minutes
 				const startTime = Date.now();
 				let result: { content?: string; is_error?: boolean; images?: Array<{ media_type: string; base64: string }> };
 				try {
@@ -512,7 +512,7 @@ export class OllamaProvider implements AIProvider {
 						this.toolRegistry.execute(call.function.name, toolInput),
 						new Promise<never>((_, reject) =>
 							setTimeout(
-								() => reject(new Error(`Tool "${call.function.name}" timed out after 5 minutes`)),
+								() => reject(new Error(`Tool "${call.function.name}" timed out after 10 minutes`)),
 								TOOL_TIMEOUT_MS,
 							),
 						),

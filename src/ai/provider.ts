@@ -176,14 +176,14 @@ export class ClaudeProvider implements AIProvider {
 				}
 
 				this.logger.info("Executing tool", { tool: block.name, id: block.id });
-				const TOOL_TIMEOUT_MS = 300_000;
+				const TOOL_TIMEOUT_MS = 600_000;
 				let result: ToolResult;
 				try {
 					result = await Promise.race([
 						this.toolRegistry.execute(block.name, block.input as Record<string, unknown>),
 						new Promise<never>((_, reject) =>
 							setTimeout(
-								() => reject(new Error(`Tool "${block.name}" timed out after 5 minutes`)),
+								() => reject(new Error(`Tool "${block.name}" timed out after 10 minutes`)),
 								TOOL_TIMEOUT_MS,
 							),
 						),
@@ -387,7 +387,7 @@ export class ClaudeProvider implements AIProvider {
 					id: block.id,
 				});
 
-				const TOOL_TIMEOUT_MS = 300_000; // 5 minutes
+				const TOOL_TIMEOUT_MS = 600_000; // 5 minutes
 				const startTime = Date.now();
 				let result: ToolResult;
 				try {
@@ -395,7 +395,7 @@ export class ClaudeProvider implements AIProvider {
 						this.toolRegistry.execute(block.name, toolInput),
 						new Promise<never>((_, reject) =>
 							setTimeout(
-								() => reject(new Error(`Tool "${block.name}" timed out after 5 minutes`)),
+								() => reject(new Error(`Tool "${block.name}" timed out after 10 minutes`)),
 								TOOL_TIMEOUT_MS,
 							),
 						),

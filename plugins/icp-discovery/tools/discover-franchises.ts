@@ -152,22 +152,22 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				const batch = brandsToProcess.slice(i, i + BATCH_SIZE);
 				const batchResults = await Promise.all(
 					batch.map(async (brand) => {
-						const cityCounts: number[] = [];
-						for (const city of sampleCities) {
-							try {
-								const mapsResult = await serpapi.googleMaps(brand, city);
-								// Only count results that fuzzy-match the brand name
-								const matched = (mapsResult.local_results ?? []).filter(
-									(r) => isBrandMatch(r.title, brand),
-								);
-								console.log(
-									`[icp-discovery] Maps sampling for "${brand}" in ${city}: ${matched.length}/${mapsResult.local_results?.length ?? 0} results matched`,
-								);
-								cityCounts.push(matched.length);
-							} catch {
-								cityCounts.push(0);
-							}
-						}
+						const cityCounts = await Promise.all(
+							sampleCities.map(async (city) => {
+								try {
+									const mapsResult = await serpapi.googleMaps(brand, city);
+									const matched = (mapsResult.local_results ?? []).filter(
+										(r) => isBrandMatch(r.title, brand),
+									);
+									console.log(
+										`[icp-discovery] Maps sampling for "${brand}" in ${city}: ${matched.length}/${mapsResult.local_results?.length ?? 0} results matched`,
+									);
+									return matched.length;
+								} catch {
+									return 0;
+								}
+							}),
+						);
 						return { brand, cityCounts };
 					}),
 				);
