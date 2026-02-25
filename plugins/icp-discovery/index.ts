@@ -70,10 +70,16 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			outputDir: (config.outputDir as string) || "./data",
 		};
 
+		// Read sample cities from plugin config (configurable via web UI)
+		const sampleCities = Array.isArray(config.sampleCities)
+			? (config.sampleCities as string[]).filter((c) => typeof c === "string" && c.trim())
+			: undefined;
+
 		// Create tool handlers with dependencies
 		const discoverFranchises = createDiscoverFranchisesHandler({
 			searchClient,
 			anthropicApiKey,
+			sampleCities,
 		});
 		const estimateRevenue = createEstimateRevenueHandler({
 			searchClient,
