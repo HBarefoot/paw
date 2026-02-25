@@ -57,11 +57,11 @@ export function createSecurityHeaders(tlsEnabled = false): MiddlewareHandler {
 		const handler = secureHeaders({
 			contentSecurityPolicy: {
 				defaultSrc: ["'self'"],
-				scriptSrc: ["'self'", "'unsafe-inline'"],
+				scriptSrc: ["'self'", "'unsafe-inline'", "https://static.cloudflareinsights.com"],
 				styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
 				imgSrc: ["'self'", "data:"],
 				fontSrc: ["'self'", "https://fonts.gstatic.com"],
-				connectSrc: ["'self'"],
+				connectSrc: ["'self'", "https://cloudflareinsights.com"],
 			},
 			xFrameOptions: "DENY",
 			xContentTypeOptions: "nosniff",
