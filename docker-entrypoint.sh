@@ -21,6 +21,11 @@ if [ -n "$TAILSCALE_AUTHKEY" ]; then
     echo "Tailscale connected. Checking status..."
     tailscale --socket=/var/run/tailscale/tailscaled.sock status
     echo "Tailscale ready."
+
+    # Relay localhost:11434 → Ollama via Tailscale mesh
+    echo "Setting up Ollama relay via Tailscale..."
+    socat TCP-LISTEN:11434,fork,reuseaddr EXEC:"tailscale nc local-lab 11434" &
+    echo "Ollama relay ready on localhost:11434"
 else
     echo "WARNING: TAILSCALE_AUTHKEY not set. Skipping Tailscale setup."
     echo "Paw will not be able to reach Tailscale network resources."
