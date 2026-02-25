@@ -1905,13 +1905,14 @@ export function createWebApp(
 	});
 
 	app.get("/api/health", async (c) => {
+		// Lightweight liveness check — always 200 if the web server is responding.
+		// Plugin/MCP status is informational, not a gate for liveness.
 		const health = await kernel.healthCheck();
 		const allOk = Object.values(health).every((h) => h.ok);
-		// Unauthenticated requests get minimal info (no internal details)
 		if (!c.get("authenticated")) {
-			return c.json({ ok: allOk }, allOk ? 200 : 503);
+			return c.json({ ok: true, healthy: allOk });
 		}
-		return c.json({ ok: allOk, checks: health }, allOk ? 200 : 503);
+		return c.json({ ok: true, healthy: allOk, checks: health });
 	});
 
 	app.get("/api/sessions", (c) => {
