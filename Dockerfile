@@ -8,10 +8,12 @@ RUN bun install --frozen-lockfile --production
 FROM oven/bun:1
 WORKDIR /app
 
-# System dependencies for Playwright Chromium
+# System dependencies for Playwright Chromium + Tailscale
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     fonts-liberation \
+    iptables \
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
@@ -29,6 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxshmfence1 \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Tailscale (userspace networking — no TUN device required)
+RUN curl -fsSL https://tailscale.com/install.sh | sh
 
 # Copy dependencies from stage 1
 COPY --from=deps /app/node_modules ./node_modules
@@ -52,20 +57,25 @@ async function preload() { \
 } \
 preload().catch(console.error);"
 
-# Create persistent data and config directories
-RUN mkdir -p /data /root/.paw
+# Create persistent data, config, and Tailscale directories
+RUN mkdir -p /data /root/.paw /data/tailscale /var/run/tailscale
 
 # Environment defaults for Railway
+# PAW_PROVIDER is set via Railway env vars (not hardcoded here)
 ENV PAW_WEB_HOST=0.0.0.0
 ENV PAW_DB_PATH=/data/paw.db
-ENV PAW_PROVIDER=claude
 ENV PAW_WEB_ENABLED=true
 ENV PAW_WEB_TRUSTED_PROXY=true
 ENV NODE_ENV=production
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD bun -e "fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
+# Copy and set entrypoint script
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["bun", "run", "bin/paw.ts", "start"]
