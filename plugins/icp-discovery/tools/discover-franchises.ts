@@ -25,8 +25,7 @@ const NAICS_DESCRIPTIONS: Record<string, string> = {
 interface PluginDeps {
 	searchClient: CachedSearchClient;
 	anthropicApiKey: string;
-	sampleCities?: string[];
-	excludeBrands?: string[];
+	getLiveConfig?: () => { sampleCities?: string[]; excludeBrands?: string[] };
 }
 
 const PROMPT_PATH = resolve(import.meta.dir, "../prompts/franchise-parser.md");
@@ -56,6 +55,9 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 		input: Record<string, unknown>,
 	): Promise<{ content: string; is_error?: boolean }> => {
 		try {
+			// Read config live so web UI changes take effect without restart
+			const liveConfig = deps.getLiveConfig?.() ?? {};
+
 			const naicsCode = input.naicsCode as string;
 			const minLocations = (input.minLocations as number) ?? 100;
 			const naicsDescription = NAICS_DESCRIPTIONS[naicsCode] ?? naicsCode;
@@ -127,8 +129,8 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 			}
 
 			// Filter out excluded brands before Maps sampling
-			if (deps.excludeBrands?.length) {
-				const excludeSet = new Set(deps.excludeBrands.map((b) => b.toLowerCase()));
+			if (liveConfig.excludeBrands?.length) {
+				const excludeSet = new Set(liveConfig.excludeBrands.map((b) => b.toLowerCase()));
 				candidateBrands = candidateBrands.filter(
 					(brand) => !excludeSet.has(brand.toLowerCase()),
 				);
@@ -156,7 +158,7 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				"Dallas",
 				"Houston",
 			];
-			const sampleCities = deps.sampleCities?.length ? deps.sampleCities : defaultCities;
+			const sampleCities = liveConfig.sampleCities?.length ? liveConfig.sampleCities : defaultCities;
 			const allBrands: DiscoveredBrand[] = [];
 
 			const MAX_BRANDS = 20;

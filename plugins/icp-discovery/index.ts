@@ -70,20 +70,22 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			outputDir: (config.outputDir as string) || "./data",
 		};
 
-		// Read sample cities and exclude brands from plugin config (configurable via web UI)
-		const sampleCities = Array.isArray(config.sampleCities)
-			? (config.sampleCities as string[]).filter((c) => typeof c === "string" && c.trim())
-			: undefined;
-		const excludeBrands = Array.isArray(config.excludeBrands)
-			? (config.excludeBrands as string[]).filter((b) => typeof b === "string" && b.trim())
-			: undefined;
+		// Config is a live proxy — reads fresh overrides on each access,
+		// so web UI changes take effect without a restart.
+		const getLiveConfig = () => ({
+			sampleCities: Array.isArray(config.sampleCities)
+				? (config.sampleCities as string[]).filter((c) => typeof c === "string" && c.trim())
+				: undefined,
+			excludeBrands: Array.isArray(config.excludeBrands)
+				? (config.excludeBrands as string[]).filter((b) => typeof b === "string" && b.trim())
+				: undefined,
+		});
 
 		// Create tool handlers with dependencies
 		const discoverFranchises = createDiscoverFranchisesHandler({
 			searchClient,
 			anthropicApiKey,
-			sampleCities,
-			excludeBrands,
+			getLiveConfig,
 		});
 		const estimateRevenue = createEstimateRevenueHandler({
 			searchClient,

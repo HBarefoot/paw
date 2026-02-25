@@ -32,6 +32,7 @@ import { SkillManager } from "../ai/skills.js";
 import { createFileTools } from "../tools/file-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
+import { readConfigOverrides } from "../config/writer.js";
 import { createLogger, setLogLevel } from "../observability/logger.js";
 import type { PawConfig } from "../types/config.js";
 import type {
@@ -802,8 +803,33 @@ export class Kernel {
 
 	private createPluginContext(pluginName: string): PluginContext {
 		const logger = createLogger(pluginName);
-		const pluginConfig =
+		// Boot-time config as baseline
+		const bootConfig =
 			(this.config as Record<string, unknown>)[pluginName] ?? {};
+		// Live proxy: reads fresh overrides on each property access so web UI
+		// config changes take effect without a restart.
+		const pluginConfig = new Proxy(bootConfig as Record<string, unknown>, {
+			get(_target, prop, receiver) {
+				const overrides = readConfigOverrides();
+				const live = (overrides[pluginName] as Record<string, unknown>) ?? {};
+				const merged = { ..._target, ...live };
+				return Reflect.get(merged, prop, receiver);
+			},
+			ownKeys(_target) {
+				const overrides = readConfigOverrides();
+				const live = (overrides[pluginName] as Record<string, unknown>) ?? {};
+				return [...new Set([...Reflect.ownKeys(_target), ...Reflect.ownKeys(live)])];
+			},
+			getOwnPropertyDescriptor(_target, prop) {
+				const overrides = readConfigOverrides();
+				const live = (overrides[pluginName] as Record<string, unknown>) ?? {};
+				const merged = { ..._target, ...live };
+				if (prop in merged) {
+					return { configurable: true, enumerable: true, value: (merged as any)[prop] };
+				}
+				return undefined;
+			},
+		});
 
 		const store: PluginStore = {
 			get: (key: string) => {
