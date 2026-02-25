@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=deps /app/node_modules ./node_modules
 
 # Install Playwright Chromium
-RUN npx playwright install chromium
+RUN bunx playwright install chromium
 
 # Copy application source
 COPY package.json tsconfig.json ./
