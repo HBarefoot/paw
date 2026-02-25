@@ -18,6 +18,7 @@ export async function withRetry<T>(
 			const msg = err instanceof Error ? err.message : String(err);
 			const isRetryable =
 				msg.includes("429") ||
+				msg.includes("500") ||
 				msg.includes("502") ||
 				msg.includes("503") ||
 				msg.includes("529") ||

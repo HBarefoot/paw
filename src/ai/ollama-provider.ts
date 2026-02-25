@@ -52,6 +52,18 @@ interface OllamaResponse {
 	done: boolean;
 }
 
+/** Cap tool-result content pushed into the Ollama conversation to avoid
+ *  blowing up the context window / request payload on cloud endpoints. */
+const MAX_TOOL_RESULT_CHARS = 4_000;
+
+function truncateToolResult(content: string): string {
+	if (content.length <= MAX_TOOL_RESULT_CHARS) return content;
+	return (
+		content.slice(0, MAX_TOOL_RESULT_CHARS) +
+		`\n\n[Truncated — original was ${content.length} chars]`
+	);
+}
+
 export class OllamaProvider implements AIProvider {
 	readonly name = "ollama";
 	private baseUrl: string;
@@ -236,7 +248,7 @@ export class OllamaProvider implements AIProvider {
 				}
 				conversation.push({
 					role: "tool",
-					content: result.content ?? "",
+					content: truncateToolResult(result.content ?? ""),
 				});
 			}
 
@@ -301,28 +313,51 @@ export class OllamaProvider implements AIProvider {
 				body.tools = tools;
 			}
 
-			let res: Response;
-			try {
-				res = await fetch(`${this.baseUrl}/api/chat`, {
-					method: "POST",
-					headers: this.headers,
-					body: JSON.stringify(body),
-					signal: AbortSignal.timeout(this.requestTimeoutMs),
-				});
-			} catch (err) {
-				const errMsg =
-					err instanceof Error ? err.message : String(err);
-				yield {
-					type: "error",
-					error: `Unable to connect to Ollama at ${this.baseUrl}. ${errMsg}`,
-				};
-				yield { type: "done" };
-				return;
-			}
+			let res!: Response;
+			const MAX_STREAM_RETRIES = 3;
+			let lastStreamErr: string | undefined;
+			let fetchOk = false;
+			for (let attempt = 0; attempt <= MAX_STREAM_RETRIES; attempt++) {
+				try {
+					res = await fetch(`${this.baseUrl}/api/chat`, {
+						method: "POST",
+						headers: this.headers,
+						body: JSON.stringify(body),
+						signal: AbortSignal.timeout(this.requestTimeoutMs),
+					});
+				} catch (err) {
+					lastStreamErr = err instanceof Error ? err.message : String(err);
+					if (attempt < MAX_STREAM_RETRIES) {
+						const delayMs = Math.min(1000 * Math.pow(2, attempt), 15_000);
+						this.logger.warn("Stream fetch failed, retrying", { attempt: attempt + 1, delayMs, error: lastStreamErr });
+						await new Promise((r) => setTimeout(r, delayMs));
+						continue;
+					}
+					yield { type: "error", error: `Unable to connect to Ollama at ${this.baseUrl}. ${lastStreamErr}` };
+					yield { type: "done" };
+					return;
+				}
 
-			if (!res.ok) {
-				const text = await res.text();
-				yield { type: "error", error: `Ollama error (${res.status}): ${text}` };
+				if (!res!.ok) {
+					const text = await res!.text();
+					const status = res!.status;
+					const isRetryable = [429, 500, 502, 503, 529].includes(status);
+					if (isRetryable && attempt < MAX_STREAM_RETRIES) {
+						const delayMs = Math.min(1000 * Math.pow(2, attempt), 15_000);
+						this.logger.warn("Stream request failed, retrying", { attempt: attempt + 1, delayMs, status, error: text });
+						await new Promise((r) => setTimeout(r, delayMs));
+						continue;
+					}
+					yield { type: "error", error: `Ollama error (${status}): ${text}` };
+					yield { type: "done" };
+					return;
+				}
+
+				fetchOk = true;
+				break;
+			}
+			if (!fetchOk) {
+				yield { type: "error", error: `Ollama stream failed after ${MAX_STREAM_RETRIES} retries: ${lastStreamErr}` };
 				yield { type: "done" };
 				return;
 			}
@@ -501,7 +536,7 @@ export class OllamaProvider implements AIProvider {
 
 				conversation.push({
 					role: "tool",
-					content: result.content ?? "",
+					content: truncateToolResult(result.content ?? ""),
 				});
 			}
 
