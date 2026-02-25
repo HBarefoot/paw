@@ -96,7 +96,11 @@ function resolvedCredentials(): Record<string, unknown> {
 					? env.PAW_WEB_ENABLED === "true"
 					: undefined,
 			host: env.PAW_WEB_HOST,
-			port: env.PAW_WEB_PORT ? Number(env.PAW_WEB_PORT) : undefined,
+			port: env.PAW_WEB_PORT
+				? Number(env.PAW_WEB_PORT)
+				: env.PORT
+					? Number(env.PORT)
+					: undefined,
 		},
 		store: {
 			dbPath: env.PAW_DB_PATH,
