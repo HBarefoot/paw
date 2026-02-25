@@ -7,9 +7,10 @@ interface ConfigPageProps {
 	saved?: boolean;
 	error?: string;
 	icpSampleCities?: string[];
+	icpExcludeBrands?: string[];
 }
 
-export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error, icpSampleCities }) => {
+export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error, icpSampleCities, icpExcludeBrands }) => {
 	return (
 		<Layout title="Configuration" currentPath="/config">
 			{saved && (
@@ -429,6 +430,25 @@ export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error, icpSampl
 									<span class="text-muted text-xs">
 										Comma-separated list of US cities used for Google Maps
 										sampling when estimating franchise location counts.
+									</span>
+								</td>
+							</tr>
+							<tr>
+								<td style="vertical-align: top; padding-top: 12px">
+									Exclude Brands
+								</td>
+								<td>
+									<input
+										type="text"
+										name="icp-discovery.excludeBrands"
+										value={(icpExcludeBrands ?? []).join(", ")}
+										class="w-full"
+										placeholder="McDonald's, Subway, Starbucks, Chick-fil-A"
+									/>
+									<span class="text-muted text-xs">
+										Comma-separated list of brand names to skip during franchise
+										discovery. Use this to exclude well-known mega-brands and
+										surface lesser-known companies.
 									</span>
 								</td>
 							</tr>

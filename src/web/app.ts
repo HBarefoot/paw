@@ -377,14 +377,17 @@ export function createWebApp(
 		} as PawConfig;
 	}
 
-	function getIcpSampleCities(): string[] | undefined {
+	function getIcpConfig(): { icpSampleCities?: string[]; icpExcludeBrands?: string[] } {
 		const overrides = readConfigOverrides();
 		const icpConfig = overrides["icp-discovery"] as Record<string, unknown> | undefined;
-		return Array.isArray(icpConfig?.sampleCities) ? icpConfig.sampleCities as string[] : undefined;
+		return {
+			icpSampleCities: Array.isArray(icpConfig?.sampleCities) ? icpConfig.sampleCities as string[] : undefined,
+			icpExcludeBrands: Array.isArray(icpConfig?.excludeBrands) ? icpConfig.excludeBrands as string[] : undefined,
+		};
 	}
 
 	app.get("/config", (c) => {
-		return c.html(ConfigPage({ config: liveConfig(), icpSampleCities: getIcpSampleCities() }));
+		return c.html(ConfigPage({ config: liveConfig(), ...getIcpConfig() }));
 	});
 
 	app.post("/config", async (c) => {
@@ -400,7 +403,7 @@ export function createWebApp(
 						ConfigPage({
 							config: liveConfig(),
 							error: `Field "${key}" cannot be modified through the web UI`,
-							icpSampleCities: getIcpSampleCities(),
+							...getIcpConfig(),
 						}),
 					);
 				}
@@ -424,13 +427,17 @@ export function createWebApp(
 				else target[lastKey] = value;
 			}
 
-			// Convert comma-separated sampleCities into a string array
+			// Convert comma-separated ICP discovery fields into string arrays
 			const icpConfig = overrides["icp-discovery"] as Record<string, unknown> | undefined;
-			if (icpConfig && typeof icpConfig.sampleCities === "string") {
-				icpConfig.sampleCities = (icpConfig.sampleCities as string)
-					.split(",")
-					.map((s: string) => s.trim())
-					.filter(Boolean);
+			if (icpConfig) {
+				for (const field of ["sampleCities", "excludeBrands"]) {
+					if (typeof icpConfig[field] === "string") {
+						icpConfig[field] = (icpConfig[field] as string)
+							.split(",")
+							.map((s: string) => s.trim())
+							.filter(Boolean);
+					}
+				}
 			}
 
 			// Audit log config changes
@@ -444,10 +451,10 @@ export function createWebApp(
 			);
 
 			saveConfigOverrides(overrides);
-			return c.html(ConfigPage({ config: liveConfig(), saved: true, icpSampleCities: getIcpSampleCities() }));
+			return c.html(ConfigPage({ config: liveConfig(), saved: true, ...getIcpConfig() }));
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			return c.html(ConfigPage({ config: liveConfig(), error: message, icpSampleCities: getIcpSampleCities() }));
+			return c.html(ConfigPage({ config: liveConfig(), error: message, ...getIcpConfig() }));
 		}
 	});
 

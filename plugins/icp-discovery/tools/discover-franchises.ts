@@ -26,6 +26,7 @@ interface PluginDeps {
 	searchClient: CachedSearchClient;
 	anthropicApiKey: string;
 	sampleCities?: string[];
+	excludeBrands?: string[];
 }
 
 const PROMPT_PATH = resolve(import.meta.dir, "../prompts/franchise-parser.md");
@@ -65,6 +66,10 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				`"franchise 500" "${naicsDescription}" 2025`,
 				`largest franchise companies ${naicsDescription} locations`,
 				`top ${naicsDescription} franchise chains in the US`,
+				`"emerging franchise" OR "fastest growing franchise" ${naicsDescription}`,
+				`"franchise directory" ${naicsDescription} -McDonald's -Subway -Starbucks`,
+				`"regional franchise" OR "up and coming franchise" ${naicsDescription} 2025`,
+				`site:franchisedirect.com OR site:franchisegator.com ${naicsDescription}`,
 			];
 
 			const searchResults = [];
@@ -119,6 +124,14 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 						return true;
 					})
 					.slice(0, 20);
+			}
+
+			// Filter out excluded brands before Maps sampling
+			if (deps.excludeBrands?.length) {
+				const excludeSet = new Set(deps.excludeBrands.map((b) => b.toLowerCase()));
+				candidateBrands = candidateBrands.filter(
+					(brand) => !excludeSet.has(brand.toLowerCase()),
+				);
 			}
 
 			if (candidateBrands.length === 0) {
