@@ -57,7 +57,6 @@ RUN mkdir -p /data /root/.paw
 
 # Environment defaults for Railway
 ENV PAW_WEB_HOST=0.0.0.0
-ENV PAW_WEB_PORT=3000
 ENV PAW_DB_PATH=/data/paw.db
 ENV PAW_PROVIDER=claude
 ENV PAW_WEB_ENABLED=true
