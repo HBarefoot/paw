@@ -64,6 +64,7 @@ function resolvedCredentials(): Record<string, unknown> {
 		ollama: {
 			baseUrl: env.PAW_OLLAMA_BASE_URL ?? ollamaConfig?.baseUrl,
 			model: env.PAW_OLLAMA_MODEL ?? ollamaConfig?.model,
+			apiKey: env.PAW_OLLAMA_API_KEY,
 		},
 		openai: {
 			apiKey: openaiCreds?.apiKey ?? "",

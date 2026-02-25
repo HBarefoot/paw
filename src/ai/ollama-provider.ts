@@ -17,6 +17,7 @@ export interface OllamaProviderConfig {
 	model: string;
 	maxToolRoundtrips: number;
 	requestTimeoutMs?: number;
+	apiKey?: string;
 }
 
 interface OllamaMessage {
@@ -57,6 +58,7 @@ export class OllamaProvider implements AIProvider {
 	private model: string;
 	private maxToolRoundtrips: number;
 	private requestTimeoutMs: number;
+	private apiKey: string | undefined;
 	readonly toolRegistry: ToolRegistry;
 	private skillManager: SkillManager | null;
 	private logger: Logger;
@@ -71,6 +73,7 @@ export class OllamaProvider implements AIProvider {
 		this.model = config.model;
 		this.maxToolRoundtrips = config.maxToolRoundtrips;
 		this.requestTimeoutMs = config.requestTimeoutMs ?? 300_000;
+		this.apiKey = config.apiKey;
 		this.toolRegistry = toolRegistry;
 		this.skillManager = skillManager ?? null;
 		this.logger = logger;
@@ -79,6 +82,12 @@ export class OllamaProvider implements AIProvider {
 			baseUrl: this.baseUrl,
 			model: this.model,
 		});
+	}
+
+	private get headers(): Record<string, string> {
+		const h: Record<string, string> = { "Content-Type": "application/json" };
+		if (this.apiKey) h.Authorization = `Bearer ${this.apiKey}`;
+		return h;
 	}
 
 	private getTools(sessionId?: string): OllamaTool[] {
@@ -152,7 +161,7 @@ export class OllamaProvider implements AIProvider {
 			const data = await withRetry(async () => {
 				const res = await fetch(`${this.baseUrl}/api/chat`, {
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: this.headers,
 					body: JSON.stringify(body),
 					signal: AbortSignal.timeout(this.requestTimeoutMs),
 				});
@@ -296,7 +305,7 @@ export class OllamaProvider implements AIProvider {
 			try {
 				res = await fetch(`${this.baseUrl}/api/chat`, {
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: this.headers,
 					body: JSON.stringify(body),
 					signal: AbortSignal.timeout(this.requestTimeoutMs),
 				});
@@ -514,7 +523,7 @@ export class OllamaProvider implements AIProvider {
 
 	async healthCheck(): Promise<{ ok: boolean; details?: string }> {
 		try {
-			const res = await fetch(`${this.baseUrl}/api/tags`);
+			const res = await fetch(`${this.baseUrl}/api/tags`, { headers: this.headers });
 			if (!res.ok) return { ok: false, details: `HTTP ${res.status}` };
 			const data = (await res.json()) as { models?: Array<{ name: string }> };
 			const models = data.models?.map((m) => m.name) ?? [];

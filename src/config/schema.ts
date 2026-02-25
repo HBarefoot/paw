@@ -12,6 +12,7 @@ export const configSchema = z.object({
 	ollama: z.object({
 		baseUrl: z.string().default("http://localhost:11434"),
 		model: z.string().default("llama3.1"),
+		apiKey: z.string().default(""),
 		maxToolRoundtrips: z.number().int().positive().default(10),
 		requestTimeoutMs: z.number().int().positive().default(300_000),
 	}),

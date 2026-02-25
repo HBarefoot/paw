@@ -10,6 +10,7 @@ export interface PawConfig {
 	ollama: {
 		baseUrl: string;
 		model: string;
+		apiKey: string;
 		maxToolRoundtrips: number;
 		requestTimeoutMs: number;
 	};
