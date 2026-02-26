@@ -189,18 +189,68 @@ export function getChatScript(): string {
     renderPendingAttachments();
   };
 
-  // Load session list
-  function loadSessions() {
+  // Strip canvas system-prompt boilerplate from stored user messages
+  function extractUserDisplay(content) {
+    var m = content.match(/\\[CANVAS MODE\\][\\s\\S]*?User request:\\s*([\\s\\S]*?)(?:\\n\\n--- Current Canvas Files ---|$)/);
+    if (m) return m[1].trim();
+    return content;
+  }
+
+  function loadMessagesForSession(sid) {
+    fetch("/api/sessions/" + sid + "/messages")
+      .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
+      .then(function(data) {
+        if (data.messages && data.messages.length > 0) {
+          clearMessages();
+          var welcome = messagesDiv.querySelector(".chat-welcome");
+          if (welcome) welcome.remove();
+          data.messages.forEach(function(m) {
+            var text = m.role === "user" ? extractUserDisplay(m.content) : m.content;
+            appendMsg(m.role === "user" ? "user" : "assistant", text);
+          });
+        }
+      })
+      .catch(function() { /* session may have been deleted */ });
+  }
+
+  // Load session list, then auto-load messages for the active session
+  function loadSessions(skipMessageLoad) {
     fetch("/api/sessions?limit=20")
       .then(function(r) { return r.json(); })
       .then(function(data) {
         var opts = '<option value="">New conversation</option>';
+        var foundSession = false;
         (data.sessions || []).forEach(function(s) {
           var label = s.title || s.id.slice(0, 24);
           var selected = s.id === sessionId ? " selected" : "";
+          if (s.id === sessionId) foundSession = true;
           opts += '<option value="' + s.id + '"' + selected + '>' + escapeHtml(label) + '</option>';
         });
         selector.innerHTML = opts;
+
+        if (skipMessageLoad) return;
+
+        // If we have a valid session selected, load its messages
+        if (foundSession && !sessionId.startsWith("canvas-")) {
+          loadMessagesForSession(sessionId);
+          return;
+        }
+
+        // No saved session — auto-restore the most recent web session
+        if (!savedSession) {
+          var sessions = data.sessions || [];
+          for (var i = 0; i < sessions.length; i++) {
+            var s = sessions[i];
+            if (s.channel === "web") {
+              sessionId = s.id;
+              document.getElementById("chat-container").dataset.sessionId = sessionId;
+              localStorage.setItem(STORAGE_KEY, sessionId);
+              selector.value = sessionId;
+              loadMessagesForSession(sessionId);
+              return;
+            }
+          }
+        }
       });
   }
 
@@ -225,69 +275,13 @@ export function getChatScript(): string {
       clearMessages();
       return;
     }
-    fetch("/api/sessions/" + val + "/messages")
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        sessionId = val;
-        document.getElementById("chat-container").dataset.sessionId = val;
-        localStorage.setItem(STORAGE_KEY, val);
-        clearMessages();
-        var welcome = messagesDiv.querySelector(".chat-welcome");
-        if (welcome) welcome.remove();
-        (data.messages || []).forEach(function(m) {
-          appendMsg(m.role === "user" ? "user" : "assistant", m.content);
-        });
-      });
+    sessionId = val;
+    document.getElementById("chat-container").dataset.sessionId = val;
+    localStorage.setItem(STORAGE_KEY, val);
+    loadMessagesForSession(val);
   });
 
   loadSessions();
-
-  // If page loaded with a saved session, load its messages (skip canvas sessions)
-  if (savedSession && !sessionId.startsWith("canvas-")) {
-    fetch("/api/sessions/" + sessionId + "/messages")
-      .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
-      .then(function(data) {
-        if (data.messages && data.messages.length > 0) {
-          var welcome = messagesDiv.querySelector(".chat-welcome");
-          if (welcome) welcome.remove();
-          data.messages.forEach(function(m) {
-            appendMsg(m.role === "user" ? "user" : "assistant", m.content);
-          });
-        }
-      })
-      .catch(function() { /* session may have been deleted */ });
-  } else {
-    // No saved session — try to auto-restore the most recent web session
-    fetch("/api/sessions?limit=20")
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        var sessions = data.sessions || [];
-        // Find the most recent web or canvas session with messages
-        for (var i = 0; i < sessions.length; i++) {
-          var s = sessions[i];
-          if (s.channel === "web") {
-            sessionId = s.id;
-            document.getElementById("chat-container").dataset.sessionId = sessionId;
-            localStorage.setItem(STORAGE_KEY, sessionId);
-            // Update selector
-            if (selector) selector.value = sessionId;
-            // Load messages for this session
-            return fetch("/api/sessions/" + sessionId + "/messages")
-              .then(function(r) { return r.json(); })
-              .then(function(msgData) {
-                if (msgData.messages && msgData.messages.length > 0) {
-                  var welcome = messagesDiv.querySelector(".chat-welcome");
-                  if (welcome) welcome.remove();
-                  msgData.messages.forEach(function(m) {
-                    appendMsg(m.role === "user" ? "user" : "assistant", m.content);
-                  });
-                }
-              });
-          }
-        }
-      })
-      .catch(function() { /* ignore — fresh session is fine */ });
-  }
 
   function autoResizeInput() {
     input.style.height = "auto";
@@ -615,7 +609,7 @@ export function getChatScript(): string {
         }
         updateActivitySummary(streamBubble);
         localStorage.setItem(STORAGE_KEY, sessionId);
-        loadSessions();
+        loadSessions(true);
         sendBtn.disabled = false;
         typingDiv.style.display = "none";
       }
