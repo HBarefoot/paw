@@ -1,12 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { stripCodeFences } from "../lib/parse-json";
 import type { CachedSearchClient } from "../lib/search-cache";
 
 interface PluginDeps {
 	searchClient: CachedSearchClient;
-	anthropicApiKey: string;
+	llm: (options: { system: string; message: string }) => Promise<string>;
 }
 
 interface HqData {
@@ -21,7 +20,6 @@ const PROMPT_PATH = resolve(import.meta.dir, "../prompts/hq-extractor.md");
 
 export function createMapToHqHandler(deps: PluginDeps) {
 	const serpapi = deps.searchClient;
-	const claude = new Anthropic({ apiKey: deps.anthropicApiKey, timeout: 60_000 });
 	const systemPrompt = readFileSync(PROMPT_PATH, "utf-8");
 
 	return async (
@@ -83,15 +81,10 @@ Google Maps Results:
 ${mapsData}
 `.trim();
 
-			const response = await claude.messages.create({
-				model: "claude-sonnet-4-5-20250929",
-				max_tokens: 512,
+			const responseText = await deps.llm({
 				system: systemPrompt,
-				messages: [{ role: "user", content: userMessage }],
+				message: userMessage,
 			});
-
-			const responseText =
-				response.content[0].type === "text" ? response.content[0].text : "";
 
 			let hqData: HqData;
 			try {
@@ -131,15 +124,10 @@ Google Search Results:
 ${retrySnippets}
 `.trim();
 
-						const retryResponse = await claude.messages.create({
-							model: "claude-sonnet-4-5-20250929",
-							max_tokens: 512,
+						const retryText = await deps.llm({
 							system: systemPrompt,
-							messages: [{ role: "user", content: retryMessage }],
+							message: retryMessage,
 						});
-
-						const retryText =
-							retryResponse.content[0].type === "text" ? retryResponse.content[0].text : "";
 						try {
 							const retryData: HqData = JSON.parse(stripCodeFences(retryText));
 							const retryAllNull = !retryData.hqAddress && !retryData.hqCity && !retryData.hqState && !retryData.hqDomain && !retryData.hqPhone;

@@ -23,6 +23,7 @@ interface PluginContext {
 		set(key: string, value: unknown): void;
 		delete(key: string): void;
 	};
+	llm(options: { system: string; message: string }): Promise<string>;
 }
 
 export default class IcpDiscoveryPlugin implements ChannelPlugin {
@@ -38,17 +39,9 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			(config.braveApiKey as string) || process.env.BRAVE_API_KEY || "";
 		const hunterApiKey =
 			(config.hunterApiKey as string) || process.env.HUNTER_API_KEY || "";
-		const anthropicApiKey =
-			(config.anthropicApiKey as string) || process.env.ANTHROPIC_API_KEY || "";
-
 		if (!serpApiKey) {
 			ctx.logger.warn(
 				"BRAVE_API_KEY not configured — discover_franchises and map_to_hq will fail",
-			);
-		}
-		if (!anthropicApiKey) {
-			ctx.logger.warn(
-				"ANTHROPIC_API_KEY not configured — LLM parsing tools will fail",
 			);
 		}
 		if (!hunterApiKey) {
@@ -84,15 +77,15 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 		// Create tool handlers with dependencies
 		const discoverFranchises = createDiscoverFranchisesHandler({
 			searchClient,
-			anthropicApiKey,
+			llm: ctx.llm,
 			getLiveConfig,
 		});
 		const estimateRevenue = createEstimateRevenueHandler({
 			searchClient,
-			anthropicApiKey,
+			llm: ctx.llm,
 		});
 		const filterIcp = createFilterIcpHandler({ store: ctx.store, getLiveConfig });
-		const mapToHq = createMapToHqHandler({ searchClient, anthropicApiKey });
+		const mapToHq = createMapToHqHandler({ searchClient, llm: ctx.llm });
 		const enrichContacts = createEnrichContactsHandler({
 			hunterConfig,
 			searchClient,

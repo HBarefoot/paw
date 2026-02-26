@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { isExcluded } from "../lib/exclude-matcher";
 import { stripCodeFences } from "../lib/parse-json";
 import type { CachedSearchClient } from "../lib/search-cache";
@@ -25,7 +24,7 @@ const NAICS_DESCRIPTIONS: Record<string, string> = {
 
 interface PluginDeps {
 	searchClient: CachedSearchClient;
-	anthropicApiKey: string;
+	llm: (options: { system: string; message: string }) => Promise<string>;
 	getLiveConfig?: () => { sampleCities?: string[]; excludeBrands?: string[] };
 }
 
@@ -49,7 +48,6 @@ function isBrandMatch(resultTitle: string, brandName: string): boolean {
 
 export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 	const serpapi = deps.searchClient;
-	const claude = new Anthropic({ apiKey: deps.anthropicApiKey, timeout: 60_000 });
 	const systemPrompt = readFileSync(PROMPT_PATH, "utf-8");
 
 	return async (
@@ -87,23 +85,11 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				.flatMap((r) => r.results.map((o) => `${o.title}: ${o.snippet}`))
 				.join("\n");
 
-			// Step 2: Ask Claude to extract brand names from search results
-			const extractionResponse = await claude.messages.create({
-				model: "claude-sonnet-4-5-20250929",
-				max_tokens: 2048,
+			// Step 2: Ask LLM to extract brand names from search results
+			const extractionText = await deps.llm({
 				system: systemPrompt,
-				messages: [
-					{
-						role: "user",
-						content: `Extract franchise brand names from these search results for NAICS ${naicsCode} (${naicsDescription}):\n\n${allSnippets}`,
-					},
-				],
+				message: `Extract franchise brand names from these search results for NAICS ${naicsCode} (${naicsDescription}):\n\n${allSnippets}`,
 			});
-
-			const extractionText =
-				extractionResponse.content[0].type === "text"
-					? extractionResponse.content[0].text
-					: "";
 
 			let candidateBrands: string[];
 			try {
@@ -211,20 +197,10 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 								.join("\n");
 
 							if (snippets) {
-								const fallbackResponse = await claude.messages.create({
-									model: "claude-sonnet-4-5-20250929",
-									max_tokens: 128,
-									messages: [
-										{
-											role: "user",
-											content: `Extract the number of locations/units for "${brand}" from these search results. Return ONLY a number (integer). If unclear, return 0.\n\n${snippets}`,
-										},
-									],
-								});
-								const numText =
-									fallbackResponse.content[0].type === "text"
-										? fallbackResponse.content[0].text.trim()
-										: "0";
+								const numText = (await deps.llm({
+									system: "Extract the requested number from the search results. Return ONLY a number (integer). If unclear, return 0.",
+									message: `Extract the number of locations/units for "${brand}" from these search results. Return ONLY a number (integer). If unclear, return 0.\n\n${snippets}`,
+								})).trim();
 								const parsed = Number.parseInt(numText.replace(/[^0-9]/g, ""), 10);
 								if (parsed > 0) {
 									estimatedLocations = parsed;

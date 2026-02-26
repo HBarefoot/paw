@@ -860,6 +860,13 @@ export class Kernel {
 			logger,
 			config: pluginConfig as Record<string, unknown>,
 			store,
+			llm: async ({ system, message }: { system: string; message: string }) => {
+				const response = await this.provider.chat(
+					[{ role: "user", content: message }],
+					system,
+				);
+				return response.text;
+			},
 		};
 	}
 

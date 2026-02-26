@@ -20,6 +20,8 @@ export interface PluginContext {
 	logger: Logger;
 	config: Record<string, unknown>;
 	store: PluginStore;
+	/** Simple LLM completion using the kernel's configured provider. */
+	llm(options: { system: string; message: string }): Promise<string>;
 }
 
 export interface ChannelPlugin {

@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { scoreConfidence } from "../lib/confidence";
 import { stripCodeFences } from "../lib/parse-json";
 import type { CachedSearchClient } from "../lib/search-cache";
@@ -9,7 +8,7 @@ import type { RevenueEstimate, RevenueSource } from "../types";
 
 interface PluginDeps {
 	searchClient: CachedSearchClient;
-	anthropicApiKey: string;
+	llm: (options: { system: string; message: string }) => Promise<string>;
 }
 
 const PROMPT_PATH = resolve(
@@ -19,7 +18,6 @@ const PROMPT_PATH = resolve(
 
 export function createEstimateRevenueHandler(deps: PluginDeps) {
 	const serpapi = deps.searchClient;
-	const claude = new Anthropic({ apiKey: deps.anthropicApiKey, timeout: 60_000 });
 	const systemPrompt = readFileSync(PROMPT_PATH, "utf-8");
 
 	return async (
@@ -99,15 +97,10 @@ ${employeeData}
 Data sources consulted: ${dataSources.join(", ")}
 `.trim();
 
-			const response = await claude.messages.create({
-				model: "claude-sonnet-4-5-20250929",
-				max_tokens: 1024,
+			const responseText = await deps.llm({
 				system: systemPrompt,
-				messages: [{ role: "user", content: userMessage }],
+				message: userMessage,
 			});
-
-			const responseText =
-				response.content[0].type === "text" ? response.content[0].text : "";
 
 			let estimate: RevenueEstimate;
 			try {
