@@ -79,7 +79,7 @@ export const SessionsListPage: FC<SessionsListProps> = ({ sessions }) => {
 											Resume
 										</a>
 										{raw(
-											`<button class="btn btn-sm" style="color:var(--danger)" onclick="deleteSession('${s.id}')">Delete</button>`,
+											`<button class="btn-danger btn-sm" onclick="deleteSession('${s.id}')">Delete</button>`,
 										)}
 									</td>
 								</tr>

@@ -91,7 +91,7 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			searchClient,
 			anthropicApiKey,
 		});
-		const filterIcp = createFilterIcpHandler(ctx.store);
+		const filterIcp = createFilterIcpHandler({ store: ctx.store, getLiveConfig });
 		const mapToHq = createMapToHqHandler({ searchClient, anthropicApiKey });
 		const enrichContacts = createEnrichContactsHandler({
 			hunterConfig,

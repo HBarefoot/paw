@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
+import { isExcluded } from "../lib/exclude-matcher";
 import { stripCodeFences } from "../lib/parse-json";
 import type { CachedSearchClient } from "../lib/search-cache";
 import type { DiscoveredBrand } from "../types";
@@ -130,10 +131,10 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 			}
 
 			// Filter out excluded brands before Maps sampling
-			if (liveConfig.excludeBrands?.length) {
-				const excludeSet = new Set(liveConfig.excludeBrands.map((b) => b.toLowerCase()));
+			const excludeBrands = liveConfig.excludeBrands;
+			if (excludeBrands?.length) {
 				candidateBrands = candidateBrands.filter(
-					(brand) => !excludeSet.has(brand.toLowerCase()),
+					(brand) => !isExcluded(brand, excludeBrands),
 				);
 			}
 

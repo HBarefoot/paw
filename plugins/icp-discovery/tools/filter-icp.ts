@@ -1,3 +1,4 @@
+import { isExcluded } from "../lib/exclude-matcher";
 import type {
 	DiscoveredBrand,
 	QualifiedCompany,
@@ -8,7 +9,12 @@ interface PluginStore {
 	get(key: string): unknown | undefined;
 }
 
-export function createFilterIcpHandler(store: PluginStore) {
+interface FilterIcpDeps {
+	store: PluginStore;
+	getLiveConfig?: () => { excludeBrands?: string[] };
+}
+
+export function createFilterIcpHandler(deps: FilterIcpDeps) {
 	return async (
 		input: Record<string, unknown>,
 	): Promise<{ content: string; is_error?: boolean }> => {
@@ -17,11 +23,18 @@ export function createFilterIcpHandler(store: PluginStore) {
 			const minLocations = (input.minLocations as number) ?? 100;
 			const excludeCompanies = (input.excludeCompanies as string[]) ?? [];
 
+			// Merge config excludes (from web UI) with per-call excludes
+			const liveConfig = deps.getLiveConfig?.() ?? {};
+			const combinedExcludes = [
+				...excludeCompanies,
+				...(liveConfig.excludeBrands ?? []),
+			];
+
 			// Retrieve discovered brands and revenue estimates from plugin store
-			const storedBrands = store.get("discovered_brands") as
+			const storedBrands = deps.store.get("discovered_brands") as
 				| DiscoveredBrand[]
 				| undefined;
-			const storedRevenues = store.get("revenue_estimates") as
+			const storedRevenues = deps.store.get("revenue_estimates") as
 				| RevenueEstimate[]
 				| undefined;
 
@@ -47,18 +60,13 @@ export function createFilterIcpHandler(store: PluginStore) {
 				revenueLookup.set(rev.companyName.toLowerCase(), rev);
 			}
 
-			// Normalize exclude list
-			const excludeSet = new Set(excludeCompanies.map((c) => c.toLowerCase()));
-
 			// Filter and join
 			const qualified: QualifiedCompany[] = [];
 			const filtered: Array<{ name: string; reason: string }> = [];
 
 			for (const brand of storedBrands) {
-				const nameKey = brand.name.toLowerCase();
-
-				// Check exclusion list
-				if (excludeSet.has(nameKey)) {
+				// Check exclusion list (substring matching)
+				if (isExcluded(brand.name, combinedExcludes)) {
 					filtered.push({ name: brand.name, reason: "excluded by config" });
 					continue;
 				}
@@ -73,6 +81,7 @@ export function createFilterIcpHandler(store: PluginStore) {
 				}
 
 				// Find matching revenue estimate
+				const nameKey = brand.name.toLowerCase();
 				const revenue = revenueLookup.get(nameKey);
 				if (!revenue) {
 					filtered.push({
