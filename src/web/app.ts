@@ -26,6 +26,7 @@ import { MemoryPage } from "./views/memory-page.js";
 import { SessionsListPage, SessionDetailPage } from "./views/sessions-page.js";
 import { MCPPage } from "./views/mcp-page.js";
 import { SkillsPage } from "./views/skills-page.js";
+import { WebhooksPage } from "./views/webhooks-page.js";
 import { LoginPage } from "./views/login-page.js";
 import { TotpSetupPage } from "./views/totp-setup-page.js";
 import { readConfigOverrides, saveConfigOverrides } from "../config/writer.js";
@@ -111,7 +112,7 @@ export function createWebApp(
 	// Body size limit (5MB)
 	app.use("*", bodyLimit({ maxSize: 5 * 1024 * 1024 }));
 
-	// CSRF protection — skip for Bearer token API calls
+	// CSRF protection — skip for Bearer token API calls and incoming webhooks
 	app.use("*", async (c, next) => {
 		const authHeader = c.req.header("Authorization");
 		if (authHeader?.startsWith("Bearer ")) {
@@ -121,7 +122,140 @@ export function createWebApp(
 		if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
 			return next();
 		}
+		// Skip CSRF for incoming webhook endpoints (external services)
+		if (c.req.path.startsWith("/api/webhooks/incoming/")) {
+			return next();
+		}
 		return csrf({ origin: (origin) => allowedOrigins.has(origin) })(c, next);
+	});
+
+	// --- Webhook Receiver (before auth — external services don't have sessions) ---
+	app.post("/api/webhooks/incoming/:slug", async (c) => {
+		const slug = c.req.param("slug");
+		const webhook = database
+			.prepare("SELECT * FROM webhooks WHERE slug = ?")
+			.get(slug) as {
+			id: string;
+			name: string;
+			slug: string;
+			secret: string | null;
+			event_type: string;
+			active: number;
+		} | null;
+
+		if (!webhook || !webhook.active) {
+			return c.json({ error: "Webhook not found" }, 404);
+		}
+
+		let body: unknown = null;
+		try {
+			body = await c.req.json();
+		} catch {
+			try {
+				body = await c.req.text();
+			} catch {
+				body = null;
+			}
+		}
+
+		// HMAC signature verification (if secret is set)
+		if (webhook.secret) {
+			const sigHeader =
+				c.req.header("x-paw-signature") ??
+				c.req.header("x-hub-signature-256");
+			if (!sigHeader) {
+				database.run(
+					"INSERT INTO webhook_logs (webhook_id, status, headers_json, body_json, error) VALUES (?, 'error', ?, ?, ?)",
+					[
+						webhook.id,
+						JSON.stringify(Object.fromEntries(c.req.raw.headers)),
+						JSON.stringify(body),
+						"Missing signature header",
+					],
+				);
+				return c.json({ error: "Missing signature" }, 401);
+			}
+
+			const rawBody =
+				typeof body === "string" ? body : JSON.stringify(body);
+			const key = await crypto.subtle.importKey(
+				"raw",
+				new TextEncoder().encode(webhook.secret),
+				{ name: "HMAC", hash: "SHA-256" },
+				false,
+				["sign"],
+			);
+			const sig = await crypto.subtle.sign(
+				"HMAC",
+				key,
+				new TextEncoder().encode(rawBody),
+			);
+			const expected =
+				"sha256=" +
+				Array.from(new Uint8Array(sig))
+					.map((b) => b.toString(16).padStart(2, "0"))
+					.join("");
+
+			const provided = sigHeader.startsWith("sha256=")
+				? sigHeader
+				: `sha256=${sigHeader}`;
+			if (expected !== provided) {
+				database.run(
+					"INSERT INTO webhook_logs (webhook_id, status, headers_json, body_json, error) VALUES (?, 'error', ?, ?, ?)",
+					[
+						webhook.id,
+						JSON.stringify(Object.fromEntries(c.req.raw.headers)),
+						JSON.stringify(body),
+						"Invalid signature",
+					],
+				);
+				return c.json({ error: "Invalid signature" }, 401);
+			}
+		}
+
+		// Log the delivery
+		database.run(
+			"INSERT INTO webhook_logs (webhook_id, status, headers_json, body_json) VALUES (?, 'ok', ?, ?)",
+			[
+				webhook.id,
+				JSON.stringify(Object.fromEntries(c.req.raw.headers)),
+				JSON.stringify(body),
+			],
+		);
+
+		// Update trigger count and timestamp
+		database.run(
+			"UPDATE webhooks SET trigger_count = trigger_count + 1, last_triggered_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+			[webhook.id],
+		);
+
+		// Fire event async (don't block the response)
+		const headers: Record<string, string> = {};
+		c.req.raw.headers.forEach((v, k) => {
+			headers[k] = v;
+		});
+
+		kernel.eventBus
+			.emit(webhook.event_type as "webhook:inbound", {
+				webhookId: webhook.id,
+				webhookName: webhook.name,
+				slug: webhook.slug,
+				headers,
+				body,
+				timestamp: new Date().toISOString(),
+			})
+			.catch((err) => {
+				kernel.eventBus
+					.emit("webhook:error", {
+						webhookId: webhook.id,
+						slug: webhook.slug,
+						error:
+							err instanceof Error ? err.message : String(err),
+					})
+					.catch(() => {});
+			});
+
+		return c.json({ ok: true });
 	});
 
 	// Session auth middleware
@@ -1925,6 +2059,196 @@ export function createWebApp(
 		}
 
 		return c.json({ reconnected: true });
+	});
+
+	// --- Webhooks Page ---
+
+	app.get("/webhooks", (c) => {
+		const webhooks = database
+			.prepare("SELECT * FROM webhooks ORDER BY created_at DESC")
+			.all() as Array<{
+			id: string;
+			name: string;
+			slug: string;
+			secret: string | null;
+			description: string;
+			event_type: string;
+			active: number;
+			last_triggered_at: string | null;
+			trigger_count: number;
+			created_at: string;
+		}>;
+
+		// Derive base URL from request
+		const proto = trustedProxy
+			? c.req.header("x-forwarded-proto") ?? "http"
+			: config.web.tls.enabled
+				? "https"
+				: "http";
+		const host =
+			c.req.header("host") ??
+			`${config.web.host}:${config.web.port}`;
+		const baseUrl = `${proto}://${host}`;
+
+		return c.html(WebhooksPage({ webhooks, baseUrl }));
+	});
+
+	// --- Webhooks API ---
+
+	app.get("/api/webhooks", (c) => {
+		const webhooks = database
+			.prepare("SELECT * FROM webhooks ORDER BY created_at DESC")
+			.all();
+		return c.json({ webhooks });
+	});
+
+	app.post("/api/webhooks", async (c) => {
+		const body = await c.req.json<{
+			name: string;
+			slug: string;
+			secret?: string;
+			description?: string;
+			event_type?: string;
+		}>();
+
+		if (!body.name?.trim() || !body.slug?.trim()) {
+			return c.json({ error: "Name and slug are required" }, 400);
+		}
+
+		const slug = body.slug
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9-]/g, "");
+		if (!slug || slug.length < 2) {
+			return c.json(
+				{
+					error:
+						"Slug must be at least 2 characters (lowercase letters, numbers, hyphens)",
+				},
+				400,
+			);
+		}
+
+		const existing = database
+			.prepare("SELECT id FROM webhooks WHERE slug = ?")
+			.get(slug);
+		if (existing) {
+			return c.json({ error: "A webhook with this slug already exists" }, 409);
+		}
+
+		const id = crypto.randomUUID();
+		database.run(
+			"INSERT INTO webhooks (id, name, slug, secret, description, event_type) VALUES (?, ?, ?, ?, ?, ?)",
+			[
+				id,
+				body.name.trim(),
+				slug,
+				body.secret ?? null,
+				body.description ?? "",
+				body.event_type ?? "webhook:inbound",
+			],
+		);
+
+		return c.json({ id, slug }, 201);
+	});
+
+	app.put("/api/webhooks/:id", async (c) => {
+		const id = c.req.param("id");
+		const body = await c.req.json<{
+			name?: string;
+			description?: string;
+			active?: boolean;
+			secret?: string | null;
+			event_type?: string;
+		}>();
+
+		const webhook = database
+			.prepare("SELECT id FROM webhooks WHERE id = ?")
+			.get(id);
+		if (!webhook) return c.json({ error: "Webhook not found" }, 404);
+
+		const updates: string[] = [];
+		const params: unknown[] = [];
+
+		if (body.name !== undefined) {
+			updates.push("name = ?");
+			params.push(body.name);
+		}
+		if (body.description !== undefined) {
+			updates.push("description = ?");
+			params.push(body.description);
+		}
+		if (body.active !== undefined) {
+			updates.push("active = ?");
+			params.push(body.active ? 1 : 0);
+		}
+		if (body.secret !== undefined) {
+			updates.push("secret = ?");
+			params.push(body.secret);
+		}
+		if (body.event_type !== undefined) {
+			updates.push("event_type = ?");
+			params.push(body.event_type);
+		}
+
+		if (updates.length > 0) {
+			updates.push("updated_at = datetime('now')");
+			params.push(id);
+			database.run(
+				`UPDATE webhooks SET ${updates.join(", ")} WHERE id = ?`,
+				params,
+			);
+		}
+
+		return c.json({ ok: true });
+	});
+
+	app.delete("/api/webhooks/:id", (c) => {
+		const id = c.req.param("id");
+		const result = database.run("DELETE FROM webhooks WHERE id = ?", [id]);
+		if (result.changes === 0)
+			return c.json({ error: "Webhook not found" }, 404);
+		return c.json({ deleted: true });
+	});
+
+	app.post("/api/webhooks/:id/test", (c) => {
+		const id = c.req.param("id");
+		const webhook = database
+			.prepare("SELECT * FROM webhooks WHERE id = ?")
+			.get(id) as { id: string; name: string; slug: string } | null;
+		if (!webhook) return c.json({ error: "Webhook not found" }, 404);
+
+		kernel.eventBus
+			.emit("webhook:inbound", {
+				webhookId: webhook.id,
+				webhookName: webhook.name,
+				slug: webhook.slug,
+				headers: {},
+				body: { test: true, timestamp: new Date().toISOString() },
+				timestamp: new Date().toISOString(),
+			})
+			.catch(() => {});
+
+		database.run(
+			"INSERT INTO webhook_logs (webhook_id, status, body_json) VALUES (?, 'ok', ?)",
+			[webhook.id, JSON.stringify({ test: true })],
+		);
+		database.run(
+			"UPDATE webhooks SET trigger_count = trigger_count + 1, last_triggered_at = datetime('now') WHERE id = ?",
+			[webhook.id],
+		);
+
+		return c.json({ ok: true });
+	});
+
+	app.get("/api/webhooks/:id/logs", (c) => {
+		const id = c.req.param("id");
+		const logs = database
+			.prepare(
+				"SELECT * FROM webhook_logs WHERE webhook_id = ? ORDER BY created_at DESC LIMIT 50",
+			)
+			.all(id);
+		return c.json({ logs });
 	});
 
 	app.get("/api/health", async (c) => {

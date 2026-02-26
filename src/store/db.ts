@@ -187,6 +187,35 @@ function runMigrations(db: Database): void {
 	} catch {
 		// vec0 not available — vector search will be disabled
 	}
+
+	// Webhooks table
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      secret TEXT,
+      description TEXT DEFAULT '',
+      event_type TEXT NOT NULL DEFAULT 'webhook:inbound',
+      active INTEGER NOT NULL DEFAULT 1,
+      last_triggered_at TEXT,
+      trigger_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS webhook_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'ok',
+      headers_json TEXT,
+      body_json TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_logs_webhook ON webhook_logs(webhook_id, created_at DESC);
+  `);
 }
 
 export function closeDb(): void {

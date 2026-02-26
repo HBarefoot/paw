@@ -27,6 +27,15 @@ export interface EventMap {
 	"security:user-approved": { userId: string };
 	"security:permission-denied": { plugin: string; tool: string };
 	"web:started": { host: string; port: number };
+	"webhook:inbound": {
+		webhookId: string;
+		webhookName: string;
+		slug: string;
+		headers: Record<string, string>;
+		body: unknown;
+		timestamp: string;
+	};
+	"webhook:error": { webhookId: string; slug: string; error: string };
 }
 
 export type EventName = keyof EventMap;

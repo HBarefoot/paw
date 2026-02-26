@@ -19,6 +19,7 @@ function navIcon(name: string): string {
     skills: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
     chat: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
     canvas: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+    webhooks: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8H12"/></svg>`,
   };
   return icons[name] ?? "";
 }
@@ -603,16 +604,23 @@ const cssDesignSystem = `
     padding: 16px 24px;
     border-top: 1px solid var(--border-primary);
     background: var(--bg-secondary);
-    align-items: center;
+    align-items: flex-end;
   }
-  .chat-input input {
+  .chat-input textarea {
     flex: 1;
     border-radius: 20px;
     padding: 10px 18px;
     background: var(--bg-card);
     border: 1px solid var(--border-primary);
+    resize: none;
+    overflow-y: hidden;
+    min-height: 38px;
+    max-height: 200px;
+    line-height: 1.5;
+    font-family: var(--font-sans);
+    font-size: 14px;
   }
-  .chat-input input:focus {
+  .chat-input textarea:focus {
     border-color: var(--border-focus);
     box-shadow: 0 0 0 3px var(--accent-subtle);
   }
@@ -875,6 +883,46 @@ const cssDesignSystem = `
     flex-shrink: 0;
   }
   @keyframes activity-spin { to { transform: rotate(360deg); } }
+
+  /* ===== COLLAPSIBLE ACTIVITY TIMELINE ===== */
+  .activity-timeline-header {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    margin-top: 8px;
+    margin-bottom: 2px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-secondary);
+    user-select: none;
+    transition: background var(--transition);
+  }
+  .activity-timeline-header:hover { background: var(--bg-hover); }
+  .activity-timeline-header.visible { display: flex; }
+
+  .activity-toggle-icon {
+    display: inline-flex;
+    transition: transform 150ms ease;
+    flex-shrink: 0;
+  }
+  .activity-toggle-icon.expanded { transform: rotate(90deg); }
+
+  .activity-summary-counts {
+    display: flex;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .activity-summary-done { color: var(--success); }
+  .activity-summary-running { color: var(--accent); }
+  .activity-summary-error { color: var(--error); }
+
+  .activity-timeline.collapsed .activity-step.done,
+  .activity-timeline.collapsed .activity-step.error,
+  .activity-timeline.collapsed .activity-roundtrip-divider { display: none; }
+  .activity-timeline.collapsed .activity-step.running { display: block; }
 
   /* ===== MEMORY CARDS ===== */
   .memory-card {
@@ -1182,6 +1230,7 @@ const navItems = [
   { path: "/sessions", label: "Sessions", icon: "sessions" },
   { path: "/mcp", label: "MCP", icon: "mcp" },
   { path: "/skills", label: "Skills", icon: "skills" },
+  { path: "/webhooks", label: "Webhooks", icon: "webhooks" },
   { path: "/chat", label: "Chat", icon: "chat" },
 ];
 

@@ -63,11 +63,11 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 						{raw(
 							`<button class="attach-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files">${attachIconSvg}</button>`,
 						)}
-						<input
-							type="text"
+						<textarea
 							id="chat-input"
-							placeholder="Type a message..."
+							placeholder="Type a message... (Shift+Enter for new line)"
 							autocomplete="off"
+							rows={1}
 						/>
 						{raw(
 							`<button class="send-btn" id="send-btn" onclick="sendMessage()">${sendIconSvg}</button>`,
@@ -289,9 +289,17 @@ export function getChatScript(): string {
       .catch(function() { /* ignore — fresh session is fine */ });
   }
 
+  function autoResizeInput() {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 200) + "px";
+    input.style.overflowY = input.scrollHeight > 200 ? "auto" : "hidden";
+  }
+
   input.addEventListener("keydown", function(e) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
+
+  input.addEventListener("input", autoResizeInput);
 
   function createStreamingBubble() {
     var wrapper = document.createElement("div");
@@ -314,10 +322,32 @@ export function getChatScript(): string {
     activityDiv.style.display = "none";
     bubble.appendChild(activityDiv);
 
+    var activityHeader = document.createElement("div");
+    activityHeader.className = "activity-timeline-header";
+    activityHeader.innerHTML = '<span class="activity-toggle-icon">&#9654;</span><span class="activity-summary-counts"></span>';
+    bubble.insertBefore(activityHeader, activityDiv);
+
+    activityDiv.classList.add("collapsed");
+
+    activityHeader.addEventListener("click", function() {
+      var isCollapsed = activityDiv.classList.toggle("collapsed");
+      var chevron = activityHeader.querySelector(".activity-toggle-icon");
+      if (chevron) chevron.classList.toggle("expanded", !isCollapsed);
+    });
+
     wrapper.appendChild(avatar);
     wrapper.appendChild(bubble);
     messagesDiv.insertBefore(wrapper, typingDiv);
-    return { wrapper: wrapper, mdDiv: mdDiv, activityDiv: activityDiv, _timers: [] };
+    return { wrapper: wrapper, mdDiv: mdDiv, activityDiv: activityDiv, activityHeader: activityHeader, _timers: [], _doneCount: 0, _errorCount: 0, _runningCount: 0 };
+  }
+
+  function updateActivitySummary(streamBubble) {
+    var parts = [];
+    if (streamBubble._doneCount > 0) parts.push('<span class="activity-summary-done">\\u2713 ' + streamBubble._doneCount + ' done</span>');
+    if (streamBubble._runningCount > 0) parts.push('<span class="activity-summary-running">\\u21BB ' + streamBubble._runningCount + ' running</span>');
+    if (streamBubble._errorCount > 0) parts.push('<span class="activity-summary-error">\\u2717 ' + streamBubble._errorCount + ' failed</span>');
+    var countsEl = streamBubble.activityHeader.querySelector(".activity-summary-counts");
+    if (countsEl) countsEl.innerHTML = parts.join(' <span style="color:var(--text-tertiary)">\\u00b7</span> ');
   }
 
   function updateStreamContent(mdDiv, text) {
@@ -328,6 +358,10 @@ export function getChatScript(): string {
   function addActivityStep(streamBubble, chunk) {
     var activityDiv = streamBubble.activityDiv;
     activityDiv.style.display = "";
+    // Show the collapsible header on first activity
+    if (streamBubble.activityHeader && !streamBubble.activityHeader.classList.contains("visible")) {
+      streamBubble.activityHeader.classList.add("visible");
+    }
 
     if (chunk.type === "thinking") {
       // Remove previous thinking indicator
@@ -383,6 +417,9 @@ export function getChatScript(): string {
 
       activityDiv.appendChild(step);
 
+      streamBubble._runningCount++;
+      updateActivitySummary(streamBubble);
+
       // Start live duration counter
       var durEl = step.querySelector(".activity-duration");
       var startTime = Date.now();
@@ -410,6 +447,11 @@ export function getChatScript(): string {
 
       var isError = chunk.toolIsError;
       existing.className = "activity-step " + (isError ? "error" : "done");
+
+      streamBubble._runningCount = Math.max(0, streamBubble._runningCount - 1);
+      if (isError) streamBubble._errorCount++;
+      else streamBubble._doneCount++;
+      updateActivitySummary(streamBubble);
 
       // Update icon
       var iconEl = existing.querySelector(".activity-icon");
@@ -454,6 +496,7 @@ export function getChatScript(): string {
     if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
     if (!text) text = pendingFiles.length > 0 ? "(file attached)" : "(image)";
     input.value = "";
+    input.style.height = "auto";
 
     // Capture pending attachments for this message
     var imagesToSend = pendingImages.slice();
@@ -562,7 +605,15 @@ export function getChatScript(): string {
         }
         if (!hasActivity) {
           streamBubble.activityDiv.style.display = "none";
+          if (streamBubble.activityHeader) streamBubble.activityHeader.classList.remove("visible");
         }
+        // Auto-expand timeline if there were errors
+        if (streamBubble._errorCount > 0) {
+          streamBubble.activityDiv.classList.remove("collapsed");
+          var chevron = streamBubble.activityHeader && streamBubble.activityHeader.querySelector(".activity-toggle-icon");
+          if (chevron) chevron.classList.add("expanded");
+        }
+        updateActivitySummary(streamBubble);
         localStorage.setItem(STORAGE_KEY, sessionId);
         loadSessions();
         sendBtn.disabled = false;
@@ -1329,6 +1380,7 @@ export function getChatScript(): string {
     if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
     if (!text) text = pendingFiles.length > 0 ? "(file attached)" : "(image)";
     input.value = "";
+    input.style.height = "auto";
 
     // Capture pending attachments
     var imagesToSend = pendingImages.slice();
