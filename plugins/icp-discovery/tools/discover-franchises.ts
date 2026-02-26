@@ -74,11 +74,12 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				`site:franchisedirect.com OR site:franchisegator.com ${naicsDescription}`,
 			];
 
-			const searchResults = [];
-			for (const query of searchQueries) {
-				const result = await serpapi.googleSearch(query);
-				searchResults.push({ query, results: result.organic_results ?? [] });
-			}
+			const searchResults = await Promise.all(
+				searchQueries.map(async (query) => {
+					const result = await serpapi.googleSearch(query);
+					return { query, results: result.organic_results ?? [] };
+				}),
+			);
 
 			// Extract candidate brand names from search results
 			const allSnippets = searchResults
@@ -162,7 +163,7 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 			const allBrands: DiscoveredBrand[] = [];
 
 			const MAX_BRANDS = 20;
-			const BATCH_SIZE = 5;
+			const BATCH_SIZE = 10;
 			const brandsToProcess = candidateBrands.slice(0, MAX_BRANDS);
 
 			for (let i = 0; i < brandsToProcess.length; i += BATCH_SIZE) {
