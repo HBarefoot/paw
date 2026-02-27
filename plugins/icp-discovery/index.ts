@@ -75,8 +75,9 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 				: undefined,
 		});
 
-		// Serialize LLM calls to avoid overwhelming rate-limited endpoints (Ollama 429s)
-		const llmSemaphore = new Semaphore(1);
+		// Limit concurrent LLM calls to avoid overwhelming rate-limited endpoints (Ollama 429s)
+		// concurrency=2 balances throughput vs rate limits (1 was too slow, 10+ caused 429 storms)
+		const llmSemaphore = new Semaphore(2);
 		const llm: typeof ctx.llm = (opts) => llmSemaphore.run(() => ctx.llm(opts));
 
 		// Create tool handlers with dependencies

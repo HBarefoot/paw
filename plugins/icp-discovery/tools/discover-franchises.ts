@@ -96,6 +96,8 @@ async function webSearchLocationCount(
 		`"${brand}" location count ${new Date().getFullYear()}`,
 	];
 
+	// Gather snippets from all queries first, then make a single LLM call
+	const allSnippets: string[] = [];
 	for (const query of queries) {
 		try {
 			const webResult = await searchClient.googleSearch(query);
@@ -103,26 +105,31 @@ async function webSearchLocationCount(
 				.slice(0, 5)
 				.map((r) => `${r.title}: ${r.snippet}`)
 				.join("\n");
-
-			if (!snippets) continue;
-
-			const numText = (
-				await llm({
-					system:
-						"Extract the requested number from the search results. Return ONLY a number (integer). If unclear, return 0.",
-					message: `Extract the number of locations/units for "${brand}" from these search results. Return ONLY a number (integer). If unclear, return 0.\n\n${snippets}`,
-				})
-			).trim();
-			const parsed = parseLocationCount(numText);
-			if (parsed > 0) {
-				return {
-					count: parsed,
-					methodology: `Web search extraction ("${brand}" location count from snippets)`,
-				};
-			}
+			if (snippets) allSnippets.push(snippets);
 		} catch {
 			continue;
 		}
+	}
+
+	if (allSnippets.length === 0) return null;
+
+	try {
+		const numText = (
+			await llm({
+				system:
+					"Extract the requested number from the search results. Return ONLY a number (integer). If unclear, return 0.",
+				message: `Extract the number of locations/units for "${brand}" from these search results. Return ONLY a number (integer). If unclear, return 0.\n\n${allSnippets.join("\n\n")}`,
+			})
+		).trim();
+		const parsed = parseLocationCount(numText);
+		if (parsed > 0) {
+			return {
+				count: parsed,
+				methodology: `Web search extraction ("${brand}" location count from snippets)`,
+			};
+		}
+	} catch {
+		// LLM call failed, fall through to next method
 	}
 	return null;
 }
