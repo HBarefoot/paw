@@ -503,7 +503,7 @@ export class OllamaProvider implements AIProvider {
 			// Phase 2: Execute remaining tools in parallel with streaming
 			if (streamRegularCalls.length > 0) {
 				const gen = executeToolsParallelStreaming(
-					streamRegularCalls, this.toolRegistry, this.logger, roundtrips, 600_000,
+					streamRegularCalls, this.toolRegistry, this.logger, roundtrips,
 				);
 				let next = await gen.next();
 				while (!next.done) {

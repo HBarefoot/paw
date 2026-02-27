@@ -408,7 +408,7 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				: defaultCities;
 			const allBrands: DiscoveredBrand[] = [];
 
-			const MAX_BRANDS = 20;
+			const MAX_BRANDS = 5;
 			const BATCH_SIZE = 5;
 			const brandsToProcess = candidateBrands.slice(0, MAX_BRANDS);
 

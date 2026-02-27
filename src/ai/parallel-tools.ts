@@ -30,7 +30,7 @@ export async function executeToolsParallel(
 	calls: ToolCallRequest[],
 	toolRegistry: ToolRegistry,
 	logger: Logger,
-	timeoutMs = 600_000,
+	timeoutMs = 1_200_000,
 ): Promise<ToolCallResult[]> {
 	const promises = calls.map(async (call): Promise<ToolCallResult> => {
 		const startTime = Date.now();
@@ -85,7 +85,7 @@ export async function* executeToolsParallelStreaming(
 	toolRegistry: ToolRegistry,
 	logger: Logger,
 	roundtrip: number,
-	timeoutMs = 600_000,
+	timeoutMs = 1_200_000,
 ): AsyncGenerator<StreamChunk, ToolCallResult[]> {
 	// Single tool with streamHandler: use it for full sub-agent detail forwarding
 	if (calls.length === 1) {

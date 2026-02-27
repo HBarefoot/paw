@@ -197,7 +197,7 @@ export class ClaudeProvider implements AIProvider {
 			// Phase 2: Execute remaining tools in parallel
 			if (regularCalls.length > 0) {
 				const results = await executeToolsParallel(
-					regularCalls, this.toolRegistry, this.logger, 600_000,
+					regularCalls, this.toolRegistry, this.logger,
 				);
 				for (const r of results) {
 					if (r.images && r.images.length > 0) {
@@ -389,7 +389,7 @@ export class ClaudeProvider implements AIProvider {
 			// Phase 2: Execute remaining tools in parallel with streaming
 			if (streamRegularCalls.length > 0) {
 				const gen = executeToolsParallelStreaming(
-					streamRegularCalls, this.toolRegistry, this.logger, roundtrips, 600_000,
+					streamRegularCalls, this.toolRegistry, this.logger, roundtrips,
 				);
 				let next = await gen.next();
 				while (!next.done) {
