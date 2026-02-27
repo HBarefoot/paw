@@ -200,7 +200,7 @@ describe("executeToolsParallelStreaming", () => {
 		expect(Math.max(...startIndices)).toBeLessThan(Math.min(...endIndices));
 	});
 
-	test("multiple tools: does NOT use streamHandler (falls back to regular handler)", async () => {
+	test("multiple tools: uses streamHandler and forwards intermediate chunks", async () => {
 		let streamHandlerCalled = false;
 
 		const registry = new ToolRegistry(mockLogger);
@@ -213,6 +213,8 @@ describe("executeToolsParallelStreaming", () => {
 				handler: async () => ({ content: "handler a" }),
 				streamHandler: async function* () {
 					streamHandlerCalled = true;
+					yield { type: "tool_start", toolName: "sub_tool", toolId: "sub1", toolInput: {}, roundtrip: 0 } as any;
+					yield { type: "tool_end", toolName: "sub_tool", toolId: "sub1", toolResult: "done", durationMs: 10 } as any;
 					return { content: "stream a" };
 				},
 			},
@@ -231,14 +233,20 @@ describe("executeToolsParallelStreaming", () => {
 		];
 
 		const gen = executeToolsParallelStreaming(calls, registry, mockLogger, 0);
+		const chunks = [];
 		let next = await gen.next();
 		while (!next.done) {
+			chunks.push(next.value);
 			next = await gen.next();
 		}
 
 		const results = next.value;
-		expect(streamHandlerCalled).toBe(false);
-		expect(results[0].content).toBe("handler a"); // Used regular handler, not stream
+		expect(streamHandlerCalled).toBe(true);
+		expect(results[0].content).toBe("stream a"); // Used streamHandler
 		expect(results[1].content).toBe("handler b");
+
+		// Intermediate chunks from streamHandler should have been forwarded
+		const subToolChunks = chunks.filter((c: any) => c.toolName === "sub_tool");
+		expect(subToolChunks.length).toBe(2);
 	});
 });

@@ -181,30 +181,55 @@ export async function* executeToolsParallelStreaming(
 		};
 	}
 
-	// Launch all tools in parallel, each wrapped in a tagged promise
+	// Launch all tools in parallel, each wrapped in a tagged promise.
+	// Tools with a streamHandler (e.g. spawn_agent) use it so intermediate
+	// chunks (sub-agent activity) are forwarded to the activity feed.
 	type TaggedResult = { index: number; result: ToolCallResult };
+
+	const chunkQueue: StreamChunk[] = [];
+	let chunkResolve: (() => void) | null = null;
+
+	function pushChunk(chunk: StreamChunk) {
+		chunkQueue.push(chunk);
+		if (chunkResolve) {
+			chunkResolve();
+			chunkResolve = null;
+		}
+	}
+
 	let pending: Array<{ index: number; promise: Promise<TaggedResult> }> =
 		calls.map((call, index) => ({
 			index,
 			promise: (async (): Promise<TaggedResult> => {
+				const toolDef = toolRegistry.get(call.name);
 				const startTime = Date.now();
 				logger.info("Executing tool", { tool: call.name, id: call.id });
 				let result: ToolResult;
 				try {
-					result = await Promise.race([
-						toolRegistry.execute(call.name, call.input),
-						new Promise<never>((_, reject) =>
-							setTimeout(
-								() =>
-									reject(
-										new Error(
-											`Tool "${call.name}" timed out after ${Math.round(timeoutMs / 60_000)} minutes`,
+					if (toolDef?.streamHandler) {
+						const gen = toolDef.streamHandler(call.input);
+						let next = await gen.next();
+						while (!next.done) {
+							pushChunk(next.value);
+							next = await gen.next();
+						}
+						result = next.value;
+					} else {
+						result = await Promise.race([
+							toolRegistry.execute(call.name, call.input),
+							new Promise<never>((_, reject) =>
+								setTimeout(
+									() =>
+										reject(
+											new Error(
+												`Tool "${call.name}" timed out after ${Math.round(timeoutMs / 60_000)} minutes`,
+											),
 										),
-									),
-								timeoutMs,
+									timeoutMs,
+								),
 							),
-						),
-					]);
+						]);
+					}
 				} catch (err) {
 					result = {
 						content: err instanceof Error ? err.message : String(err),
@@ -225,10 +250,32 @@ export async function* executeToolsParallelStreaming(
 			})(),
 		}));
 
-	// Drain: yield tool_end as each completes
+	// Drain: yield tool_end as each completes, flushing intermediate chunks
+	// from streamHandlers between each resolution.
 	const allResults: ToolCallResult[] = [];
 	while (pending.length > 0) {
-		const resolved = await Promise.race(pending.map((p) => p.promise));
+		while (chunkQueue.length > 0) {
+			yield chunkQueue.shift()!;
+		}
+
+		const resolved = await Promise.race([
+			...pending.map((p) => p.promise),
+			// Also wake up when a streamHandler pushes a chunk, so we can
+			// yield it without waiting for a tool to fully complete.
+			new Promise<null>((resolve) => {
+				chunkResolve = () => resolve(null);
+			}),
+		]);
+
+		// If we woke up from a chunk push (not a tool completion), loop back
+		// to flush the queue and race again.
+		if (resolved === null) continue;
+
+		// Flush any chunks pushed right before/during resolution
+		while (chunkQueue.length > 0) {
+			yield chunkQueue.shift()!;
+		}
+
 		const { index, result: callResult } = resolved;
 
 		yield {
