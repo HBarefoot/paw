@@ -467,7 +467,7 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 			{
 				name: "filter_icp",
 				description:
-					"Filter discovered companies against ICP criteria (revenue, locations, NAICS, exclusions)",
+					"Filter discovered companies against ICP criteria (revenue, locations, NAICS, exclusions). PREREQUISITE: Run discover_franchises AND estimate_revenue for all brands BEFORE calling this tool.",
 				plugin: "icp-discovery",
 				input_schema: {
 					type: "object",

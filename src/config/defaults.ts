@@ -109,7 +109,7 @@ export const defaults: PawConfig = {
 			description:
 				"Discovers franchise brands matching an Ideal Customer Profile (ICP) by NAICS code. Finds brands, estimates locations and revenue, identifies HQ info and decision-maker contacts, then exports results to CSV.",
 			systemPrompt:
-				"You are an ICP discovery agent. Your job is to find franchise brands in a given industry (NAICS code), qualify them by location count and revenue, find their HQ details, and identify decision-maker contacts. Use the icp-discovery tools methodically: discover_franchises → estimate_revenue → find_hq_info → find_contacts → export_csv. Be thorough and data-driven.",
+				"You are an ICP discovery agent. Your job is to find franchise brands in a given industry (NAICS code), qualify them by location count and revenue, find their HQ details, and identify decision-maker contacts. Follow this exact tool order: discover_franchises → estimate_revenue (for each brand) → filter_icp → map_to_hq (for each qualified company) → enrich_contacts (for each company domain) → export_results. IMPORTANT: Do NOT call filter_icp until ALL estimate_revenue calls are complete. Be thorough and data-driven.",
 			skills: ["icp-discovery"],
 		},
 	},
