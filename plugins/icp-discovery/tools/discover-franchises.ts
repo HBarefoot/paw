@@ -361,6 +361,15 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 			);
 			candidateBrands = dedupedBrands;
 
+			// Remove exact-name duplicates (case-insensitive) before location estimation
+			const seen = new Set<string>();
+			candidateBrands = candidateBrands.filter((b) => {
+				const key = b.toLowerCase().trim();
+				if (seen.has(key)) return false;
+				seen.add(key);
+				return true;
+			});
+
 			if (candidateBrands.length === 0) {
 				return {
 					content: JSON.stringify(
@@ -393,7 +402,7 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 			const allBrands: DiscoveredBrand[] = [];
 
 			const MAX_BRANDS = 20;
-			const BATCH_SIZE = 10;
+			const BATCH_SIZE = 5;
 			const brandsToProcess = candidateBrands.slice(0, MAX_BRANDS);
 
 			for (let i = 0; i < brandsToProcess.length; i += BATCH_SIZE) {

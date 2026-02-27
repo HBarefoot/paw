@@ -7,6 +7,7 @@ import { createEstimateRevenueHandler } from "./tools/estimate-revenue";
 import { createExportResultsHandler } from "./tools/export-results";
 import { createFilterIcpHandler } from "./tools/filter-icp";
 import { createMapToHqHandler } from "./tools/map-to-hq";
+import { Semaphore } from "./lib/semaphore";
 
 interface PluginContext {
 	bus: unknown;
@@ -74,19 +75,23 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 				: undefined,
 		});
 
+		// Serialize LLM calls to avoid overwhelming rate-limited endpoints (Ollama 429s)
+		const llmSemaphore = new Semaphore(1);
+		const llm: typeof ctx.llm = (opts) => llmSemaphore.run(() => ctx.llm(opts));
+
 		// Create tool handlers with dependencies
 		const discoverFranchises = createDiscoverFranchisesHandler({
 			searchClient,
-			llm: ctx.llm,
+			llm,
 			getLiveConfig,
 		});
 		const estimateRevenue = createEstimateRevenueHandler({
 			searchClient,
-			llm: ctx.llm,
+			llm,
 			getLiveConfig,
 		});
 		const filterIcp = createFilterIcpHandler({ store: ctx.store, getLiveConfig });
-		const mapToHq = createMapToHqHandler({ searchClient, llm: ctx.llm, getLiveConfig });
+		const mapToHq = createMapToHqHandler({ searchClient, llm, getLiveConfig });
 		const enrichContacts = createEnrichContactsHandler({
 			hunterConfig,
 			searchClient,
