@@ -1,3 +1,4 @@
+import { isExcluded } from "../lib/exclude-matcher";
 import type { HunterConfig } from "../lib/hunter";
 import { createHunterClient } from "../lib/hunter";
 import type { CachedSearchClient } from "../lib/search-cache";
@@ -6,6 +7,7 @@ import type { ContactInfo } from "../types";
 interface PluginDeps {
 	hunterConfig: HunterConfig;
 	searchClient: CachedSearchClient;
+	getLiveConfig?: () => { excludeBrands?: string[] };
 }
 
 export function createEnrichContactsHandler(deps: PluginDeps) {
@@ -215,6 +217,11 @@ export function createEnrichContactsHandler(deps: PluginDeps) {
 			const domain = input.domain as string;
 			const companyName = (input.companyName as string) ?? domain;
 			const parentCompany = input.parentCompany as string | undefined;
+
+			const excludeBrands = deps.getLiveConfig?.()?.excludeBrands ?? [];
+			if (isExcluded(companyName, excludeBrands)) {
+				return { content: `Skipped: ${companyName} is in the exclude list` };
+			}
 
 			if (!domain) {
 				return { content: "Error: domain is required", is_error: true };

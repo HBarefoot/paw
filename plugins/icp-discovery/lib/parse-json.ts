@@ -1,6 +1,6 @@
 /**
  * Strip markdown code fences (```json ... ```) that LLMs often wrap around JSON output.
- * If that doesn't yield valid JSON, extract the first top-level { ... } object from the text.
+ * If that doesn't yield valid JSON, extract the first top-level { ... } or [ ... ] block.
  */
 export function stripCodeFences(text: string): string {
 	const trimmed = text.trim();
@@ -10,11 +10,26 @@ export function stripCodeFences(text: string): string {
 	if (fenceMatch) return fenceMatch[1].trim();
 
 	// If the whole string is already JSON-shaped, return as-is
-	if (trimmed.startsWith("{")) return trimmed;
+	if (trimmed.startsWith("{") || trimmed.startsWith("[")) return trimmed;
 
-	// Extract the first balanced { ... } block from narrative text
-	const start = trimmed.indexOf("{");
-	if (start === -1) return trimmed;
+	// Extract the first balanced { ... } or [ ... ] block from narrative text
+	const objStart = trimmed.indexOf("{");
+	const arrStart = trimmed.indexOf("[");
+
+	// Pick whichever delimiter appears first (-1 means not found)
+	let start: number;
+	let open: string;
+	let close: string;
+	if (objStart === -1 && arrStart === -1) return trimmed;
+	if (arrStart === -1 || (objStart !== -1 && objStart < arrStart)) {
+		start = objStart;
+		open = "{";
+		close = "}";
+	} else {
+		start = arrStart;
+		open = "[";
+		close = "]";
+	}
 
 	let depth = 0;
 	let inString = false;
@@ -34,8 +49,8 @@ export function stripCodeFences(text: string): string {
 			continue;
 		}
 		if (inString) continue;
-		if (ch === "{") depth++;
-		else if (ch === "}") {
+		if (ch === open) depth++;
+		else if (ch === close) {
 			depth--;
 			if (depth === 0) return trimmed.slice(start, i + 1);
 		}

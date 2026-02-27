@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { scoreConfidence } from "../lib/confidence";
+import { isExcluded } from "../lib/exclude-matcher";
 import { stripCodeFences } from "../lib/parse-json";
 import type { CachedSearchClient } from "../lib/search-cache";
 import { searchEdgar } from "../lib/sec-edgar";
@@ -9,6 +10,7 @@ import type { RevenueEstimate, RevenueSource } from "../types";
 interface PluginDeps {
 	searchClient: CachedSearchClient;
 	llm: (options: { system: string; message: string }) => Promise<string>;
+	getLiveConfig?: () => { excludeBrands?: string[] };
 }
 
 const PROMPT_PATH = resolve(
@@ -27,6 +29,11 @@ export function createEstimateRevenueHandler(deps: PluginDeps) {
 			const companyName = input.companyName as string;
 			if (!companyName) {
 				return { content: "Error: companyName is required", is_error: true };
+			}
+
+			const excludeBrands = deps.getLiveConfig?.()?.excludeBrands ?? [];
+			if (isExcluded(companyName, excludeBrands)) {
+				return { content: `Skipped: ${companyName} is in the exclude list` };
 			}
 
 			const dataSources: string[] = [];

@@ -83,12 +83,14 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 		const estimateRevenue = createEstimateRevenueHandler({
 			searchClient,
 			llm: ctx.llm,
+			getLiveConfig,
 		});
 		const filterIcp = createFilterIcpHandler({ store: ctx.store, getLiveConfig });
-		const mapToHq = createMapToHqHandler({ searchClient, llm: ctx.llm });
+		const mapToHq = createMapToHqHandler({ searchClient, llm: ctx.llm, getLiveConfig });
 		const enrichContacts = createEnrichContactsHandler({
 			hunterConfig,
 			searchClient,
+			getLiveConfig,
 		});
 		const exportResults = createExportResultsHandler(ctx.store, exportConfig);
 
@@ -141,15 +143,19 @@ export default class IcpDiscoveryPlugin implements ChannelPlugin {
 		};
 
 		// Wrap handlers to persist intermediate results in plugin store
+		let pipelineInitialized = false;
 		const wrappedDiscoverFranchises = async (
 			input: Record<string, unknown>,
 		) => {
-			// Clear previous pipeline data to prevent cross-run contamination.
-			// Multi-NAICS still works because the AI calls discover_franchises once
-			// per NAICS within the same run, and merge logic accumulates brands.
-			ctx.store.delete("discovered_brands");
-			ctx.store.delete("revenue_estimates");
-			ctx.store.delete("qualified_companies");
+			// Clear downstream pipeline data on first call to prevent cross-run
+			// contamination. discovered_brands is NOT cleared so brands accumulate
+			// across multi-NAICS calls within the same pipeline.
+			if (!pipelineInitialized) {
+				ctx.store.delete("discovered_brands");
+				ctx.store.delete("revenue_estimates");
+				ctx.store.delete("qualified_companies");
+				pipelineInitialized = true;
+			}
 
 			const result = await discoverFranchises(input);
 			logCacheStats("discover_franchises");

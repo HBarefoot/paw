@@ -70,6 +70,20 @@ function isBrandMatch(resultTitle: string, brandName: string): boolean {
 	return false;
 }
 
+/** Parse a location count string, handling commas, k/m suffixes, and decimals */
+export function parseLocationCount(text: string): number {
+	const cleaned = text.trim().toLowerCase();
+	// Match patterns like "1,500", "1.2k", "20.5k", "1.5m", or plain "1500"
+	const match = cleaned.match(/([\d,]+(?:\.\d+)?)\s*([km])?/);
+	if (!match) return 0;
+	const num = Number.parseFloat(match[1].replace(/,/g, ""));
+	if (Number.isNaN(num)) return 0;
+	const suffix = match[2];
+	if (suffix === "k") return Math.round(num * 1_000);
+	if (suffix === "m") return Math.round(num * 1_000_000);
+	return Math.round(num);
+}
+
 /** Primary method: web search for location count + LLM extraction */
 async function webSearchLocationCount(
 	brand: string,
@@ -99,7 +113,7 @@ async function webSearchLocationCount(
 					message: `Extract the number of locations/units for "${brand}" from these search results. Return ONLY a number (integer). If unclear, return 0.\n\n${snippets}`,
 				})
 			).trim();
-			const parsed = Number.parseInt(numText.replace(/[^0-9]/g, ""), 10);
+			const parsed = parseLocationCount(numText);
 			if (parsed > 0) {
 				return {
 					count: parsed,
@@ -167,7 +181,7 @@ async function llmLocationEstimate(
 			system: "You are a franchise industry analyst. Return ONLY an integer.",
 			message: `How many US locations does "${brand}" have as of ${new Date().getFullYear()}? Return ONLY a number.`,
 		});
-		const parsed = Number.parseInt(text.trim().replace(/[^0-9]/g, ""), 10);
+		const parsed = parseLocationCount(text);
 		if (parsed > 0) {
 			return { count: parsed, methodology: "LLM estimate (unverified)" };
 		}
@@ -201,16 +215,30 @@ async function deduplicateBrands(
 		if (!Array.isArray(parsed)) return { kept: brands, mergeMap };
 
 		const removedBrands = new Set<string>();
+		const brandsLower = new Set(brands.map((b) => b.toLowerCase()));
 
 		for (const group of parsed) {
 			if (!group.keepBrand || !Array.isArray(group.brands) || group.brands.length < 2) continue;
-			const keepNorm = group.keepBrand as string;
+			let keepBrand = group.keepBrand as string;
+
+			// Validate keepBrand exists in the original list; if not, pick the
+			// first brand from the group that IS in the input to avoid silently
+			// dropping the entire group when the LLM hallucinates a parent name.
+			if (!brandsLower.has(keepBrand.toLowerCase())) {
+				const fallback = (group.brands as string[]).find((b) =>
+					brandsLower.has(b.toLowerCase()),
+				);
+				if (!fallback) continue; // none of the group's brands are in the input
+				keepBrand = fallback;
+			}
+
 			const sisters = (group.brands as string[]).filter(
-				(b) => b.toLowerCase() !== keepNorm.toLowerCase(),
+				(b) => b.toLowerCase() !== keepBrand.toLowerCase(),
 			);
 			if (sisters.length === 0) continue;
 
-			mergeMap.set(keepNorm, {
+			// Normalize key to lowercase so lookup in the handler matches
+			mergeMap.set(keepBrand.toLowerCase(), {
 				parentCompany: (group.parentCompany as string) || "",
 				sisterBrands: sisters,
 			});
@@ -218,7 +246,7 @@ async function deduplicateBrands(
 				removedBrands.add(sister.toLowerCase());
 			}
 			console.log(
-				`[icp-discovery] Dedup: keeping "${keepNorm}" (${group.parentCompany}), merged: ${sisters.join(", ")}`,
+				`[icp-discovery] Dedup: keeping "${keepBrand}" (${group.parentCompany}), merged: ${sisters.join(", ")}`,
 			);
 		}
 
@@ -431,7 +459,7 @@ export function createDiscoverFranchisesHandler(deps: PluginDeps) {
 				);
 
 				for (const { brand, estimatedLocations, methodology } of batchResults) {
-					const merge = mergeMap.get(brand);
+					const merge = mergeMap.get(brand.toLowerCase());
 					allBrands.push({
 						name: brand,
 						naicsCode,
