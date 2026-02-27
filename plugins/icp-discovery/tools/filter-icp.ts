@@ -107,6 +107,8 @@ export function createFilterIcpHandler(deps: FilterIcpDeps) {
 					estimatedLocations: brand.estimatedLocations,
 					revenueEstimate: revenue,
 					contacts: [],
+					...(brand.parentCompany && { parentCompany: brand.parentCompany }),
+					...(brand.sisterBrands?.length && { sisterBrands: brand.sisterBrands }),
 				});
 			}
 

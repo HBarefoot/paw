@@ -54,6 +54,8 @@ function flattenCompany(
 		hqState: company.hqState ?? "",
 		hqDomain: company.hqDomain ?? "",
 		hqPhone: company.hqPhone ?? "",
+		parentCompany: company.parentCompany ?? "",
+		sisterBrands: (company.sisterBrands ?? []).join("; "),
 		contactName: bestContact?.name || null,
 		contactTitle: bestContact?.title || null,
 		contactEmail: bestContact?.email || null,
@@ -97,6 +99,8 @@ function toCsv(companies: QualifiedCompany[]): string {
 		"contact_email",
 		"contact_email_confidence",
 		"contact_linkedin",
+		"parent_company",
+		"sister_brands",
 	];
 
 	const rows = companies.map((company) => {
@@ -123,6 +127,8 @@ function toCsv(companies: QualifiedCompany[]): string {
 			flat.contactEmail,
 			flat.contactEmailConfidence,
 			flat.contactLinkedIn,
+			flat.parentCompany,
+			flat.sisterBrands,
 		]
 			.map(escapeCsvField)
 			.join(",");

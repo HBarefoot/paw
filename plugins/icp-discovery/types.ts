@@ -13,6 +13,8 @@ export interface DiscoveredBrand {
 	estimatedLocations: number;
 	locationMethodology: string;
 	sources: string[];
+	parentCompany?: string;
+	sisterBrands?: string[];
 }
 
 export interface RevenueSource {
@@ -39,6 +41,7 @@ export interface ContactInfo {
 	emailConfidence: number;
 	linkedIn?: string;
 	department: string;
+	source?: string;
 }
 
 export interface QualifiedCompany {
@@ -53,6 +56,8 @@ export interface QualifiedCompany {
 	hqDomain?: string;
 	hqPhone?: string;
 	contacts: ContactInfo[];
+	parentCompany?: string;
+	sisterBrands?: string[];
 }
 
 export interface DiscoveryRunResult {

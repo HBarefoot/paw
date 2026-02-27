@@ -14,7 +14,11 @@ interface HqData {
 	hqState: string | null;
 	hqDomain: string | null;
 	hqPhone: string | null;
+	domainInferred?: boolean;
 }
+
+const isAllNull = (data: HqData): boolean =>
+	!data.hqAddress && !data.hqCity && !data.hqState && !data.hqDomain && !data.hqPhone;
 
 const PROMPT_PATH = resolve(import.meta.dir, "../prompts/hq-extractor.md");
 
@@ -31,9 +35,17 @@ export function createMapToHqHandler(deps: PluginDeps) {
 				return { content: "Error: companyName is required", is_error: true };
 			}
 
+			// Step 0: Simple query to trigger Google Knowledge Panel
+			let knowledgeGraph = "No Knowledge Graph data available";
+			try {
+				const kgSearch = await serpapi.googleSearch(companyName);
+				if (kgSearch.knowledge_graph) {
+					knowledgeGraph = JSON.stringify(kgSearch.knowledge_graph, null, 2);
+				}
+			} catch { /* tolerate */ }
+
 			// Step 1: Google Search for HQ address (tolerate timeout)
 			let organicResults = "";
-			let knowledgeGraph = "No Knowledge Graph data available";
 			try {
 				const searchResult = await serpapi.googleSearch(
 					`"${companyName}" corporate headquarters address`,
@@ -42,7 +54,8 @@ export function createMapToHqHandler(deps: PluginDeps) {
 					.slice(0, 5)
 					.map((r) => `${r.title}: ${r.snippet} (${r.link})`)
 					.join("\n");
-				if (searchResult.knowledge_graph) {
+				// Merge Knowledge Graph if we didn't get one from Step 0
+				if (knowledgeGraph === "No Knowledge Graph data available" && searchResult.knowledge_graph) {
 					knowledgeGraph = JSON.stringify(searchResult.knowledge_graph, null, 2);
 				}
 			} catch (searchErr) {
@@ -97,11 +110,14 @@ ${mapsData}
 			}
 
 			// Retry with alternative queries if all HQ fields are null
-			const allNull = !hqData.hqAddress && !hqData.hqCity && !hqData.hqState && !hqData.hqDomain && !hqData.hqPhone;
-			if (allNull) {
+			if (isAllNull(hqData)) {
 				const retryQueries = [
 					`"${companyName}" headquarters location address`,
 					`"${companyName}" franchise corporate office location`,
+					`"${companyName}" corporate office address site:linkedin.com`,
+					`"${companyName}" headquarters ${new Date().getFullYear()}`,
+					`"${companyName}" parent company headquarters`,
+					`site:bloomberg.com OR site:crunchbase.com "${companyName}" headquarters`,
 				];
 				for (const query of retryQueries) {
 					try {
@@ -130,8 +146,7 @@ ${retrySnippets}
 						});
 						try {
 							const retryData: HqData = JSON.parse(stripCodeFences(retryText));
-							const retryAllNull = !retryData.hqAddress && !retryData.hqCity && !retryData.hqState && !retryData.hqDomain && !retryData.hqPhone;
-							if (!retryAllNull) {
+							if (!isAllNull(retryData)) {
 								hqData = retryData;
 								break;
 							}
@@ -141,6 +156,61 @@ ${retrySnippets}
 					} catch {
 						// Search failed on retry, continue to next query
 					}
+				}
+			}
+
+			// Wikipedia/Crunchbase fallback if still all null
+			if (isAllNull(hqData)) {
+				const fallbackQueries = [
+					`"${companyName}" site:en.wikipedia.org`,
+					`"${companyName}" site:crunchbase.com/organization`,
+				];
+				const fallbackSnippets: string[] = [];
+				for (const query of fallbackQueries) {
+					try {
+						const result = await serpapi.googleSearch(query);
+						for (const r of (result.organic_results ?? []).slice(0, 3)) {
+							fallbackSnippets.push(`${r.title}: ${r.snippet} (${r.link})`);
+						}
+					} catch { /* tolerate */ }
+				}
+				if (fallbackSnippets.length > 0) {
+					try {
+						const fallbackText = await deps.llm({
+							system: systemPrompt,
+							message: `
+Extract HQ data for: ${companyName}
+
+Wikipedia / Crunchbase Results:
+${fallbackSnippets.join("\n")}
+`.trim(),
+						});
+						const fallbackData: HqData = JSON.parse(stripCodeFences(fallbackText));
+						if (!isAllNull(fallbackData)) {
+							hqData = fallbackData;
+						}
+					} catch { /* parse/LLM failed */ }
+				}
+			}
+
+			// Domain inference fallback if hqDomain is still null
+			if (!hqData.hqDomain) {
+				const candidate = companyName
+					.toLowerCase()
+					.replace(/[^a-z0-9]/g, "") + ".com";
+				try {
+					const res = await fetch(`https://${candidate}`, {
+						method: "HEAD",
+						redirect: "follow",
+						signal: AbortSignal.timeout(5000),
+					});
+					if (res.ok || (res.status >= 300 && res.status < 400)) {
+						hqData.hqDomain = candidate;
+						hqData.domainInferred = true;
+						console.log(`[icp-discovery] Inferred domain for "${companyName}": ${candidate}`);
+					}
+				} catch {
+					// HEAD request failed, domain likely doesn't exist
 				}
 			}
 

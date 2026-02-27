@@ -8,6 +8,8 @@ You will receive:
 1. **Google Search results** — organic results from "{company} corporate headquarters address"
 2. **Knowledge Graph data** — Google's Knowledge Panel information (if available)
 3. **Google Maps results** — fallback results for "{company} corporate office"
+4. **Wikipedia results** — may contain infobox data with "Headquarters" field
+5. **Crunchbase results** — may contain structured company profile data
 
 ## Task
 
@@ -20,6 +22,8 @@ Extract the franchise company's corporate HQ address, website domain, and phone 
 - **Domain**: Extract the company's primary website domain (e.g., "wingstop.com"), not social media or third-party pages.
 - **Phone**: Use the corporate/HQ phone number, not individual location numbers.
 - **Address**: Provide the full street address if available.
+- **Wikipedia infobox**: Look for "Headquarters" or "Location" fields — these are structured and reliable.
+- **Crunchbase profiles**: Look for "Headquarters" in the company profile summary.
 
 ## Output Format
 
