@@ -2,6 +2,7 @@ import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import { withRetry } from "./retry.js";
 import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
+import { executeToolsParallel, type ToolCallRequest } from "./parallel-tools.js";
 import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
@@ -93,6 +94,9 @@ export class OpenAIProvider implements AIProvider {
 				: (() => {
 						const allowed = this.skillManager.getActiveToolNames(sessionId);
 						allowed.add("activate_skill");
+						if (this.toolRegistry.get("spawn_agent")) {
+							allowed.add("spawn_agent");
+						}
 						return this.toolRegistry.toAnthropicToolsFiltered(allowed);
 					})();
 
@@ -201,7 +205,8 @@ export class OpenAIProvider implements AIProvider {
 				tool_calls: toolCalls,
 			});
 
-			// Execute each tool call and add results
+			// Phase 1: Handle activate_skill calls first
+			const regularCalls: ToolCallRequest[] = [];
 			for (const call of toolCalls) {
 				let args: Record<string, unknown>;
 				try {
@@ -231,20 +236,25 @@ export class OpenAIProvider implements AIProvider {
 					}
 				}
 
-				this.logger.info("Executing tool", {
-					tool: call.function.name,
-					id: call.id,
-				});
-				const result = await this.toolRegistry.execute(
-					call.function.name,
-					args,
+				if (call.function.name === "spawn_agent" && sessionId) {
+					args.__sessionId = sessionId;
+				}
+				regularCalls.push({ id: call.id, name: call.function.name, input: args });
+			}
+
+			// Phase 2: Execute remaining tools in parallel
+			if (regularCalls.length > 0) {
+				const results = await executeToolsParallel(
+					regularCalls, this.toolRegistry, this.logger, 600_000,
 				);
-				if (result.images) collectedImages.push(...result.images);
-				conversation.push({
-					role: "tool",
-					content: result.content,
-					tool_call_id: call.id,
-				});
+				for (const r of results) {
+					if (r.images) collectedImages.push(...r.images);
+					conversation.push({
+						role: "tool",
+						content: r.content,
+						tool_call_id: r.id,
+					});
+				}
 			}
 
 			roundtrips++;

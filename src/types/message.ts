@@ -42,4 +42,13 @@ export interface ToolDefinition {
 	input_schema: Record<string, unknown>;
 	plugin: string;
 	handler: (input: Record<string, unknown>) => Promise<ToolResult>;
+	/**
+	 * Optional streaming handler for tools that produce incremental progress.
+	 * When present and the provider is streaming, the provider yields each
+	 * StreamChunk from the generator to the parent stream. The generator's
+	 * return value is used as the ToolResult.
+	 */
+	streamHandler?: (
+		input: Record<string, unknown>,
+	) => AsyncGenerator<import("../ai/base-provider.js").StreamChunk, ToolResult>;
 }

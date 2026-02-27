@@ -45,7 +45,7 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 							<p>Send a message to start chatting with Paw</p>
 						</div>
 						<div id="typing" class="msg-wrapper" style="display: none">
-							<div class="avatar bot-avatar">P</div>
+							<div class="avatar bot-avatar"><img src="/paw-logo.jpg" alt="Paw" /></div>
 							<div class="typing-indicator">
 								<span></span>
 								<span></span>
@@ -301,7 +301,7 @@ export function getChatScript(): string {
 
     var avatar = document.createElement("div");
     avatar.className = "avatar bot-avatar";
-    avatar.textContent = "P";
+    avatar.innerHTML = '<img src="/paw-logo.jpg" alt="Paw" />';
 
     var bubble = document.createElement("div");
     bubble.className = "msg assistant";
@@ -311,17 +311,21 @@ export function getChatScript(): string {
     mdDiv.className = "md-content";
     bubble.appendChild(mdDiv);
 
-    var activityDiv = document.createElement("div");
-    activityDiv.className = "activity-timeline";
-    activityDiv.style.display = "none";
-    bubble.appendChild(activityDiv);
+    // Thinking indicator lives outside the collapsible area so it's always visible
+    var thinkingDiv = document.createElement("div");
+    thinkingDiv.className = "activity-thinking";
+    thinkingDiv.style.display = "none";
+    bubble.appendChild(thinkingDiv);
 
     var activityHeader = document.createElement("div");
     activityHeader.className = "activity-timeline-header";
     activityHeader.innerHTML = '<span class="activity-toggle-icon">&#9654;</span><span class="activity-summary-counts"></span>';
-    bubble.insertBefore(activityHeader, activityDiv);
+    bubble.appendChild(activityHeader);
 
-    activityDiv.classList.add("collapsed");
+    var activityDiv = document.createElement("div");
+    activityDiv.className = "activity-timeline collapsed";
+    activityDiv.style.display = "none";
+    bubble.appendChild(activityDiv);
 
     activityHeader.addEventListener("click", function() {
       var isCollapsed = activityDiv.classList.toggle("collapsed");
@@ -332,7 +336,7 @@ export function getChatScript(): string {
     wrapper.appendChild(avatar);
     wrapper.appendChild(bubble);
     messagesDiv.insertBefore(wrapper, typingDiv);
-    return { wrapper: wrapper, mdDiv: mdDiv, activityDiv: activityDiv, activityHeader: activityHeader, _timers: [], _doneCount: 0, _errorCount: 0, _runningCount: 0 };
+    return { wrapper: wrapper, mdDiv: mdDiv, activityDiv: activityDiv, activityHeader: activityHeader, thinkingDiv: thinkingDiv, _timers: [], _doneCount: 0, _errorCount: 0, _runningCount: 0 };
   }
 
   function updateActivitySummary(streamBubble) {
@@ -349,58 +353,68 @@ export function getChatScript(): string {
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   }
 
+  function showThinking(streamBubble) {
+    var area = streamBubble.thinkingDiv;
+    area.style.display = "";
+    area.innerHTML = '<span class="activity-spinner"></span> Thinking...';
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  function hideThinking(streamBubble) {
+    streamBubble.thinkingDiv.style.display = "none";
+    streamBubble.thinkingDiv.innerHTML = "";
+  }
+
   function addActivityStep(streamBubble, chunk) {
     var activityDiv = streamBubble.activityDiv;
-    activityDiv.style.display = "";
-    // Show the collapsible header on first activity
-    if (streamBubble.activityHeader && !streamBubble.activityHeader.classList.contains("visible")) {
-      streamBubble.activityHeader.classList.add("visible");
-    }
 
     if (chunk.type === "thinking") {
-      // Remove previous thinking indicator
-      var prev = activityDiv.querySelector(".activity-thinking");
-      if (prev) prev.remove();
-      var el = document.createElement("div");
-      el.className = "activity-thinking";
-      el.innerHTML = '<span class="activity-spinner"></span> Thinking...';
-      activityDiv.appendChild(el);
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      // Skip sub-agent thinking — parent spawn_agent step already shows it's running
+      if (!streamBubble._activeAgentId) showThinking(streamBubble);
       return;
     }
 
     if (chunk.type === "roundtrip_start") {
-      // Remove previous thinking indicator
-      var thk = activityDiv.querySelector(".activity-thinking");
-      if (thk) thk.remove();
+      // Skip sub-agent roundtrip dividers — their tool calls already nest under the parent
+      if (streamBubble._activeAgentId) return;
+      showThinking(streamBubble);
       if (chunk.roundtrip > 0) {
+        activityDiv.style.display = "";
         var divider = document.createElement("div");
         divider.className = "activity-roundtrip-divider";
         divider.textContent = "Step " + (chunk.roundtrip + 1);
         activityDiv.appendChild(divider);
       }
-      // Always show a thinking indicator so the user sees immediate feedback
-      var thkEl = document.createElement("div");
-      thkEl.className = "activity-thinking";
-      thkEl.innerHTML = '<span class="activity-spinner"></span> Thinking...';
-      activityDiv.appendChild(thkEl);
-      // Hide the typing dots since the activity timeline now shows status
       typingDiv.style.display = "none";
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
       return;
     }
 
+    // [a] [b] [c] discover_franchises → [c] discover_franchises
+    function cleanAgentLabel(label) {
+      var match = label.match(/^(?:\\[[^\\]]+\\]\\s*)+/);
+      if (!match) return label;
+      var brackets = match[0];
+      var rest = label.slice(brackets.length);
+      var parts = brackets.match(/\\[([^\\]]+)\\]/g);
+      var last = parts[parts.length - 1];
+      return last + " " + rest;
+    }
+
     if (chunk.type === "tool_start") {
-      // Remove thinking indicator
-      var thk2 = activityDiv.querySelector(".activity-thinking");
-      if (thk2) thk2.remove();
+      // First tool step: show the activity header and timeline
+      hideThinking(streamBubble);
+      activityDiv.style.display = "";
+      if (streamBubble.activityHeader && !streamBubble.activityHeader.classList.contains("visible")) {
+        streamBubble.activityHeader.classList.add("visible");
+      }
 
       var id = "tool-" + (chunk.toolId || chunk.toolName).replace(/[^a-zA-Z0-9]/g, "_");
       var step = document.createElement("div");
       step.className = "activity-step running";
       step.setAttribute("data-tool-id", id);
 
-      var label = chunk.toolSummary || chunk.toolName;
+      var label = cleanAgentLabel(chunk.toolSummary || chunk.toolName);
       var durationSpan = '<span class="activity-duration" data-start="' + Date.now() + '">0.0s</span>';
 
       step.innerHTML = '<div class="activity-step-header">'
@@ -409,6 +423,15 @@ export function getChatScript(): string {
         + durationSpan
         + '</div>';
 
+      // Detect spawn_agent so we can track sub-agent context
+      var isSpawnAgent = chunk.toolName === "spawn_agent" || (chunk.toolSummary && chunk.toolSummary.indexOf("Spawning agent") === 0);
+      if (isSpawnAgent) {
+        step.classList.add("agent-parent");
+        streamBubble._activeAgentId = id;
+      }
+
+      // All tool calls (including sub-agent ones) appear flat in the timeline.
+      // The [agent-name] prefix in the label already identifies the source.
       activityDiv.appendChild(step);
 
       streamBubble._runningCount++;
@@ -440,6 +463,12 @@ export function getChatScript(): string {
       }
 
       var isError = chunk.toolIsError;
+
+      // Clear active agent tracking when spawn_agent finishes
+      if (existing.classList.contains("agent-parent")) {
+        streamBubble._activeAgentId = null;
+      }
+
       existing.className = "activity-step " + (isError ? "error" : "done");
 
       streamBubble._runningCount = Math.max(0, streamBubble._runningCount - 1);
@@ -448,13 +477,13 @@ export function getChatScript(): string {
       updateActivitySummary(streamBubble);
 
       // Update icon
-      var iconEl = existing.querySelector(".activity-icon");
+      var iconEl = existing.querySelector(":scope > .activity-step-header .activity-icon");
       if (iconEl) {
         iconEl.innerHTML = isError ? '<span style="color:var(--error);font-weight:600">\\u2717</span>' : '<span style="color:var(--success,#16a34a);font-weight:600">\\u2713</span>';
       }
 
       // Update duration
-      var durEl2 = existing.querySelector(".activity-duration");
+      var durEl2 = existing.querySelector(":scope > .activity-step-header .activity-duration");
       if (durEl2 && chunk.durationMs !== undefined) {
         var secs = (chunk.durationMs / 1000).toFixed(1);
         durEl2.textContent = secs + "s";
@@ -473,9 +502,8 @@ export function getChatScript(): string {
     }
 
     if (chunk.type === "error") {
-      // Remove thinking indicator — error replaces it
-      var thk4 = activityDiv.querySelector(".activity-thinking");
-      if (thk4) thk4.remove();
+      hideThinking(streamBubble);
+      activityDiv.style.display = "";
       var errCard = document.createElement("div");
       errCard.className = "activity-error-card";
       errCard.innerHTML = '<span style="font-weight:600;flex-shrink:0">\\u26A0</span> <span>' + escapeHtml(chunk.error || "Unknown error") + '</span>';
@@ -578,9 +606,8 @@ export function getChatScript(): string {
       }
 
       function finalize() {
-        // Clean up: remove thinking indicator, stop timers
-        var thk = streamBubble.activityDiv.querySelector(".activity-thinking");
-        if (thk) thk.remove();
+        // Clean up: hide thinking indicator, stop timers
+        hideThinking(streamBubble);
         for (var t = 0; t < streamBubble._timers.length; t++) {
           clearInterval(streamBubble._timers[t]);
         }
@@ -644,7 +671,11 @@ export function getChatScript(): string {
 
     var avatar = document.createElement("div");
     avatar.className = "avatar " + (role === "user" ? "user-avatar" : "bot-avatar");
-    avatar.textContent = role === "user" ? "U" : "P";
+    if (role === "user") {
+      avatar.textContent = "U";
+    } else {
+      avatar.innerHTML = '<img src="/paw-logo.jpg" alt="Paw" />';
+    }
 
     var bubble = document.createElement("div");
     bubble.className = "msg " + role;
@@ -1786,8 +1817,7 @@ export function getChatScript(): string {
             } else if (chunk.type === "done") {
               // Finalize the streaming bubble
               if (canvasStreamBubble) {
-                var thk = canvasStreamBubble.activityDiv.querySelector(".activity-thinking");
-                if (thk) thk.remove();
+                hideThinking(canvasStreamBubble);
                 for (var t = 0; t < canvasStreamBubble._timers.length; t++) {
                   clearInterval(canvasStreamBubble._timers[t]);
                 }

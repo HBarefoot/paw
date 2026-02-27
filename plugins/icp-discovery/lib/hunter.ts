@@ -23,7 +23,7 @@ export interface HunterResponse {
 		emails?: HunterContact[];
 	};
 	meta?: { params?: { remaining?: number } };
-	errors?: Array<{ id: string; detail: string }>;
+	errors?: Array<{ id: string; detail?: string; details?: string }>;
 }
 
 export interface EmailVerifyResult {
@@ -78,21 +78,42 @@ export function createHunterClient(config: HunterConfig) {
 				}
 				break;
 			}
-			if (!res || !res.ok) {
-				const text = await res?.text().catch(() => "unknown error");
-				console.error(`[hunter.io] API error for ${domain}: ${res?.status ?? "no response"} ${text}`);
-				throw new Error(`Hunter.io search failed (${res?.status ?? "no response"}): ${text}`);
+			if (!res) {
+				throw new Error(`Hunter.io search failed: no response for ${domain}`);
 			}
 
-			const data = (await res.json()) as HunterResponse;
+			// Try to parse response regardless of status — Hunter.io returns
+			// 400 for pagination_error but still includes valid email data
+			// (plan caps results at N emails).
+			let data: HunterResponse;
+			if (!res.ok) {
+				let body: HunterResponse | undefined;
+				try {
+					body = (await res.json()) as HunterResponse;
+				} catch {
+					const text = await res.text().catch(() => "unknown error");
+					console.error(`[hunter.io] API error for ${domain}: ${res.status} ${text}`);
+					throw new Error(`Hunter.io search failed (${res.status}): ${text}`);
+				}
+
+				const isPaginationError = body?.errors?.some(
+					(e: { id?: string }) => e.id === "pagination_error",
+				);
+				if (isPaginationError && body?.data?.emails) {
+					console.log(`[hunter.io] Plan limit reached for ${domain} — using ${body.data.emails.length} capped results`);
+					data = body;
+				} else {
+					const errDetail = body?.errors?.[0]?.detail ?? (body?.errors?.[0] as Record<string, unknown>)?.details ?? "unknown";
+					console.error(`[hunter.io] API error for ${domain}: ${res.status} ${errDetail}`);
+					throw new Error(`Hunter.io search failed (${res.status}): ${errDetail}`);
+				}
+			} else {
+				data = (await res.json()) as HunterResponse;
+			}
+
 			const emailCount = data.data?.emails?.length ?? 0;
 			const remaining = data.meta?.params?.remaining ?? "unknown";
 			console.log(`[hunter.io] Domain: ${domain}${dept ? ` dept=${dept}` : ""} | Status: ${res.status} | Results: ${emailCount} | Quota remaining: ${remaining}`);
-
-			if (data.errors?.length) {
-				console.error(`[hunter.io] Error for ${domain}: ${data.errors[0].detail}`);
-				throw new Error(`Hunter.io error: ${data.errors[0].detail}`);
-			}
 
 			for (const contact of data.data?.emails ?? []) {
 				// Accept contacts with confidence >= 30 (lowered from 50 to improve hit rate)

@@ -34,6 +34,9 @@ import { createExecTools } from "../tools/exec-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
 import { readConfigOverrides } from "../config/writer.js";
 import { createLogger, setLogLevel } from "../observability/logger.js";
+import { AgentRegistry } from "../agents/registry.js";
+import { createSpawnAgentTool } from "../agents/spawn-agent-tool.js";
+import type { AgentDefinition, AgentRunResult } from "../agents/types.js";
 import type { PawConfig } from "../types/config.js";
 import type {
 	ChannelPlugin,
@@ -61,6 +64,9 @@ export class Kernel {
 	private sessionCleanupInterval: ReturnType<typeof setInterval> | null = null;
 	private mcpClientManager: MCPClientManager;
 	private skillManager: SkillManager;
+	private agentRegistry: AgentRegistry;
+	private agentDepths = new Map<string, number>();
+	private readonly maxAgentDepth = 3;
 	private logger = createLogger("kernel");
 
 	constructor(config: PawConfig) {
@@ -95,6 +101,7 @@ export class Kernel {
 
 		const aiLogger = createLogger("ai");
 		this.skillManager = new SkillManager();
+		this.agentRegistry = new AgentRegistry(createLogger("agents"));
 
 		// Connect sandbox to tool registry for permission enforcement
 		if (config.security.enforcePermissions) {
@@ -290,6 +297,47 @@ export class Kernel {
 			skills: this.skillManager.skillNames,
 		});
 
+		// Load agent presets from config (templates for spawn_agent)
+		const agentEntries = Object.entries(this.config.agents ?? {});
+		if (agentEntries.length > 0) {
+			this.agentRegistry.loadFromConfig(
+				this.config.agents as Record<
+					string,
+					Omit<AgentDefinition, "name">
+				>,
+			);
+		}
+		// Also load from config overrides (so web UI / file edits are picked up)
+		try {
+			const agentOverrides = readConfigOverrides().agents as
+				| Record<string, Omit<AgentDefinition, "name">>
+				| undefined;
+			if (agentOverrides) {
+				this.agentRegistry.loadFromConfig(agentOverrides);
+			}
+		} catch {
+			/* no overrides */
+		}
+
+		// Register spawn_agent tool — always available for dynamic agent spawning
+		this.toolRegistry.register([
+			createSpawnAgentTool({
+				agentRegistry: this.agentRegistry,
+				skillManager: this.skillManager,
+				agentDepths: this.agentDepths,
+				maxAgentDepth: this.maxAgentDepth,
+				runAgentTurn: (agent, task, parentSessionId) =>
+					this.runAgentTurn(agent, task, parentSessionId),
+				runAgentTurnStream: (agent, task, parentSessionId) =>
+					this.runAgentTurnStream(agent, task, parentSessionId),
+			}),
+		]);
+		// Rebuild skills so spawn_agent appears in the catalog
+		this.skillManager.buildFromRegistry(this.toolRegistry);
+		this.logger.info("Agent spawning initialized", {
+			presets: this.agentRegistry.agentNames,
+		});
+
 		// Start cron scheduler after plugins
 		this.cronScheduler?.start();
 
@@ -347,6 +395,361 @@ export class Kernel {
 			provider: this.config.provider,
 			plugins: this.plugins.map((p) => p.name),
 		});
+	}
+
+	/**
+	 * Run a scoped agent turn: creates a sub-session, activates agent-specific
+	 * skills, builds the agent's system prompt, calls the AI provider, and
+	 * returns the result. The parent session is NOT modified.
+	 *
+	 * Accepts either an agent name (looked up from registry) or an inline
+	 * AgentDefinition for dynamic spawning.
+	 */
+	async runAgentTurn(
+		agentOrName: string | AgentDefinition,
+		task: string,
+		parentSessionId: string,
+	): Promise<AgentRunResult> {
+		const agent =
+			typeof agentOrName === "string"
+				? this.agentRegistry.get(agentOrName)
+				: agentOrName;
+		if (!agent) {
+			return {
+				text: "",
+				sessionId: "",
+				ok: false,
+				error: `Agent "${agentOrName}" not found`,
+			};
+		}
+		const agentName = agent.name;
+
+		const agentSessionId = `agent-${agentName}-${Date.now()}`;
+		const agentDepth =
+			(this.agentDepths.get(parentSessionId) ?? 0) + 1;
+		this.agentDepths.set(agentSessionId, agentDepth);
+
+		await this.bus.emit("agent:delegated", {
+			agentName,
+			parentSessionId,
+			agentSessionId,
+			task,
+		});
+
+		this.logger.info("Agent delegation started", {
+			agent: agentName,
+			agentSession: agentSessionId,
+			parentSession: parentSessionId,
+			depth: agentDepth,
+		});
+
+		// Create a session for the agent's work
+		getOrCreateSession(this.db, agentSessionId, "agent", "system");
+		updateSessionTitle(
+			this.db,
+			agentSessionId,
+			`[${agentName}] ${task.slice(0, 80)}`,
+		);
+		appendMessage(this.db, agentSessionId, "user", task);
+
+		// Activate the agent's declared skills on its session
+		for (const skill of agent.skills) {
+			this.skillManager.activateSkill(agentSessionId, skill);
+		}
+
+		// Build the agent's system prompt with memory context
+		let memoryContext: string | undefined;
+		const memoryScope = agent.memoryScope || "global";
+		if (this.memoryStore) {
+			try {
+				const memories = await this.memoryStore.recall(task, {
+					limit: 3,
+					scope: memoryScope,
+				});
+				if (memories.length > 0) {
+					memoryContext = memories
+						.map((m) => `- [${m.metadata.category}] ${m.text}`)
+						.join("\n");
+				}
+			} catch (err) {
+				this.logger.warn("Agent memory recall failed", {
+					agent: agentName,
+					error: String(err),
+				});
+			}
+		}
+
+		const systemPrompt = buildSystemPrompt({
+			agentName: agent.name,
+			customPrompt: agent.systemPrompt,
+			memoryContext,
+			skillCatalog: this.skillManager.getCatalogPrompt(),
+			agentDepth,
+		});
+
+		const messages: ChatMessage[] = [{ role: "user", content: task }];
+
+		try {
+			const response = await this.provider.chat(
+				messages,
+				systemPrompt,
+				agentSessionId,
+			);
+			const replyText = response.text || "";
+			appendMessage(this.db, agentSessionId, "assistant", replyText);
+
+			await this.bus.emit("agent:completed", {
+				agentName,
+				agentSessionId,
+				ok: true,
+			});
+
+			this.logger.info("Agent delegation completed", {
+				agent: agentName,
+				agentSession: agentSessionId,
+				responseLength: replyText.length,
+			});
+
+			// Clean up the agent's skill activations and depth tracking
+			this.skillManager.clearSession(agentSessionId);
+			this.agentDepths.delete(agentSessionId);
+
+			return {
+				text: replyText,
+				sessionId: agentSessionId,
+				ok: true,
+			};
+		} catch (err) {
+			const error = String(err);
+			this.logger.error("Agent delegation failed", {
+				agent: agentName,
+				agentSession: agentSessionId,
+				error,
+			});
+
+			await this.bus.emit("agent:completed", {
+				agentName,
+				agentSessionId,
+				ok: false,
+				error,
+			});
+
+			this.skillManager.clearSession(agentSessionId);
+			this.agentDepths.delete(agentSessionId);
+
+			return {
+				text: "",
+				sessionId: agentSessionId,
+				ok: false,
+				error,
+			};
+		}
+	}
+
+	/**
+	 * Streaming variant of runAgentTurn. Yields StreamChunks from the
+	 * sub-agent's tool execution, prefixed with the agent name so the
+	 * activity timeline can distinguish them. The generator's return
+	 * value is the AgentRunResult.
+	 */
+	async *runAgentTurnStream(
+		agentOrName: string | AgentDefinition,
+		task: string,
+		parentSessionId: string,
+	): AsyncGenerator<StreamChunk, AgentRunResult> {
+		const agent =
+			typeof agentOrName === "string"
+				? this.agentRegistry.get(agentOrName)
+				: agentOrName;
+		if (!agent) {
+			return {
+				text: "",
+				sessionId: "",
+				ok: false,
+				error: `Agent "${agentOrName}" not found`,
+			};
+		}
+		const agentName = agent.name;
+
+		const agentSessionId = `agent-${agentName}-${Date.now()}`;
+		const agentDepth =
+			(this.agentDepths.get(parentSessionId) ?? 0) + 1;
+		this.agentDepths.set(agentSessionId, agentDepth);
+		const prefix = `[${agentName}] `;
+
+		await this.bus.emit("agent:delegated", {
+			agentName,
+			parentSessionId,
+			agentSessionId,
+			task,
+		});
+
+		this.logger.info("Agent delegation started (stream)", {
+			agent: agentName,
+			agentSession: agentSessionId,
+			parentSession: parentSessionId,
+			depth: agentDepth,
+		});
+
+		getOrCreateSession(this.db, agentSessionId, "agent", "system");
+		updateSessionTitle(
+			this.db,
+			agentSessionId,
+			`[${agentName}] ${task.slice(0, 80)}`,
+		);
+		appendMessage(this.db, agentSessionId, "user", task);
+
+		for (const skill of agent.skills) {
+			this.skillManager.activateSkill(agentSessionId, skill);
+		}
+
+		let memoryContext: string | undefined;
+		const memoryScope = agent.memoryScope || "global";
+		if (this.memoryStore) {
+			try {
+				const memories = await this.memoryStore.recall(task, {
+					limit: 3,
+					scope: memoryScope,
+				});
+				if (memories.length > 0) {
+					memoryContext = memories
+						.map((m) => `- [${m.metadata.category}] ${m.text}`)
+						.join("\n");
+				}
+			} catch (err) {
+				this.logger.warn("Agent memory recall failed (stream)", {
+					agent: agentName,
+					error: String(err),
+				});
+			}
+		}
+
+		const systemPrompt = buildSystemPrompt({
+			agentName: agent.name,
+			customPrompt: agent.systemPrompt,
+			memoryContext,
+			skillCatalog: this.skillManager.getCatalogPrompt(),
+			agentDepth,
+		});
+
+		const messages: ChatMessage[] = [{ role: "user", content: task }];
+
+		try {
+			let fullText = "";
+
+			if (this.provider.chatStream) {
+				for await (const chunk of this.provider.chatStream(
+					messages,
+					systemPrompt,
+					agentSessionId,
+				)) {
+					// Collect text but don't forward text_delta to parent
+					// (the parent agent will formulate its own response)
+					if (chunk.type === "text_delta" && chunk.text) {
+						fullText += chunk.text;
+						continue;
+					}
+
+					// Skip done — the parent handles its own done
+					if (chunk.type === "done") continue;
+
+					// Prefix tool-related chunks with agent name
+					if (
+						chunk.type === "tool_start" ||
+						chunk.type === "tool_end"
+					) {
+						yield {
+							...chunk,
+							toolName: chunk.toolName
+								? prefix + chunk.toolName
+								: chunk.toolName,
+							toolSummary: chunk.toolSummary
+								? prefix + chunk.toolSummary
+								: chunk.toolSummary,
+							toolId: chunk.toolId
+								? `${agentName}-${chunk.toolId}`
+								: chunk.toolId,
+						};
+						continue;
+					}
+
+					if (chunk.type === "roundtrip_start") {
+						yield {
+							...chunk,
+							// Rewrite as a sub-step indicator
+							type: "roundtrip_start",
+							roundtrip: chunk.roundtrip,
+						};
+						continue;
+					}
+
+					if (chunk.type === "thinking") {
+						yield chunk;
+						continue;
+					}
+
+					if (chunk.type === "error") {
+						yield chunk;
+						continue;
+					}
+				}
+			} else {
+				// Provider doesn't support streaming — fall back to non-streaming
+				const response = await this.provider.chat(
+					messages,
+					systemPrompt,
+					agentSessionId,
+				);
+				fullText = response.text || "";
+			}
+
+			appendMessage(this.db, agentSessionId, "assistant", fullText);
+
+			await this.bus.emit("agent:completed", {
+				agentName,
+				agentSessionId,
+				ok: true,
+			});
+
+			this.logger.info("Agent delegation completed (stream)", {
+				agent: agentName,
+				agentSession: agentSessionId,
+				responseLength: fullText.length,
+			});
+
+			this.skillManager.clearSession(agentSessionId);
+			this.agentDepths.delete(agentSessionId);
+
+			return {
+				text: fullText,
+				sessionId: agentSessionId,
+				ok: true,
+			};
+		} catch (err) {
+			const error = String(err);
+			this.logger.error("Agent delegation failed (stream)", {
+				agent: agentName,
+				agentSession: agentSessionId,
+				error,
+			});
+
+			await this.bus.emit("agent:completed", {
+				agentName,
+				agentSessionId,
+				ok: false,
+				error,
+			});
+
+			this.skillManager.clearSession(agentSessionId);
+			this.agentDepths.delete(agentSessionId);
+
+			return {
+				text: "",
+				sessionId: agentSessionId,
+				ok: false,
+				error,
+			};
+		}
 	}
 
 	private async handleInbound(msg: InboundMessage): Promise<void> {
@@ -959,6 +1362,10 @@ export class Kernel {
 
 	get mcpManager(): MCPClientManager {
 		return this.mcpClientManager;
+	}
+
+	get agents(): AgentRegistry {
+		return this.agentRegistry;
 	}
 
 	registerTools(tools: ToolDefinition[]): void {

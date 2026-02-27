@@ -28,7 +28,7 @@ export class SkillManager {
 
 		for (const tool of registry.allTools()) {
 			const skillName = this.deriveSkillName(tool);
-			const isAlwaysOn = skillName === "memory";
+			const isAlwaysOn = skillName === "memory" || skillName === "core";
 
 			if (!groups.has(skillName)) {
 				groups.set(skillName, {
@@ -56,13 +56,17 @@ export class SkillManager {
 
 	private deriveSkillName(tool: ToolDefinition): string {
 		if (tool.plugin === "kernel") {
-			return tool.name.startsWith("memory_") ? "memory" : "files";
+			if (tool.name.startsWith("memory_")) return "memory";
+			if (tool.name === "spawn_agent" || tool.name === "activate_skill")
+				return "core";
+			return "files";
 		}
 		return tool.plugin;
 	}
 
 	private deriveDescription(skillName: string): string {
 		const descriptions: Record<string, string> = {
+			core: "Spawn sub-agents and activate skills.",
 			memory: "Store, recall, and forget information across conversations.",
 			files:
 				"Read, write, and list files; run shell commands in the workspace.",
@@ -201,7 +205,8 @@ export class SkillManager {
 		> = {};
 		for (const skill of this.skills.values()) {
 			const defaultDesc = this.deriveDescription(skill.name);
-			const defaultAlwaysActive = skill.name === "memory";
+			const defaultAlwaysActive =
+				skill.name === "memory" || skill.name === "core";
 			const hasDescOverride = skill.description !== defaultDesc;
 			const hasActiveOverride = skill.alwaysActive !== defaultAlwaysActive;
 			const hasDisabledTools = skill.disabledTools.length > 0;

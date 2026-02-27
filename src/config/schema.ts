@@ -117,6 +117,19 @@ export const configSchema = z.object({
 	log: z.object({
 		level: z.enum(["debug", "info", "warn", "error"]).default("info"),
 	}),
+	agents: z
+		.record(
+			z.string(),
+			z.object({
+				description: z.string(),
+				systemPrompt: z.string(),
+				skills: z.array(z.string()).default([]),
+				provider: z.enum(["claude", "ollama", "openai", "gemini"]).optional(),
+				maxRoundtrips: z.number().int().positive().optional(),
+				memoryScope: z.string().optional(),
+			}),
+		)
+		.default({}),
 	skills: z
 		.record(
 			z.string(),

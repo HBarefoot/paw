@@ -107,6 +107,17 @@ export interface PawConfig {
 	log: {
 		level: "debug" | "info" | "warn" | "error";
 	};
+	agents: Record<
+		string,
+		{
+			description: string;
+			systemPrompt: string;
+			skills: string[];
+			provider?: "claude" | "ollama" | "openai" | "gemini";
+			maxRoundtrips?: number;
+			memoryScope?: string;
+		}
+	>;
 	mcpServers: Record<
 		string,
 		{

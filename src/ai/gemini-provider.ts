@@ -2,6 +2,7 @@ import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import { withRetry } from "./retry.js";
 import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
+import { executeToolsParallel, type ToolCallRequest } from "./parallel-tools.js";
 import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
@@ -73,6 +74,9 @@ export class GeminiProvider implements AIProvider {
 				: (() => {
 						const allowed = this.skillManager.getActiveToolNames(sessionId);
 						allowed.add("activate_skill");
+						if (this.toolRegistry.get("spawn_agent")) {
+							allowed.add("spawn_agent");
+						}
 						return this.toolRegistry.toAnthropicToolsFiltered(allowed);
 					})();
 
@@ -184,8 +188,10 @@ export class GeminiProvider implements AIProvider {
 			// Add model response to conversation
 			contents.push({ role: "model", parts });
 
-			// Execute function calls and add results
+			// Phase 1: Handle activate_skill calls first
 			const responseParts: GeminiPart[] = [];
+			const regularCalls: ToolCallRequest[] = [];
+
 			for (const call of functionCalls) {
 				if (
 					call.functionCall.name === "activate_skill" &&
@@ -211,18 +217,27 @@ export class GeminiProvider implements AIProvider {
 					}
 				}
 
-				this.logger.info("Executing tool", { tool: call.functionCall.name });
-				const result = await this.toolRegistry.execute(
-					call.functionCall.name,
-					call.functionCall.args,
+				const toolArgs = { ...call.functionCall.args };
+				if (call.functionCall.name === "spawn_agent" && sessionId) {
+					toolArgs.__sessionId = sessionId;
+				}
+				regularCalls.push({ id: call.functionCall.name, name: call.functionCall.name, input: toolArgs });
+			}
+
+			// Phase 2: Execute remaining tools in parallel
+			if (regularCalls.length > 0) {
+				const results = await executeToolsParallel(
+					regularCalls, this.toolRegistry, this.logger, 600_000,
 				);
-				if (result.images) collectedImages.push(...result.images);
-				responseParts.push({
-					functionResponse: {
-						name: call.functionCall.name,
-						response: { content: result.content },
-					},
-				});
+				for (const r of results) {
+					if (r.images) collectedImages.push(...r.images);
+					responseParts.push({
+						functionResponse: {
+							name: r.name,
+							response: { content: r.content },
+						},
+					});
+				}
 			}
 
 			contents.push({ role: "user", parts: responseParts });

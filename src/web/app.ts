@@ -1,52 +1,52 @@
-import { Hono, type Context } from "hono";
-import { logger as honoLogger } from "hono/logger";
-import { bodyLimit } from "hono/body-limit";
-import { csrf } from "hono/csrf";
-import { streamSSE } from "hono/streaming";
-import { setCookie, getCookie } from "hono/cookie";
-import { resolve, relative, extname } from "node:path";
-import { resolveProjectPath } from "../paths.js";
+import type { Database } from "bun:sqlite";
 import {
 	existsSync,
-	statSync,
-	readdirSync,
-	readFileSync,
-	watch,
 	mkdirSync,
-	rmSync,
+	readFileSync,
+	readdirSync,
 	realpathSync,
+	rmSync,
+	statSync,
+	watch,
 } from "node:fs";
-import { DashboardPage } from "./views/dashboard.js";
-import { ConfigPage } from "./views/config-page.js";
-import { ChatPage, getChatScript } from "./views/chat.js";
-// canvas-page.tsx removed — canvas is now merged into chat
-import { CronPage } from "./views/cron-page.js";
-import { HeartbeatPage } from "./views/heartbeat-page.js";
-import { MemoryPage } from "./views/memory-page.js";
-import { SessionsListPage, SessionDetailPage } from "./views/sessions-page.js";
-import { MCPPage } from "./views/mcp-page.js";
-import { SkillsPage } from "./views/skills-page.js";
-import { WebhooksPage } from "./views/webhooks-page.js";
-import { LoginPage } from "./views/login-page.js";
-import { TotpSetupPage } from "./views/totp-setup-page.js";
+import { extname, relative, resolve } from "node:path";
+import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { getCookie, setCookie } from "hono/cookie";
+import { csrf } from "hono/csrf";
+import { logger as honoLogger } from "hono/logger";
+import { streamSSE } from "hono/streaming";
 import { readConfigOverrides, saveConfigOverrides } from "../config/writer.js";
-import {
-	listRecentSessions,
-	getSessionWithMessages,
-	deleteSession,
-	updateSessionTitle,
-} from "../store/sessions.js";
 import { isValidCron } from "../cron/parser.js";
-import { createSecurityHeaders } from "./middleware/security-headers.js";
-import { createAuthMiddleware } from "./middleware/auth.js";
-import { WebAuthManager } from "../security/web-auth.js";
+import type { Kernel } from "../kernel/kernel.js";
+import { resolveProjectPath } from "../paths.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import { buildOtpauthUri } from "../security/totp.js";
-import { parseUploadedFiles } from "./file-parser.js";
-import type { Kernel } from "../kernel/kernel.js";
+import { WebAuthManager } from "../security/web-auth.js";
+import {
+	deleteSession,
+	getSessionWithMessages,
+	listRecentSessions,
+	updateSessionTitle,
+} from "../store/sessions.js";
 import type { PawConfig } from "../types/config.js";
-import type { Database } from "bun:sqlite";
 import { CANVAS_TEMPLATES } from "./canvas-templates.js";
+import { parseUploadedFiles } from "./file-parser.js";
+import { createAuthMiddleware } from "./middleware/auth.js";
+import { createSecurityHeaders } from "./middleware/security-headers.js";
+import { ChatPage, getChatScript } from "./views/chat.js";
+import { ConfigPage } from "./views/config-page.js";
+// canvas-page.tsx removed — canvas is now merged into chat
+import { CronPage } from "./views/cron-page.js";
+import { DashboardPage } from "./views/dashboard.js";
+import { HeartbeatPage } from "./views/heartbeat-page.js";
+import { LoginPage } from "./views/login-page.js";
+import { MCPPage } from "./views/mcp-page.js";
+import { MemoryPage } from "./views/memory-page.js";
+import { SessionDetailPage, SessionsListPage } from "./views/sessions-page.js";
+import { SkillsPage } from "./views/skills-page.js";
+import { TotpSetupPage } from "./views/totp-setup-page.js";
+import { WebhooksPage } from "./views/webhooks-page.js";
 
 // Fields that cannot be modified through the web config form
 const BLOCKED_CONFIG_FIELDS = new Set([
@@ -161,8 +161,7 @@ export function createWebApp(
 		// HMAC signature verification (if secret is set)
 		if (webhook.secret) {
 			const sigHeader =
-				c.req.header("x-paw-signature") ??
-				c.req.header("x-hub-signature-256");
+				c.req.header("x-paw-signature") ?? c.req.header("x-hub-signature-256");
 			if (!sigHeader) {
 				database.run(
 					"INSERT INTO webhook_logs (webhook_id, status, headers_json, body_json, error) VALUES (?, 'error', ?, ?, ?)",
@@ -176,8 +175,7 @@ export function createWebApp(
 				return c.json({ error: "Missing signature" }, 401);
 			}
 
-			const rawBody =
-				typeof body === "string" ? body : JSON.stringify(body);
+			const rawBody = typeof body === "string" ? body : JSON.stringify(body);
 			const key = await crypto.subtle.importKey(
 				"raw",
 				new TextEncoder().encode(webhook.secret),
@@ -249,8 +247,7 @@ export function createWebApp(
 					.emit("webhook:error", {
 						webhookId: webhook.id,
 						slug: webhook.slug,
-						error:
-							err instanceof Error ? err.message : String(err),
+						error: err instanceof Error ? err.message : String(err),
 					})
 					.catch(() => {});
 			});
@@ -511,17 +508,58 @@ export function createWebApp(
 		} as PawConfig;
 	}
 
-	function getIcpConfig(): { icpSampleCities?: string[]; icpExcludeBrands?: string[] } {
+	function getIcpConfig(): {
+		icpSampleCities?: string[];
+		icpExcludeBrands?: string[];
+	} {
 		const overrides = readConfigOverrides();
-		const icpConfig = overrides["icp-discovery"] as Record<string, unknown> | undefined;
+		const icpConfig = overrides["icp-discovery"] as
+			| Record<string, unknown>
+			| undefined;
 		return {
-			icpSampleCities: Array.isArray(icpConfig?.sampleCities) ? icpConfig.sampleCities as string[] : undefined,
-			icpExcludeBrands: Array.isArray(icpConfig?.excludeBrands) ? icpConfig.excludeBrands as string[] : undefined,
+			icpSampleCities: Array.isArray(icpConfig?.sampleCities)
+				? (icpConfig.sampleCities as string[])
+				: undefined,
+			icpExcludeBrands: Array.isArray(icpConfig?.excludeBrands)
+				? (icpConfig.excludeBrands as string[])
+				: undefined,
 		};
 	}
 
+	function getAgentEntries(): Array<{
+		name: string;
+		description: string;
+		systemPrompt: string;
+		skills: string[];
+		provider?: string;
+		maxRoundtrips?: number;
+	}> {
+		const cfg = liveConfig();
+		const agents = cfg.agents ?? {};
+		return Object.entries(agents).map(([name, def]) => ({
+			name,
+			description:
+				((def as Record<string, unknown>).description as string) || "",
+			systemPrompt:
+				((def as Record<string, unknown>).systemPrompt as string) || "",
+			skills: Array.isArray((def as Record<string, unknown>).skills)
+				? ((def as Record<string, unknown>).skills as string[])
+				: [],
+			provider: (def as Record<string, unknown>).provider as string | undefined,
+			maxRoundtrips: (def as Record<string, unknown>).maxRoundtrips as
+				| number
+				| undefined,
+		}));
+	}
+
 	app.get("/config", (c) => {
-		return c.html(ConfigPage({ config: liveConfig(), ...getIcpConfig() }));
+		return c.html(
+			ConfigPage({
+				config: liveConfig(),
+				...getIcpConfig(),
+				agents: getAgentEntries(),
+			}),
+		);
 	});
 
 	app.post("/config", async (c) => {
@@ -530,7 +568,18 @@ export function createWebApp(
 			const overrides: Record<string, unknown> = {};
 
 			// Parse dotted form field names into nested objects
+			const agentFields = new Map<string, Record<string, string>>();
 			for (const [key, value] of Object.entries(body)) {
+				// Agent fields use agents[idx].field format — collect separately
+				const agentMatch = key.match(/^agents\[(\d+)]\.(\w+)$/);
+				if (agentMatch) {
+					const idx = agentMatch[1];
+					if (!agentFields.has(idx)) agentFields.set(idx, {});
+					const fields = agentFields.get(idx);
+					if (fields) fields[agentMatch[2]] = String(value);
+					continue;
+				}
+
 				// Block sensitive fields
 				if (BLOCKED_CONFIG_FIELDS.has(key)) {
 					return c.html(
@@ -538,6 +587,7 @@ export function createWebApp(
 							config: liveConfig(),
 							error: `Field "${key}" cannot be modified through the web UI`,
 							...getIcpConfig(),
+							agents: getAgentEntries(),
 						}),
 					);
 				}
@@ -555,14 +605,42 @@ export function createWebApp(
 				if (value === "true") target[lastKey] = true;
 				else if (value === "false") target[lastKey] = false;
 				else if (typeof value === "string" && /^\d+$/.test(value))
-					target[lastKey] = parseInt(value, 10);
+					target[lastKey] = Number.parseInt(value, 10);
 				else if (typeof value === "string" && /^\d+\.\d+$/.test(value))
-					target[lastKey] = parseFloat(value);
+					target[lastKey] = Number.parseFloat(value);
 				else target[lastKey] = value;
 			}
 
+			// Build agents config from collected form fields
+			const agentsConfig: Record<string, Record<string, unknown>> = {};
+			for (const [, fields] of agentFields) {
+				const name = fields.name?.trim();
+				if (!name) continue;
+				agentsConfig[name] = {
+					description: fields.description?.trim() || "",
+					systemPrompt: fields.systemPrompt?.trim() || "",
+					skills: (fields.skills || "")
+						.split(",")
+						.map((s: string) => s.trim())
+						.filter(Boolean),
+				};
+				if (fields.provider) {
+					agentsConfig[name].provider = fields.provider;
+				}
+				if (fields.maxRoundtrips && /^\d+$/.test(fields.maxRoundtrips)) {
+					agentsConfig[name].maxRoundtrips = Number.parseInt(
+						fields.maxRoundtrips,
+						10,
+					);
+				}
+			}
+			// Always write agents key (empty object clears all agents)
+			overrides.agents = agentsConfig;
+
 			// Convert comma-separated ICP discovery fields into string arrays
-			const icpConfig = overrides["icp-discovery"] as Record<string, unknown> | undefined;
+			const icpConfig = overrides["icp-discovery"] as
+				| Record<string, unknown>
+				| undefined;
 			if (icpConfig) {
 				for (const field of ["sampleCities", "excludeBrands"]) {
 					if (typeof icpConfig[field] === "string") {
@@ -585,10 +663,24 @@ export function createWebApp(
 			);
 
 			saveConfigOverrides(overrides);
-			return c.html(ConfigPage({ config: liveConfig(), saved: true, ...getIcpConfig() }));
+			return c.html(
+				ConfigPage({
+					config: liveConfig(),
+					saved: true,
+					...getIcpConfig(),
+					agents: getAgentEntries(),
+				}),
+			);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			return c.html(ConfigPage({ config: liveConfig(), error: message, ...getIcpConfig() }));
+			return c.html(
+				ConfigPage({
+					config: liveConfig(),
+					error: message,
+					...getIcpConfig(),
+					agents: getAgentEntries(),
+				}),
+			);
 		}
 	});
 
@@ -612,6 +704,17 @@ export function createWebApp(
 		c.header("Cache-Control", "public, max-age=86400");
 		return c.body(await file.arrayBuffer());
 	});
+
+	app.get("/favicon.png", async (c) => {
+		const faviconPath = resolve(import.meta.dir, "public/favicon.png");
+		if (!existsSync(faviconPath)) return c.text("Not found", 404);
+		const file = Bun.file(faviconPath);
+		c.header("Content-Type", "image/png");
+		c.header("Cache-Control", "public, max-age=86400");
+		return c.body(await file.arrayBuffer());
+	});
+
+	app.get("/favicon.ico", (c) => c.redirect("/favicon.png", 301));
 
 	// --- Canvas ---
 
@@ -758,16 +861,36 @@ export function createWebApp(
 		}
 
 		const BINARY_EXTS = new Set([
-			".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg",
-			".woff", ".woff2", ".ttf", ".eot",
-			".mp3", ".mp4", ".webm", ".ogg", ".wav",
-			".pdf", ".zip", ".tar", ".gz",
+			".png",
+			".jpg",
+			".jpeg",
+			".gif",
+			".ico",
+			".webp",
+			".svg",
+			".woff",
+			".woff2",
+			".ttf",
+			".eot",
+			".mp3",
+			".mp4",
+			".webm",
+			".ogg",
+			".wav",
+			".pdf",
+			".zip",
+			".tar",
+			".gz",
 		]);
 		const MAX_INJECT_BYTES = 50 * 1024;
 		let canvasFilesSummary = "";
 
 		if (existsSync(canvasRoot)) {
-			const canvasFiles: Array<{ path: string; size: number; fullPath: string }> = [];
+			const canvasFiles: Array<{
+				path: string;
+				size: number;
+				fullPath: string;
+			}> = [];
 			function walkCanvas(dir: string): void {
 				if (canvasFiles.length >= 50) return;
 				try {
@@ -785,7 +908,9 @@ export function createWebApp(
 							});
 						}
 					}
-				} catch { /* ignore */ }
+				} catch {
+					/* ignore */
+				}
 			}
 			walkCanvas(canvasRoot);
 
@@ -795,7 +920,11 @@ export function createWebApp(
 				for (const f of canvasFiles) {
 					const ext = extname(f.path).toLowerCase();
 					const isBinary = BINARY_EXTS.has(ext);
-					if (isBinary || f.size > MAX_INJECT_BYTES || injectedBytes + f.size > MAX_INJECT_BYTES) {
+					if (
+						isBinary ||
+						f.size > MAX_INJECT_BYTES ||
+						injectedBytes + f.size > MAX_INJECT_BYTES
+					) {
 						sections.push(
 							`[${f.path}] (${isBinary ? "binary" : `${f.size} bytes`} — use canvas_read if needed)`,
 						);
@@ -805,11 +934,14 @@ export function createWebApp(
 							sections.push(`[${f.path}]\n${content}`);
 							injectedBytes += f.size;
 						} catch {
-							sections.push(`[${f.path}] (unreadable — use canvas_read if needed)`);
+							sections.push(
+								`[${f.path}] (unreadable — use canvas_read if needed)`,
+							);
 						}
 					}
 				}
-				canvasFilesSummary = "\n\n--- Current Canvas Files ---\n" + sections.join("\n\n");
+				canvasFilesSummary =
+					"\n\n--- Current Canvas Files ---\n" + sections.join("\n\n");
 			}
 		}
 
@@ -896,7 +1028,11 @@ export function createWebApp(
 				images?: Array<{ data: string; mimeType: string }>;
 				files?: Array<{ data: string; mimeType: string; name: string }>;
 			}>();
-			if (!body.message?.trim() && !body.images?.length && !body.files?.length) {
+			if (
+				!body.message?.trim() &&
+				!body.images?.length &&
+				!body.files?.length
+			) {
 				return c.json({ error: "Message is required" }, 400);
 			}
 
@@ -942,7 +1078,7 @@ export function createWebApp(
 	// Polling endpoint — replaces SSE which Bun cannot sustain
 	app.get("/api/canvas/events", (c) => {
 		const sessionId = c.req.query("sessionId") || "__files__";
-		const since = parseInt(c.req.query("since") || "0", 10);
+		const since = Number.parseInt(c.req.query("since") || "0", 10);
 
 		// Track last access for session cleanup
 		canvasSessionLastAccess.set(sessionId, Date.now());
@@ -1161,7 +1297,7 @@ export function createWebApp(
 
 	// B1: Restore a canvas version
 	app.post("/api/canvas/restore/:id", async (c) => {
-		const id = parseInt(c.req.param("id"), 10);
+		const id = Number.parseInt(c.req.param("id"), 10);
 		if (isNaN(id)) return c.json({ error: "Invalid version ID" }, 400);
 
 		const version = database
@@ -1206,7 +1342,7 @@ export function createWebApp(
 
 	// B1: Get version content (for diff view)
 	app.get("/api/canvas/version-content/:id", (c) => {
-		const id = parseInt(c.req.param("id"), 10);
+		const id = Number.parseInt(c.req.param("id"), 10);
 		if (isNaN(id)) return c.json({ error: "Invalid version ID" }, 400);
 
 		const version = database
@@ -1431,7 +1567,7 @@ export function createWebApp(
 		const hb = (overrides.heartbeat ?? {}) as Record<string, unknown>;
 		if (body.enabled !== undefined) hb.enabled = body.enabled === "true";
 		if (body.intervalMinutes !== undefined)
-			hb.intervalMinutes = parseInt(String(body.intervalMinutes), 10);
+			hb.intervalMinutes = Number.parseInt(String(body.intervalMinutes), 10);
 		if (body.triggerAiOnFailure !== undefined)
 			hb.triggerAiOnFailure = body.triggerAiOnFailure === "true";
 		overrides.heartbeat = hb;
@@ -1587,7 +1723,7 @@ export function createWebApp(
 		const q = c.req.query("q") ?? "";
 		const scope = c.req.query("scope");
 		const category = c.req.query("category");
-		const limit = parseInt(c.req.query("limit") ?? "20", 10);
+		const limit = Number.parseInt(c.req.query("limit") ?? "20", 10);
 
 		if (!q) {
 			const memories = kernel.memory.list({
@@ -2081,13 +2217,12 @@ export function createWebApp(
 
 		// Derive base URL from request
 		const proto = trustedProxy
-			? c.req.header("x-forwarded-proto") ?? "http"
+			? (c.req.header("x-forwarded-proto") ?? "http")
 			: config.web.tls.enabled
 				? "https"
 				: "http";
 		const host =
-			c.req.header("host") ??
-			`${config.web.host}:${config.web.port}`;
+			c.req.header("host") ?? `${config.web.host}:${config.web.port}`;
 		const baseUrl = `${proto}://${host}`;
 
 		return c.html(WebhooksPage({ webhooks, baseUrl }));
@@ -2263,7 +2398,7 @@ export function createWebApp(
 	});
 
 	app.get("/api/sessions", (c) => {
-		const limit = parseInt(c.req.query("limit") ?? "50", 10);
+		const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
 		const sessions = listRecentSessions(kernel.database, limit);
 		return c.json({ sessions });
 	});

@@ -488,10 +488,13 @@ const cssDesignSystem = `
     flex-shrink: 0;
   }
   .avatar.user-avatar { background: var(--accent); color: var(--text-inverse); }
-  .avatar.bot-avatar { background: var(--accent-subtle); color: var(--accent); }
+  .avatar.bot-avatar { background: var(--accent-subtle); overflow: hidden; }
+  .avatar.bot-avatar img { width: 100%; height: 100%; object-fit: cover; }
 
   .msg {
     max-width: 720px;
+    min-width: 0;
+    overflow-wrap: break-word;
     padding: 12px 16px;
     border-radius: var(--radius-lg);
     line-height: 1.5;
@@ -509,6 +512,7 @@ const cssDesignSystem = `
     color: var(--text-primary);
     border: 1px solid var(--border-secondary);
     border-bottom-left-radius: var(--radius-sm);
+    overflow: hidden;
   }
   /* Dark mode: deeper blue gradient for readable contrast */
   :root.dark .msg.user {
@@ -816,25 +820,13 @@ const cssDesignSystem = `
   }
 
   .activity-thinking {
-    position: relative;
-    padding: 3px 0 3px 12px;
+    padding: 6px 10px;
     font-size: 12px;
     font-style: italic;
     color: var(--text-tertiary);
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-  .activity-thinking::before {
-    content: "";
-    position: absolute;
-    left: -17px;
-    top: 9px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--text-tertiary);
-    animation: thinking-pulse 1.5s ease-in-out infinite;
   }
   @keyframes thinking-pulse {
     0%, 100% { opacity: 0.3; }
@@ -1239,6 +1231,7 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
     <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="icon" type="image/png" href="/favicon.png" />
       {raw(`<link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">`)}

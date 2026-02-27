@@ -23,6 +23,8 @@ export function summarizeToolInput(
 			return "Listing canvas files";
 		case "activate_skill":
 			return `Activating skill: ${input.skill || "unknown"}`;
+		case "spawn_agent":
+			return `Spawning agent: ${input.name || "unknown"}`;
 		case "memory_store":
 			return `Storing memory: ${truncate(String(input.text || ""), 60)}`;
 		case "memory_recall":

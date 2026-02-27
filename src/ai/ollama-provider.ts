@@ -8,6 +8,11 @@ import type {
 	StreamChunk,
 } from "./base-provider.js";
 import { summarizeToolInput } from "./tool-summary.js";
+import {
+	executeToolsParallel,
+	executeToolsParallelStreaming,
+	type ToolCallRequest,
+} from "./parallel-tools.js";
 import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
 import type { Logger } from "../types/plugin.js";
@@ -109,6 +114,9 @@ export class OllamaProvider implements AIProvider {
 				: (() => {
 						const allowed = this.skillManager.getActiveToolNames(sessionId);
 						allowed.add("activate_skill");
+						if (this.toolRegistry.get("spawn_agent")) {
+							allowed.add("spawn_agent");
+						}
 						return this.toolRegistry.toAnthropicToolsFiltered(allowed);
 					})();
 
@@ -202,7 +210,8 @@ export class OllamaProvider implements AIProvider {
 				tool_calls: toolCalls,
 			});
 
-			// Execute each tool call and add results
+			// Phase 1: Handle activate_skill calls first (they change available tools)
+			const regularCalls: ToolCallRequest[] = [];
 			for (const call of toolCalls) {
 				if (
 					call.function.name === "activate_skill" &&
@@ -224,32 +233,25 @@ export class OllamaProvider implements AIProvider {
 					}
 				}
 
-				this.logger.info("Executing tool", { tool: call.function.name });
-				const TOOL_TIMEOUT_MS = 300_000;
-				let result: { content?: string; is_error?: boolean; images?: Array<{ media_type: string; base64: string }> };
-				try {
-					result = await Promise.race([
-						this.toolRegistry.execute(call.function.name, call.function.arguments),
-						new Promise<never>((_, reject) =>
-							setTimeout(
-								() => reject(new Error(`Tool "${call.function.name}" timed out after 10 minutes`)),
-								TOOL_TIMEOUT_MS,
-							),
-						),
-					]);
-				} catch (err) {
-					result = {
-						content: err instanceof Error ? err.message : String(err),
-						is_error: true,
-					};
+				const toolArgs = { ...call.function.arguments };
+				if (call.function.name === "spawn_agent" && sessionId) {
+					toolArgs.__sessionId = sessionId;
 				}
-				if (result.images) {
-					collectedImages.push(...result.images);
+				regularCalls.push({ id: call.function.name, name: call.function.name, input: toolArgs });
+			}
+
+			// Phase 2: Execute remaining tools in parallel
+			if (regularCalls.length > 0) {
+				const results = await executeToolsParallel(
+					regularCalls, this.toolRegistry, this.logger, 300_000,
+				);
+				for (const r of results) {
+					if (r.images) collectedImages.push(...r.images);
+					conversation.push({
+						role: "tool",
+						content: truncateToolResult(r.content),
+					});
 				}
-				conversation.push({
-					role: "tool",
-					content: truncateToolResult(result.content ?? ""),
-				});
 			}
 
 			roundtrips++;
@@ -448,10 +450,14 @@ export class OllamaProvider implements AIProvider {
 
 			yield { type: "thinking" };
 
-			// Execute each tool call
+			// Phase 1: Handle activate_skill calls first
+			const streamRegularCalls: ToolCallRequest[] = [];
 			for (let i = 0; i < toolCalls.length; i++) {
 				const call = toolCalls[i];
-				const toolInput = call.function.arguments;
+				const toolInput = { ...call.function.arguments };
+				if (call.function.name === "spawn_agent" && sessionId) {
+					toolInput.__sessionId = sessionId;
+				}
 				const toolId = `ollama-${roundtrips}-${call.function.name}-${i}`;
 				const summary = summarizeToolInput(call.function.name, toolInput);
 
@@ -491,53 +497,26 @@ export class OllamaProvider implements AIProvider {
 					}
 				}
 
-				yield {
-					type: "tool_start",
-					toolName: call.function.name,
-					toolId,
-					toolInput,
-					toolSummary: summary,
-					roundtrip: roundtrips,
-				};
+				streamRegularCalls.push({ id: toolId, name: call.function.name, input: toolInput });
+			}
 
-				this.logger.info("Executing tool (stream)", {
-					tool: call.function.name,
-				});
-
-				const TOOL_TIMEOUT_MS = 600_000; // 10 minutes
-				const startTime = Date.now();
-				let result: { content?: string; is_error?: boolean; images?: Array<{ media_type: string; base64: string }> };
-				try {
-					result = await Promise.race([
-						this.toolRegistry.execute(call.function.name, toolInput),
-						new Promise<never>((_, reject) =>
-							setTimeout(
-								() => reject(new Error(`Tool "${call.function.name}" timed out after 10 minutes`)),
-								TOOL_TIMEOUT_MS,
-							),
-						),
-					]);
-				} catch (err) {
-					result = {
-						content: err instanceof Error ? err.message : String(err),
-						is_error: true,
-					};
+			// Phase 2: Execute remaining tools in parallel with streaming
+			if (streamRegularCalls.length > 0) {
+				const gen = executeToolsParallelStreaming(
+					streamRegularCalls, this.toolRegistry, this.logger, roundtrips, 600_000,
+				);
+				let next = await gen.next();
+				while (!next.done) {
+					yield next.value;
+					next = await gen.next();
 				}
-				const durationMs = Date.now() - startTime;
-
-				yield {
-					type: "tool_end",
-					toolName: call.function.name,
-					toolId,
-					toolResult: (result.content ?? "").slice(0, 500),
-					toolIsError: result.is_error,
-					durationMs,
-				};
-
-				conversation.push({
-					role: "tool",
-					content: truncateToolResult(result.content ?? ""),
-				});
+				for (const r of next.value) {
+					if (r.images) collectedImages.push(...r.images);
+					conversation.push({
+						role: "tool",
+						content: truncateToolResult(r.content),
+					});
+				}
 			}
 
 			roundtrips++;

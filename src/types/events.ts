@@ -27,6 +27,18 @@ export interface EventMap {
 	"security:user-approved": { userId: string };
 	"security:permission-denied": { plugin: string; tool: string };
 	"web:started": { host: string; port: number };
+	"agent:delegated": {
+		agentName: string;
+		parentSessionId: string;
+		agentSessionId: string;
+		task: string;
+	};
+	"agent:completed": {
+		agentName: string;
+		agentSessionId: string;
+		ok: boolean;
+		error?: string;
+	};
 	"webhook:inbound": {
 		webhookId: string;
 		webhookName: string;

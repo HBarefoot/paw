@@ -8,6 +8,11 @@ import type {
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import { withRetry } from "./retry.js";
+import {
+	executeToolsParallel,
+	executeToolsParallelStreaming,
+	type ToolCallRequest,
+} from "./parallel-tools.js";
 import type {
 	AIProvider,
 	ChatMessage,
@@ -68,6 +73,10 @@ export class ClaudeProvider implements AIProvider {
 		}
 		const allowed = this.skillManager.getActiveToolNames(sessionId);
 		allowed.add("activate_skill");
+		// spawn_agent is always available for dynamic agent spawning
+		if (this.toolRegistry.get("spawn_agent")) {
+			allowed.add("spawn_agent");
+		}
 		return this.toolRegistry.toAnthropicToolsFiltered(allowed);
 	}
 
@@ -155,7 +164,10 @@ export class ClaudeProvider implements AIProvider {
 				content: response.content as ContentBlockParam[],
 			});
 
+			// Phase 1: Handle activate_skill calls first
 			const toolResults: ToolResultBlockParam[] = [];
+			const regularCalls: ToolCallRequest[] = [];
+
 			for (const block of toolUseBlocks) {
 				if (block.name === "activate_skill" && this.skillManager && sessionId) {
 					const skillName = (block.input as Record<string, unknown>)
@@ -175,62 +187,55 @@ export class ClaudeProvider implements AIProvider {
 					}
 				}
 
-				this.logger.info("Executing tool", { tool: block.name, id: block.id });
-				const TOOL_TIMEOUT_MS = 600_000;
-				let result: ToolResult;
-				try {
-					result = await Promise.race([
-						this.toolRegistry.execute(block.name, block.input as Record<string, unknown>),
-						new Promise<never>((_, reject) =>
-							setTimeout(
-								() => reject(new Error(`Tool "${block.name}" timed out after 10 minutes`)),
-								TOOL_TIMEOUT_MS,
-							),
-						),
-					]);
-				} catch (err) {
-					result = {
-						content: err instanceof Error ? err.message : String(err),
-						is_error: true,
-					};
+				const toolInput = { ...(block.input as Record<string, unknown>) };
+				if (block.name === "spawn_agent" && sessionId) {
+					toolInput.__sessionId = sessionId;
 				}
+				regularCalls.push({ id: block.id, name: block.name, input: toolInput });
+			}
 
-				if (result.images && result.images.length > 0) {
-					collectedImages.push(...result.images);
-					// Build a multi-part content array with text + image blocks
-					const contentParts: Array<
-						| { type: "text"; text: string }
-						| {
-								type: "image";
-								source: { type: "base64"; media_type: string; data: string };
-						  }
-					> = [];
-					if (result.content) {
-						contentParts.push({ type: "text", text: result.content });
-					}
-					for (const img of result.images) {
-						contentParts.push({
-							type: "image",
-							source: {
-								type: "base64",
-								media_type: img.media_type,
-								data: img.base64,
-							},
+			// Phase 2: Execute remaining tools in parallel
+			if (regularCalls.length > 0) {
+				const results = await executeToolsParallel(
+					regularCalls, this.toolRegistry, this.logger, 600_000,
+				);
+				for (const r of results) {
+					if (r.images && r.images.length > 0) {
+						collectedImages.push(...r.images);
+						const contentParts: Array<
+							| { type: "text"; text: string }
+							| {
+									type: "image";
+									source: { type: "base64"; media_type: string; data: string };
+							  }
+						> = [];
+						if (r.content) {
+							contentParts.push({ type: "text", text: r.content });
+						}
+						for (const img of r.images) {
+							contentParts.push({
+								type: "image",
+								source: {
+									type: "base64",
+									media_type: img.media_type,
+									data: img.base64,
+								},
+							});
+						}
+						toolResults.push({
+							type: "tool_result",
+							tool_use_id: r.id,
+							content: contentParts as any,
+							is_error: r.is_error,
+						});
+					} else {
+						toolResults.push({
+							type: "tool_result",
+							tool_use_id: r.id,
+							content: r.content,
+							is_error: r.is_error,
 						});
 					}
-					toolResults.push({
-						type: "tool_result",
-						tool_use_id: block.id,
-						content: contentParts as any,
-						is_error: result.is_error,
-					});
-				} else {
-					toolResults.push({
-						type: "tool_result",
-						tool_use_id: block.id,
-						content: result.content ?? "",
-						is_error: result.is_error,
-					});
 				}
 			}
 
@@ -334,9 +339,15 @@ export class ClaudeProvider implements AIProvider {
 
 			yield { type: "thinking" };
 
+			// Phase 1: Handle activate_skill calls first
 			const toolResults: ToolResultBlockParam[] = [];
+			const streamRegularCalls: ToolCallRequest[] = [];
+
 			for (const block of toolUseBlocks) {
-				const toolInput = block.input as Record<string, unknown>;
+				const toolInput = { ...(block.input as Record<string, unknown>) };
+				if (block.name === "spawn_agent" && sessionId) {
+					toolInput.__sessionId = sessionId;
+				}
 
 				if (block.name === "activate_skill" && this.skillManager && sessionId) {
 					const skillName = toolInput.skill as string;
@@ -372,85 +383,56 @@ export class ClaudeProvider implements AIProvider {
 					}
 				}
 
-				const summary = summarizeToolInput(block.name, toolInput);
-				yield {
-					type: "tool_start",
-					toolName: block.name,
-					toolId: block.id,
-					toolInput,
-					toolSummary: summary,
-					roundtrip: roundtrips,
-				};
+				streamRegularCalls.push({ id: block.id, name: block.name, input: toolInput });
+			}
 
-				this.logger.info("Executing tool (stream)", {
-					tool: block.name,
-					id: block.id,
-				});
-
-				const TOOL_TIMEOUT_MS = 600_000; // 5 minutes
-				const startTime = Date.now();
-				let result: ToolResult;
-				try {
-					result = await Promise.race([
-						this.toolRegistry.execute(block.name, toolInput),
-						new Promise<never>((_, reject) =>
-							setTimeout(
-								() => reject(new Error(`Tool "${block.name}" timed out after 10 minutes`)),
-								TOOL_TIMEOUT_MS,
-							),
-						),
-					]);
-				} catch (err) {
-					result = {
-						content: err instanceof Error ? err.message : String(err),
-						is_error: true,
-					};
+			// Phase 2: Execute remaining tools in parallel with streaming
+			if (streamRegularCalls.length > 0) {
+				const gen = executeToolsParallelStreaming(
+					streamRegularCalls, this.toolRegistry, this.logger, roundtrips, 600_000,
+				);
+				let next = await gen.next();
+				while (!next.done) {
+					yield next.value;
+					next = await gen.next();
 				}
-				const durationMs = Date.now() - startTime;
-
-				yield {
-					type: "tool_end",
-					toolName: block.name,
-					toolId: block.id,
-					toolResult: (result.content ?? "").slice(0, 500),
-					toolIsError: result.is_error,
-					durationMs,
-				};
-
-				if (result.images && result.images.length > 0) {
-					const contentParts: Array<
-						| { type: "text"; text: string }
-						| {
-								type: "image";
-								source: { type: "base64"; media_type: string; data: string };
-						  }
-					> = [];
-					if (result.content) {
-						contentParts.push({ type: "text", text: result.content });
-					}
-					for (const img of result.images) {
-						contentParts.push({
-							type: "image",
-							source: {
-								type: "base64",
-								media_type: img.media_type,
-								data: img.base64,
-							},
+				for (const r of next.value) {
+					if (r.images && r.images.length > 0) {
+						collectedImages.push(...r.images);
+						const contentParts: Array<
+							| { type: "text"; text: string }
+							| {
+									type: "image";
+									source: { type: "base64"; media_type: string; data: string };
+							  }
+						> = [];
+						if (r.content) {
+							contentParts.push({ type: "text", text: r.content });
+						}
+						for (const img of r.images) {
+							contentParts.push({
+								type: "image",
+								source: {
+									type: "base64",
+									media_type: img.media_type,
+									data: img.base64,
+								},
+							});
+						}
+						toolResults.push({
+							type: "tool_result",
+							tool_use_id: r.id,
+							content: contentParts as any,
+							is_error: r.is_error,
+						});
+					} else {
+						toolResults.push({
+							type: "tool_result",
+							tool_use_id: r.id,
+							content: r.content,
+							is_error: r.is_error,
 						});
 					}
-					toolResults.push({
-						type: "tool_result",
-						tool_use_id: block.id,
-						content: contentParts as any,
-						is_error: result.is_error,
-					});
-				} else {
-					toolResults.push({
-						type: "tool_result",
-						tool_use_id: block.id,
-						content: result.content ?? "",
-						is_error: result.is_error,
-					});
 				}
 			}
 

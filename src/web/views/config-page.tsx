@@ -1,6 +1,16 @@
+import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
-import { Layout } from "./layout.js";
 import type { PawConfig } from "../../types/config.js";
+import { Layout } from "./layout.js";
+
+interface AgentEntry {
+	name: string;
+	description: string;
+	systemPrompt: string;
+	skills: string[];
+	provider?: string;
+	maxRoundtrips?: number;
+}
 
 interface ConfigPageProps {
 	config: PawConfig;
@@ -8,9 +18,17 @@ interface ConfigPageProps {
 	error?: string;
 	icpSampleCities?: string[];
 	icpExcludeBrands?: string[];
+	agents?: AgentEntry[];
 }
 
-export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error, icpSampleCities, icpExcludeBrands }) => {
+export const ConfigPage: FC<ConfigPageProps> = ({
+	config,
+	saved,
+	error,
+	icpSampleCities,
+	icpExcludeBrands,
+	agents,
+}) => {
 	return (
 		<Layout title="Configuration" currentPath="/config">
 			{saved && (
@@ -412,6 +430,191 @@ export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error, icpSampl
 				</div>
 
 				<div class="card mt-md">
+					<h3>Agents</h3>
+					<p class="text-muted text-sm" style="margin-bottom: 12px">
+						Agent presets that appear as suggestions when the main AI uses
+						spawn_agent. The AI can also spawn agents dynamically without
+						presets. Changes require a restart.
+					</p>
+					<div id="agents-list">
+						{(agents ?? []).map((agent, idx) => (
+							<div
+								key={agent.name || String(idx)}
+								class="agent-entry"
+								data-idx={String(idx)}
+								style="border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 12px; position: relative;"
+							>
+								<button
+									type="button"
+									class="btn-remove-agent"
+									style="position: absolute; top: 8px; right: 8px; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 18px; padding: 4px 8px;"
+									title="Remove agent"
+								>
+									&times;
+								</button>
+								<table style="width: 100%">
+									<tbody>
+										<tr>
+											<td style="width: 120px">Name</td>
+											<td>
+												<input
+													type="text"
+													name={`agents[${idx}].name`}
+													value={agent.name}
+													class="input-md"
+													placeholder="my-agent"
+													required
+												/>
+											</td>
+										</tr>
+										<tr>
+											<td>Description</td>
+											<td>
+												<input
+													type="text"
+													name={`agents[${idx}].description`}
+													value={agent.description}
+													class="w-full"
+													placeholder="What this agent does"
+													required
+												/>
+											</td>
+										</tr>
+										<tr>
+											<td style="vertical-align: top; padding-top: 12px">
+												System Prompt
+											</td>
+											<td>
+												<textarea
+													name={`agents[${idx}].systemPrompt`}
+													rows={4}
+													class="w-full"
+													style="resize: vertical; font-family: var(--font-mono); font-size: 13px"
+													placeholder="You are a specialized agent..."
+													required
+												>
+													{agent.systemPrompt}
+												</textarea>
+											</td>
+										</tr>
+										<tr>
+											<td>Skills</td>
+											<td>
+												<input
+													type="text"
+													name={`agents[${idx}].skills`}
+													value={agent.skills.join(", ")}
+													class="w-full"
+													placeholder="icp-discovery, memory, files"
+												/>
+												<span class="text-muted text-xs">
+													Comma-separated skill names to auto-activate for this
+													agent.
+												</span>
+											</td>
+										</tr>
+										<tr>
+											<td>Provider</td>
+											<td>
+												<select name={`agents[${idx}].provider`}>
+													<option value="" selected={!agent.provider}>
+														Default (inherit)
+													</option>
+													<option
+														value="claude"
+														selected={agent.provider === "claude"}
+													>
+														Claude
+													</option>
+													<option
+														value="ollama"
+														selected={agent.provider === "ollama"}
+													>
+														Ollama
+													</option>
+													<option
+														value="openai"
+														selected={agent.provider === "openai"}
+													>
+														OpenAI
+													</option>
+													<option
+														value="gemini"
+														selected={agent.provider === "gemini"}
+													>
+														Gemini
+													</option>
+												</select>
+											</td>
+										</tr>
+										<tr>
+											<td>Max Roundtrips</td>
+											<td>
+												<input
+													type="number"
+													name={`agents[${idx}].maxRoundtrips`}
+													value={
+														agent.maxRoundtrips
+															? String(agent.maxRoundtrips)
+															: ""
+													}
+													min="1"
+													max="50"
+													class="input-sm"
+													placeholder="Default"
+												/>
+											</td>
+										</tr>
+									</tbody>
+								</table>
+							</div>
+						))}
+					</div>
+					<button
+						type="button"
+						id="add-agent-btn"
+						class="btn-secondary"
+						style="margin-top: 4px"
+					>
+						+ Add Agent
+					</button>
+					{raw(`<script>
+(function() {
+	var list = document.getElementById('agents-list');
+	var addBtn = document.getElementById('add-agent-btn');
+	function getNextIdx() {
+		var entries = list.querySelectorAll('.agent-entry');
+		var max = -1;
+		entries.forEach(function(e) { var i = parseInt(e.dataset.idx, 10); if (i > max) max = i; });
+		return max + 1;
+	}
+	addBtn.addEventListener('click', function() {
+		var idx = getNextIdx();
+		var div = document.createElement('div');
+		div.className = 'agent-entry';
+		div.dataset.idx = idx;
+		div.style.cssText = 'border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 12px; position: relative;';
+		div.innerHTML = '<button type="button" class="btn-remove-agent" style="position: absolute; top: 8px; right: 8px; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 18px; padding: 4px 8px;" title="Remove agent">&times;</button>'
+			+ '<table style="width:100%"><tbody>'
+			+ '<tr><td style="width:120px">Name</td><td><input type="text" name="agents[' + idx + '].name" class="input-md" placeholder="my-agent" required></td></tr>'
+			+ '<tr><td>Description</td><td><input type="text" name="agents[' + idx + '].description" class="w-full" placeholder="What this agent does" required></td></tr>'
+			+ '<tr><td style="vertical-align:top;padding-top:12px">System Prompt</td><td><textarea name="agents[' + idx + '].systemPrompt" rows="4" class="w-full" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="You are a specialized agent..." required></textarea></td></tr>'
+			+ '<tr><td>Skills</td><td><input type="text" name="agents[' + idx + '].skills" class="w-full" placeholder="icp-discovery, memory, files"><span class="text-muted text-xs">Comma-separated skill names.</span></td></tr>'
+			+ '<tr><td>Provider</td><td><select name="agents[' + idx + '].provider"><option value="">Default (inherit)</option><option value="claude">Claude</option><option value="ollama">Ollama</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option></select></td></tr>'
+			+ '<tr><td>Max Roundtrips</td><td><input type="number" name="agents[' + idx + '].maxRoundtrips" min="1" max="50" class="input-sm" placeholder="Default"></td></tr>'
+			+ '</tbody></table>';
+		list.appendChild(div);
+	});
+	list.addEventListener('click', function(e) {
+		if (e.target.classList.contains('btn-remove-agent')) {
+			e.target.closest('.agent-entry').remove();
+		}
+	});
+})();
+					</script>`)}
+				</div>
+
+				<div class="card mt-md">
 					<h3>ICP Discovery</h3>
 					<table>
 						<tbody>
@@ -423,7 +626,15 @@ export const ConfigPage: FC<ConfigPageProps> = ({ config, saved, error, icpSampl
 									<input
 										type="text"
 										name="icp-discovery.sampleCities"
-										value={(icpSampleCities ?? ["New York", "Los Angeles", "Chicago", "Dallas", "Houston"]).join(", ")}
+										value={(
+											icpSampleCities ?? [
+												"New York",
+												"Los Angeles",
+												"Chicago",
+												"Dallas",
+												"Houston",
+											]
+										).join(", ")}
 										class="w-full"
 										placeholder="New York, Los Angeles, Chicago, Dallas, Houston"
 									/>
