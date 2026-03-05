@@ -39,6 +39,8 @@ export interface EventMap {
 		ok: boolean;
 		error?: string;
 	};
+	"strapi:ready": undefined;
+	"strapi:error": { error: Error };
 	"webhook:inbound": {
 		webhookId: string;
 		webhookName: string;

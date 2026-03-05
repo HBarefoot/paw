@@ -118,6 +118,12 @@ export interface PawConfig {
 			memoryScope?: string;
 		}
 	>;
+	strapi: {
+		enabled: boolean;
+		url: string;
+		token: string;
+		timeout: number;
+	};
 	mcpServers: Record<
 		string,
 		{

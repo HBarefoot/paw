@@ -140,6 +140,14 @@ export const configSchema = z.object({
 			}),
 		)
 		.default({}),
+	strapi: z
+		.object({
+			enabled: z.boolean().default(false),
+			url: z.string().default(""),
+			token: z.string().default(""),
+			timeout: z.number().int().positive().default(10_000),
+		})
+		.default({}),
 	mcpServers: z
 		.record(
 			z.string(),
