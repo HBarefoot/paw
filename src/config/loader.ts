@@ -8,6 +8,7 @@ import {
 	getOllamaConfig,
 	getOpenAICredentials,
 	getGeminiCredentials,
+	getStrapiCredentials,
 } from "../auth/credential-store.js";
 import type { PawConfig } from "../types/config.js";
 
@@ -47,6 +48,7 @@ function resolvedCredentials(): Record<string, unknown> {
 	const ollamaConfig = getOllamaConfig();
 	const openaiCreds = getOpenAICredentials();
 	const geminiCreds = getGeminiCredentials();
+	const strapiCreds = getStrapiCredentials();
 
 	return {
 		provider: env.PAW_PROVIDER ?? storedProvider,
@@ -102,6 +104,19 @@ function resolvedCredentials(): Record<string, unknown> {
 				: env.PORT
 					? Number(env.PORT)
 					: undefined,
+		},
+		strapi: {
+			url: env.PAW_STRAPI_URL ?? env.STRAPI_URL ?? strapiCreds?.url,
+			token:
+				env.PAW_STRAPI_TOKEN ??
+				env.STRAPI_API_TOKEN ??
+				strapiCreds?.token,
+			// Auto-enable when a token is available
+			enabled: !!(
+				env.PAW_STRAPI_TOKEN ??
+				env.STRAPI_API_TOKEN ??
+				strapiCreds?.token
+			) || undefined,
 		},
 		store: {
 			dbPath: env.PAW_DB_PATH,

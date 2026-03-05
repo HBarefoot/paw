@@ -63,6 +63,8 @@ export class Kernel {
 	private webAppCleanup: (() => void) | null = null;
 	private sessionCleanupInterval: ReturnType<typeof setInterval> | null = null;
 	private mcpClientManager: MCPClientManager;
+	private strapiClient: import("../integrations/strapi/client.js").StrapiClient | null =
+		null;
 	private skillManager: SkillManager;
 	private agentRegistry: AgentRegistry;
 	private agentDepths = new Map<string, number>();
@@ -274,6 +276,34 @@ export class Kernel {
 					}
 				}),
 			);
+		}
+
+		// Initialize Strapi integration
+		if (this.config.strapi.enabled && this.config.strapi.token) {
+			try {
+				const { StrapiClient } = await import(
+					"../integrations/strapi/client.js"
+				);
+				const { createStrapiTools } = await import(
+					"../integrations/strapi/tools.js"
+				);
+				const client = new StrapiClient(this.config.strapi);
+				this.strapiClient = client;
+				this.sandbox.registerManifest({
+					name: "strapi",
+					version: "1.0.0",
+					description: "Strapi CMS integration",
+					permissions: ["strapi"],
+				});
+				this.toolRegistry.register(createStrapiTools(client));
+				await this.bus.emit("strapi:ready", undefined);
+				this.logger.info("Strapi integration initialized");
+			} catch (err) {
+				this.logger.warn("Strapi init failed — degrading gracefully", {
+					error: String(err),
+				});
+				await this.bus.emit("strapi:error", { error: err as Error });
+			}
 		}
 
 		// Build skill catalog from all registered tools
@@ -1324,6 +1354,17 @@ export class Kernel {
 				ok: this.mcpClientManager.connectedCount > 0,
 				details: `${this.mcpClientManager.connectedCount}/${this.mcpClientManager.serverCount} servers connected`,
 			};
+		}
+		if (this.strapiClient) {
+			try {
+				const ok = await this.strapiClient.healthCheck();
+				results["strapi"] = {
+					ok,
+					details: ok ? "reachable" : "unreachable",
+				};
+			} catch {
+				results["strapi"] = { ok: false, details: "unreachable" };
+			}
 		}
 		return results;
 	}

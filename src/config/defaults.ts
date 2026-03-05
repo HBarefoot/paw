@@ -104,6 +104,12 @@ export const defaults: PawConfig = {
 	log: {
 		level: "info",
 	},
+	strapi: {
+		enabled: false,
+		url: "",
+		token: "",
+		timeout: 10_000,
+	},
 	agents: {
 		"icp-discovery": {
 			description:

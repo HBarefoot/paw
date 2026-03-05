@@ -52,6 +52,10 @@ export interface StoredCredentials {
 		appToken: string;
 		signingSecret: string;
 	};
+	strapi?: {
+		url?: string;
+		token: string;
+	};
 }
 
 export interface AnthropicCredentials {
@@ -247,6 +251,21 @@ export function getOllamaConfig():
 			model: process.env.PAW_OLLAMA_MODEL ?? "llama3.1",
 		};
 	}
+	return undefined;
+}
+
+export function getStrapiCredentials():
+	| { url?: string; token: string }
+	| undefined {
+	const token = process.env.PAW_STRAPI_TOKEN ?? process.env.STRAPI_API_TOKEN;
+	if (token) {
+		return {
+			url: process.env.PAW_STRAPI_URL ?? process.env.STRAPI_URL,
+			token,
+		};
+	}
+	const creds = loadCredentials();
+	if (creds.strapi?.token) return creds.strapi;
 	return undefined;
 }
 
