@@ -10,6 +10,10 @@ export interface ChatMessage {
 export interface ChatResponse {
 	text: string;
 	images?: ToolResultImage[];
+	usage?: {
+		inputTokens: number;
+		outputTokens: number;
+	};
 }
 
 export interface StreamChunk {
@@ -20,8 +24,11 @@ export interface StreamChunk {
 		| "error"
 		| "done"
 		| "thinking"
-		| "roundtrip_start";
+		| "thinking_delta"
+		| "roundtrip_start"
+		| "usage";
 	text?: string;
+	thinkingText?: string;
 	toolName?: string;
 	toolId?: string;
 	toolInput?: Record<string, unknown>;
@@ -31,6 +38,14 @@ export interface StreamChunk {
 	durationMs?: number;
 	roundtrip?: number;
 	error?: string;
+	messageId?: string;
+	usage?: {
+		inputTokens: number;
+		outputTokens: number;
+		estimatedCostUsd?: number;
+		provider?: string;
+		model?: string;
+	};
 }
 
 export interface AIProvider {

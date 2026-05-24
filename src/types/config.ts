@@ -34,6 +34,8 @@ export interface PawConfig {
 		ftsWeight: number;
 		autoExtract: boolean;
 		maxRecallResults: number;
+		decayRate: number;
+		decayThresholdDays: number;
 	};
 	cron: {
 		enabled: boolean;
@@ -98,6 +100,24 @@ export interface PawConfig {
 	agent: {
 		name: string;
 		systemPrompt: string;
+	};
+	routing: {
+		enabled: boolean;
+		rules: Array<{
+			match: {
+				taskType?:
+					| "classification"
+					| "extraction"
+					| "summarization"
+					| "reasoning"
+					| "coding"
+					| "general";
+				skillName?: string;
+				agentName?: string;
+			};
+			provider: "claude" | "ollama" | "openai" | "gemini";
+			model?: string;
+		}>;
 	};
 	store: {
 		dbPath: string;

@@ -1,10 +1,16 @@
 import type { Sandbox } from "../kernel/sandbox.js";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
+import type { ToolLog } from "../observability/tool-log.js";
 
 export class ToolRegistry {
 	private tools = new Map<string, ToolDefinition>();
 	private sandbox: Sandbox | null = null;
 	private enforcePermissions = false;
+	private toolLog: ToolLog | null = null;
+
+	setToolLog(log: ToolLog | null): void {
+		this.toolLog = log;
+	}
 
 	register(tools: ToolDefinition[]): void {
 		for (const tool of tools) {
@@ -13,6 +19,10 @@ export class ToolRegistry {
 			}
 			this.tools.set(tool.name, tool);
 		}
+	}
+
+	has(name: string): boolean {
+		return this.tools.has(name);
 	}
 
 	setSandbox(sandbox: Sandbox, enforce = true): void {
@@ -37,7 +47,15 @@ export class ToolRegistry {
 		input: Record<string, unknown>,
 	): Promise<ToolResult> {
 		const tool = this.tools.get(name);
+		const start = Date.now();
 		if (!tool) {
+			this.toolLog?.record({
+				toolName: name,
+				input,
+				output: `Unknown tool: ${name}`,
+				isError: true,
+				durationMs: Date.now() - start,
+			});
 			return { content: `Unknown tool: ${name}`, is_error: true };
 		}
 
@@ -48,17 +66,40 @@ export class ToolRegistry {
 				this.inferPermission(tool),
 			);
 			if (!permitted) {
-				return {
-					content: `Permission denied: ${tool.plugin} cannot use ${name}`,
-					is_error: true,
-				};
+				const msg = `Permission denied: ${tool.plugin} cannot use ${name}`;
+				this.toolLog?.record({
+					toolName: name,
+					plugin: tool.plugin,
+					input,
+					output: msg,
+					isError: true,
+					durationMs: Date.now() - start,
+				});
+				return { content: msg, is_error: true };
 			}
 		}
 
 		try {
-			return await tool.handler(input);
+			const result = await tool.handler(input);
+			this.toolLog?.record({
+				toolName: name,
+				plugin: tool.plugin,
+				input,
+				output: result.content,
+				isError: !!result.is_error,
+				durationMs: Date.now() - start,
+			});
+			return result;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
+			this.toolLog?.record({
+				toolName: name,
+				plugin: tool.plugin,
+				input,
+				output: msg,
+				isError: true,
+				durationMs: Date.now() - start,
+			});
 			return { content: `Tool error: ${msg}`, is_error: true };
 		}
 	}

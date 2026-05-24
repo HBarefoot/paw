@@ -111,3 +111,92 @@ export function updateSessionTitle(
 	);
 	return result.changes > 0;
 }
+
+/**
+ * Fork a session at a specific message. Copies all messages up to (and
+ * including) the anchor into a new session. The new session retains the
+ * parent pointer so the UI can show a branch indicator.
+ *
+ * Returns the new session id, or null when the source session / anchor
+ * message doesn't exist.
+ */
+export function forkSessionAtMessage(
+	db: Database,
+	sourceSessionId: string,
+	anchorMessageId: string,
+	opts: { newSessionId: string; titleSuffix?: string },
+): {
+	newSessionId: string;
+	copiedMessages: number;
+} | null {
+	const source = db
+		.query<Session, [string]>("SELECT * FROM sessions WHERE id = ?")
+		.get(sourceSessionId);
+	if (!source) return null;
+
+	// Use rowid as the branch cursor: strictly monotonic, not subject to
+	// the second-resolution collision that datetime('now') has.
+	const anchor = db
+		.query<{ rowid: number }, [string, string]>(
+			"SELECT rowid FROM messages WHERE id = ? AND session_id = ?",
+		)
+		.get(anchorMessageId, sourceSessionId);
+	if (!anchor) return null;
+
+	const forkedTitle =
+		(source.title ?? `Session ${sourceSessionId.slice(0, 8)}`) +
+		(opts.titleSuffix ?? " — fork");
+
+	db.run(
+		`INSERT INTO sessions (id, channel, user_id, title, parent_session_id, fork_source_message_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+		[
+			opts.newSessionId,
+			source.channel,
+			source.user_id,
+			forkedTitle,
+			sourceSessionId,
+			anchorMessageId,
+		],
+	);
+
+	// Copy messages up to and including the anchor, ordered by rowid to
+	// preserve insertion order without timestamp ambiguity.
+	const copies = db
+		.query<
+			{
+				id: string;
+				role: string;
+				content: string;
+				tool_use_id: string | null;
+				created_at: string;
+			},
+			[string, number]
+		>(
+			`SELECT id, role, content, tool_use_id, created_at
+         FROM messages
+        WHERE session_id = ?
+          AND rowid <= ?
+        ORDER BY rowid ASC`,
+		)
+		.all(sourceSessionId, anchor.rowid);
+
+	for (const m of copies) {
+		db.run(
+			"INSERT INTO messages (id, session_id, role, content, tool_use_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+			[
+				crypto.randomUUID(),
+				opts.newSessionId,
+				m.role,
+				m.content,
+				m.tool_use_id,
+				m.created_at,
+			],
+		);
+	}
+
+	return {
+		newSessionId: opts.newSessionId,
+		copiedMessages: copies.length,
+	};
+}

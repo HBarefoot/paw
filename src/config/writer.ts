@@ -1,4 +1,10 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	existsSync,
+	readFileSync,
+	writeFileSync,
+	statSync,
+} from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { configSchema } from "./schema.js";
@@ -6,34 +12,56 @@ import { configSchema } from "./schema.js";
 const CONFIG_DIR = join(homedir(), ".paw");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
-/** In-memory config cache — invalidated on save */
+/** In-memory config cache, keyed on file mtime so external edits are caught. */
 let configCache: Record<string, unknown> | null = null;
+let configCacheMtimeMs = -1;
+const EMPTY: Record<string, unknown> = Object.freeze({});
 
 export function getConfigOverridesPath(): string {
 	return CONFIG_FILE;
 }
 
 export function readConfigOverrides(): Record<string, unknown> {
-	if (configCache) return configCache;
-	if (!existsSync(CONFIG_FILE)) return {};
+	if (!existsSync(CONFIG_FILE)) {
+		configCache = null;
+		configCacheMtimeMs = -1;
+		return EMPTY;
+	}
+
+	let mtimeMs = 0;
+	try {
+		mtimeMs = statSync(CONFIG_FILE).mtimeMs;
+	} catch {
+		return configCache ?? EMPTY;
+	}
+
+	if (configCache && mtimeMs === configCacheMtimeMs) {
+		return configCache;
+	}
+
 	try {
 		configCache = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+		configCacheMtimeMs = mtimeMs;
 		return configCache!;
 	} catch {
-		return {};
+		return configCache ?? EMPTY;
 	}
 }
 
 export function saveConfigOverrides(overrides: Record<string, unknown>): void {
-	// Validate the overrides are valid partial config by parsing with defaults
-	// We don't do a full parse here since overrides are partial
-	configCache = null; // Invalidate cache before reading
+	configCache = null;
+	configCacheMtimeMs = -1;
 	const existing = readConfigOverrides();
 	const merged = deepMergeOverrides(existing, overrides);
 
 	mkdirSync(CONFIG_DIR, { recursive: true });
 	writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
-	configCache = merged; // Update cache with the written value
+	try {
+		configCacheMtimeMs = statSync(CONFIG_FILE).mtimeMs;
+	} catch {
+		configCacheMtimeMs = -1;
+	}
+	configCache = merged;
 }
 
 function deepMergeOverrides(

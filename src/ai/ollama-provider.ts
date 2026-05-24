@@ -150,6 +150,19 @@ export class OllamaProvider implements AIProvider {
 					msg.images = m.attachments
 						.filter((a) => a.type === "image" && a.data)
 						.map((a) => a.data!.toString("base64"));
+
+					// Ollama has no separate channel for non-image attachments, so
+					// inline any text attachments as fenced blocks in the content.
+					const textParts = m.attachments
+						.filter((a) => a.type === "text" && a.data)
+						.map((a) => {
+							const name = a.name ? ` (${a.name})` : "";
+							const body = a.data!.toString("utf-8");
+							return `\n\n--- attached text${name} ---\n${body}`;
+						});
+					if (textParts.length > 0) {
+						msg.content = m.content + textParts.join("");
+					}
 				}
 				return msg;
 			}),
@@ -290,6 +303,19 @@ export class OllamaProvider implements AIProvider {
 					msg.images = m.attachments
 						.filter((a) => a.type === "image" && a.data)
 						.map((a) => a.data!.toString("base64"));
+
+					// Ollama has no separate channel for non-image attachments, so
+					// inline any text attachments as fenced blocks in the content.
+					const textParts = m.attachments
+						.filter((a) => a.type === "text" && a.data)
+						.map((a) => {
+							const name = a.name ? ` (${a.name})` : "";
+							const body = a.data!.toString("utf-8");
+							return `\n\n--- attached text${name} ---\n${body}`;
+						});
+					if (textParts.length > 0) {
+						msg.content = m.content + textParts.join("");
+					}
 				}
 				return msg;
 			}),

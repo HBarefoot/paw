@@ -314,21 +314,40 @@ export class ClaudeProvider implements AIProvider {
 			});
 
 			for await (const event of stream) {
-				if (
-					event.type === "content_block_delta" &&
-					event.delta.type === "text_delta"
-				) {
-					yield { type: "text_delta", text: event.delta.text };
+				if (event.type === "content_block_delta") {
+					if (event.delta.type === "text_delta") {
+						yield { type: "text_delta", text: event.delta.text };
+					} else if (
+						(event.delta as any).type === "thinking_delta" &&
+						(event.delta as any).thinking
+					) {
+						yield {
+							type: "thinking_delta",
+							thinkingText: (event.delta as any).thinking,
+						};
+					}
 				}
 			}
 
 			const response = await stream.finalMessage();
+
+			// Emit usage data after each roundtrip
+			if (response.usage) {
+				yield {
+					type: "usage",
+					usage: {
+						inputTokens: response.usage.input_tokens,
+						outputTokens: response.usage.output_tokens,
+						provider: "claude",
+						model: this.model,
+					},
+				};
+			}
 			const toolUseBlocks = response.content.filter(
 				(b): b is ToolUseBlock => b.type === "tool_use",
 			);
 
 			if (response.stop_reason === "end_turn" || toolUseBlocks.length === 0) {
-				yield { type: "done" };
 				return;
 			}
 
@@ -446,6 +465,5 @@ export class ClaudeProvider implements AIProvider {
 			type: "text_delta",
 			text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
 		};
-		yield { type: "done" };
 	}
 }

@@ -9,6 +9,9 @@ interface MemoryItem {
 	category: string;
 	source: string | null;
 	created_at: string;
+	confidence?: number;
+	access_count?: number;
+	last_accessed_at?: string | null;
 }
 
 interface MemoryPageProps {
@@ -28,6 +31,38 @@ function memoryScript(): string {
       var res = await fetch('/api/memory/' + id, { method: 'DELETE' });
       if (res.ok) window.location.reload();
       else pawModal.alert("Error", "Failed to delete memory.");
+    }
+
+    async function importDocument(fileInput) {
+      var file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      var statusEl = document.getElementById("import-status");
+      statusEl.textContent = "Reading " + file.name + "...";
+      try {
+        var text = await file.text();
+        statusEl.textContent = "Importing " + file.name + "...";
+        var res = await fetch("/api/memory/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: text,
+            source: file.name,
+            scope: document.getElementById("import-scope").value || "global",
+            category: document.getElementById("import-category").value || "fact"
+          })
+        });
+        var data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = "Failed: " + (data.error || res.status);
+          return;
+        }
+        statusEl.textContent = "Imported " + data.stored + " / " + data.total + " chunks from " + file.name + ".";
+        setTimeout(function() { window.location.reload(); }, 600);
+      } catch (e) {
+        statusEl.textContent = "Failed: " + e.message;
+      } finally {
+        fileInput.value = "";
+      }
     }
   `;
 }
@@ -63,7 +98,7 @@ export const MemoryPage: FC<MemoryPageProps> = ({
 			<div class="card mb-md">
 				<h3>Search</h3>
 				<form
-					method="GET"
+					method="get"
 					action="/memory"
 					class="flex gap-sm items-end flex-wrap"
 				>
@@ -100,9 +135,36 @@ export const MemoryPage: FC<MemoryPageProps> = ({
 			</div>
 
 			<div class="card mb-md">
+				<h3>Import Document</h3>
+				<p class="text-sm text-muted mb-md">
+					Drop a <code>.md</code> or <code>.txt</code> file here to chunk and
+					store each section as a separate memory, tagged with the file name.
+				</p>
+				<div class="flex gap-sm items-center flex-wrap">
+					<input
+						type="file"
+						accept=".md,.markdown,.txt"
+						onchange="importDocument(this)"
+					/>
+					<input
+						type="text"
+						id="import-scope"
+						value="global"
+						placeholder="Scope"
+						style="width: 140px"
+					/>
+					<select id="import-category">
+						<option value="fact">fact</option>
+						<option value="summary">summary</option>
+					</select>
+					<span id="import-status" class="text-sm text-muted" />
+				</div>
+			</div>
+
+			<div class="card mb-md">
 				<h3>Store Memory</h3>
 				<form
-					method="POST"
+					method="post"
 					action="/api/memory"
 					class="flex-col gap-sm max-w-form"
 				>
@@ -139,33 +201,60 @@ export const MemoryPage: FC<MemoryPageProps> = ({
 				<h3>Results ({memories.length})</h3>
 				{memories.length > 0 ? (
 					<div class="flex-col gap-sm">
-						{memories.map((mem) => (
-							<div class="memory-card">
-								<div
-									class="flex justify-between items-center mb-md"
-									style="margin-bottom: 8px"
-								>
-									<div class="flex gap-sm items-center">
-										<span class="badge success">{mem.category}</span>
-										<span class="text-sm text-muted">{mem.scope}</span>
+						{memories.map((mem) => {
+							const conf =
+								typeof mem.confidence === "number" ? mem.confidence : 1;
+							const confPct = Math.round(conf * 100);
+							const confTone =
+								conf >= 0.75
+									? "success"
+									: conf >= 0.4
+										? "warning"
+										: "danger";
+							return (
+								<div class="memory-card">
+									<div
+										class="flex justify-between items-center mb-md"
+										style="margin-bottom: 8px"
+									>
+										<div class="flex gap-sm items-center">
+											<span class="badge success">{mem.category}</span>
+											<span class="text-sm text-muted">{mem.scope}</span>
+											<span
+												class={`badge ${confTone}`}
+												title={`Confidence: ${confPct}%`}
+											>
+												{confPct}% confident
+											</span>
+											{typeof mem.access_count === "number" && (
+												<span
+													class="badge info"
+													title="Times this memory was recalled"
+												>
+													↻ {mem.access_count}
+												</span>
+											)}
+										</div>
+										<div class="flex gap-sm items-center">
+											<span class="text-xs text-muted">{mem.created_at}</span>
+											<button
+												class="btn-danger btn-sm"
+												data-memory-id={mem.id}
+												onclick="deleteMemory(this.dataset.memoryId)"
+											>
+												Delete
+											</button>
+										</div>
 									</div>
-									<div class="flex gap-sm items-center">
-										<span class="text-xs text-muted">{mem.created_at}</span>
-										<button
-											class="btn-danger btn-sm"
-											data-memory-id={mem.id}
-											onclick="deleteMemory(this.dataset.memoryId)"
-										>
-											Delete
-										</button>
-									</div>
+									<p style="font-size: 14px; line-height: 1.5">{mem.text}</p>
+									{mem.source && (
+										<p class="text-xs text-muted mt-sm">
+											Source: {mem.source}
+										</p>
+									)}
 								</div>
-								<p style="font-size: 14px; line-height: 1.5">{mem.text}</p>
-								{mem.source && (
-									<p class="text-xs text-muted mt-sm">Source: {mem.source}</p>
-								)}
-							</div>
-						))}
+							);
+						})}
 					</div>
 				) : (
 					<div class="empty-state">

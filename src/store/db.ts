@@ -97,6 +97,9 @@ function runMigrations(db: Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE INDEX IF NOT EXISTS idx_cron_due
+      ON cron_jobs(enabled, next_run);
+
     CREATE TABLE IF NOT EXISTS approved_users (
       user_id TEXT PRIMARY KEY,
       channel TEXT NOT NULL,
@@ -160,6 +163,57 @@ function runMigrations(db: Database): void {
 		// Column already exists
 	}
 
+	// Branching: a forked session points back to its parent + anchor message.
+	try {
+		db.exec("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT");
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE sessions ADD COLUMN fork_source_message_id TEXT");
+	} catch {
+		// Column already exists
+	}
+
+	// Memory enhancements: confidence, access tracking, supersession
+	try {
+		db.exec(
+			"ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
+		);
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec(
+			"ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0",
+		);
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE memories ADD COLUMN last_accessed_at TEXT");
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE memories ADD COLUMN superseded_by TEXT");
+	} catch {
+		// Column already exists
+	}
+
+	// Memory relationship links
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_links (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      link_type TEXT NOT NULL CHECK(link_type IN ('related','contradicts','supersedes','refines')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_links_source ON memory_links(source_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_id);
+  `);
+
 	// FTS5 for memory full-text search
 	db.exec(
 		`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='memories', content_rowid='rowid');`,
@@ -186,6 +240,131 @@ function runMigrations(db: Database): void {
 		);
 	} catch {
 		// vec0 not available — vector search will be disabled
+	}
+
+	// Proactive trigger columns on cron_jobs
+	try {
+		db.exec(
+			"ALTER TABLE cron_jobs ADD COLUMN is_proactive INTEGER NOT NULL DEFAULT 0",
+		);
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE cron_jobs ADD COLUMN action_condition TEXT");
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE cron_jobs ADD COLUMN data_source TEXT");
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE cron_jobs ADD COLUMN last_data_hash TEXT");
+	} catch {
+		// Column already exists
+	}
+
+	// Usage/cost tracking
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS usage_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      estimated_cost_usd REAL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_log_session ON usage_log(session_id);
+    CREATE INDEX IF NOT EXISTS idx_usage_log_created ON usage_log(created_at);
+  `);
+
+	// Feedback table for learning loop
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      feedback_type TEXT NOT NULL CHECK(feedback_type IN ('rating','regeneration','correction')),
+      value TEXT NOT NULL,
+      original_content TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_session ON feedback(session_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC);
+
+    -- Tool execution log: observability over every tool call so the admin
+    -- UI can surface failures, slow runs, and misuse.
+    CREATE TABLE IF NOT EXISTS tool_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT,
+      tool_name TEXT NOT NULL,
+      plugin TEXT,
+      input_preview TEXT,
+      output_preview TEXT,
+      is_error INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_tool_log_created ON tool_log(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tool_log_tool ON tool_log(tool_name);
+    CREATE INDEX IF NOT EXISTS idx_tool_log_session ON tool_log(session_id);
+
+    -- Reusable prompt library: user-curated snippets insertable from chat.
+    CREATE TABLE IF NOT EXISTS prompts (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      tags TEXT,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_prompts_title ON prompts(title);
+    CREATE INDEX IF NOT EXISTS idx_prompts_updated ON prompts(updated_at DESC);
+  `);
+
+	// --- Full-text search over conversation messages ---
+	// External-content FTS5 table so we don't duplicate message content,
+	// plus triggers that keep it in sync on insert/update/delete.
+	try {
+		db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        content,
+        content='messages',
+        content_rowid='rowid',
+        tokenize='porter unicode61 remove_diacritics 2'
+      );
+
+      CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+        INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+      END;
+    `);
+
+		// Backfill any existing messages that predate the trigger.
+		const ftsCount = db
+			.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM messages_fts")
+			.get();
+		const msgCount = db
+			.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM messages")
+			.get();
+		if ((ftsCount?.n ?? 0) < (msgCount?.n ?? 0)) {
+			db.exec(
+				"INSERT INTO messages_fts(messages_fts) VALUES('rebuild');",
+			);
+		}
+	} catch {
+		// FTS5 not available — search endpoint will degrade to LIKE fallback.
 	}
 
 	// Webhooks table

@@ -12,6 +12,7 @@ export const defaults: PawConfig = {
 	ollama: {
 		baseUrl: "http://localhost:11434",
 		model: "llama3.1",
+		apiKey: "",
 		maxToolRoundtrips: 50,
 		requestTimeoutMs: 300_000,
 	},
@@ -35,6 +36,8 @@ export const defaults: PawConfig = {
 		ftsWeight: 0.3,
 		autoExtract: true,
 		maxRecallResults: 10,
+		decayRate: 0.995,
+		decayThresholdDays: 7,
 	},
 	cron: {
 		enabled: true,
@@ -96,6 +99,10 @@ export const defaults: PawConfig = {
 	agent: {
 		name: "Paw",
 		systemPrompt: "",
+	},
+	routing: {
+		enabled: false,
+		rules: [],
 	},
 	store: {
 		dbPath: "./data/paw.db",

@@ -19,6 +19,16 @@ interface ConfigPageProps {
 	icpSampleCities?: string[];
 	icpExcludeBrands?: string[];
 	agents?: AgentEntry[];
+	secrets?: SecretStatus[];
+}
+
+export interface SecretStatus {
+	/** Short identifier used in the rotation endpoint path. */
+	id: string;
+	label: string;
+	set: boolean;
+	/** Whether the current value comes from env (cannot be rotated via UI). */
+	fromEnv?: boolean;
 }
 
 export const ConfigPage: FC<ConfigPageProps> = ({
@@ -28,6 +38,7 @@ export const ConfigPage: FC<ConfigPageProps> = ({
 	icpSampleCities,
 	icpExcludeBrands,
 	agents,
+	secrets,
 }) => {
 	return (
 		<Layout title="Configuration" currentPath="/config">
@@ -673,6 +684,76 @@ export const ConfigPage: FC<ConfigPageProps> = ({
 					</button>
 				</div>
 			</form>
+
+			{secrets && secrets.length > 0 && (
+				<div class="card mb-md mt-md">
+					<h3>Secrets</h3>
+					<p class="text-sm text-muted mb-md">
+						API keys and tokens are never displayed here. Use <strong>Rotate</strong>{" "}
+						to replace the stored value; changes require a restart to take effect
+						in the running provider.
+					</p>
+					<table class="audit-table">
+						<thead>
+							<tr>
+								<th>Service</th>
+								<th>Status</th>
+								<th>Source</th>
+								<th style="text-align: right">Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							{secrets.map((s) => (
+								<tr>
+									<td>{s.label}</td>
+									<td>
+										<span class={`badge ${s.set ? "success" : "neutral"}`}>
+											{s.set ? "Set" : "Missing"}
+										</span>
+									</td>
+									<td class="text-sm text-muted">
+										{s.fromEnv ? "env var" : "credentials file"}
+									</td>
+									<td style="text-align: right">
+										<button
+											type="button"
+											class="btn-secondary btn-sm"
+											data-secret-id={s.id}
+											data-secret-label={s.label}
+											onclick="rotateSecret(this.dataset.secretId, this.dataset.secretLabel)"
+										>
+											Rotate
+										</button>
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			)}
+
+			{raw(`<script>
+async function rotateSecret(id, label) {
+  var value = await pawModal.prompt("Rotate " + label, "Paste the new secret value. It will be written to ~/.paw/credentials.json and never displayed again.", "");
+  if (!value) return;
+  try {
+    var res = await fetch("/api/credentials/" + encodeURIComponent(id), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: value })
+    });
+    if (!res.ok) {
+      var err = await res.json().catch(function() { return {}; });
+      pawModal.alert("Rotate failed", err.error || ("HTTP " + res.status));
+      return;
+    }
+    pawModal.alert("Rotated", label + " was updated. Restart the process for the running provider to pick up the new value.");
+    setTimeout(function() { window.location.reload(); }, 400);
+  } catch (e) {
+    pawModal.alert("Rotate failed", String(e));
+  }
+}
+</script>`)}
 		</Layout>
 	);
 };

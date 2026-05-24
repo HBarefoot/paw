@@ -18,6 +18,24 @@ interface DashboardProps {
 	provider: string;
 	plugins: string[];
 	uptime: number;
+	usage?: {
+		totalInputTokens: number;
+		totalOutputTokens: number;
+		estimatedCostUsd: number;
+		byProvider: Record<
+			string,
+			{ inputTokens: number; outputTokens: number; costUsd: number }
+		>;
+	} | null;
+	feedback?: {
+		thumbsUp: number;
+		thumbsDown: number;
+		corrections: number;
+	} | null;
+	totals?: {
+		sessions: number;
+		messages: number;
+	} | null;
 }
 
 export const DashboardPage: FC<DashboardProps> = ({
@@ -27,8 +45,19 @@ export const DashboardPage: FC<DashboardProps> = ({
 	provider,
 	plugins,
 	uptime,
+	usage,
+	feedback,
+	totals,
 }) => {
 	const uptimeStr = formatUptime(uptime);
+	const formatTokens = (n: number): string =>
+		n >= 1_000_000
+			? `${(n / 1_000_000).toFixed(2)}M`
+			: n >= 1_000
+				? `${(n / 1_000).toFixed(1)}k`
+				: String(n);
+	const formatUsd = (n: number): string =>
+		n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`;
 
 	return (
 		<Layout title="Dashboard" currentPath="/">
@@ -63,6 +92,64 @@ export const DashboardPage: FC<DashboardProps> = ({
 						</div>
 					)}
 				</div>
+
+				{usage && (
+					<div class="card">
+						<h3>Usage (7d)</h3>
+						<div class="stat-value">
+							{formatTokens(
+								usage.totalInputTokens + usage.totalOutputTokens,
+							)}
+						</div>
+						<div class="stat-label">Tokens total</div>
+						<p class="mt-sm text-secondary">
+							Estimated cost:{" "}
+							<strong>{formatUsd(usage.estimatedCostUsd)}</strong>
+						</p>
+						{Object.keys(usage.byProvider).length > 0 && (
+							<div class="mt-sm">
+								{Object.entries(usage.byProvider).map(([name, v]) => (
+									<p class="text-xs text-muted">
+										{name}: {formatTokens(v.inputTokens + v.outputTokens)}{" "}
+										tokens · {formatUsd(v.costUsd)}
+									</p>
+								))}
+							</div>
+						)}
+					</div>
+				)}
+
+				{feedback && (
+					<div class="card">
+						<h3>Feedback</h3>
+						<div class="flex gap-sm items-center">
+							<span class="badge success">
+								👍 {feedback.thumbsUp}
+							</span>
+							<span class="badge danger">
+								👎 {feedback.thumbsDown}
+							</span>
+							<span class="badge warning">
+								✎ {feedback.corrections} corrections
+							</span>
+						</div>
+						<p class="text-xs text-muted mt-sm">
+							Last 7 days — corrections feed the feedback context so future
+							responses avoid repeat mistakes.
+						</p>
+					</div>
+				)}
+
+				{totals && (
+					<div class="card">
+						<h3>Totals</h3>
+						<div class="stat-value">{totals.sessions}</div>
+						<div class="stat-label">Sessions</div>
+						<p class="mt-sm text-secondary">
+							Messages: <strong>{totals.messages}</strong>
+						</p>
+					</div>
+				)}
 
 				<div class="card">
 					<h3>Health</h3>

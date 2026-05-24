@@ -25,6 +25,7 @@ import { buildOtpauthUri } from "../security/totp.js";
 import { WebAuthManager } from "../security/web-auth.js";
 import {
 	deleteSession,
+	forkSessionAtMessage,
 	getSessionWithMessages,
 	listRecentSessions,
 	updateSessionTitle,
@@ -43,6 +44,28 @@ import { HeartbeatPage } from "./views/heartbeat-page.js";
 import { LoginPage } from "./views/login-page.js";
 import { MCPPage } from "./views/mcp-page.js";
 import { MemoryPage } from "./views/memory-page.js";
+import { SearchPage, type SearchHit } from "./views/search-page.js";
+import { searchMessages } from "../store/messages.js";
+import { AuditPage, type AuditRow } from "./views/audit-page.js";
+import { ToolsPage, type ToolLogRow } from "./views/tools-page.js";
+import { PromptsPage } from "./views/prompts-page.js";
+import {
+	createPrompt,
+	deletePrompt,
+	getPrompt,
+	listPrompts,
+	recordPromptUse,
+	updatePrompt,
+} from "../store/prompts.js";
+import {
+	loadCredentials as loadStoredCredentials,
+	saveCredentials,
+	type StoredCredentials,
+} from "../auth/credential-store.js";
+import {
+	exportSession,
+	type ExportFormat,
+} from "./exporters.js";
 import { SessionDetailPage, SessionsListPage } from "./views/sessions-page.js";
 import { SkillsPage } from "./views/skills-page.js";
 import { TotpSetupPage } from "./views/totp-setup-page.js";
@@ -58,6 +81,100 @@ const BLOCKED_CONFIG_FIELDS = new Set([
 	"slack.signingSecret",
 	"web.authToken",
 ]);
+
+type SecretStatusRow = {
+	id: string;
+	label: string;
+	set: boolean;
+	fromEnv?: boolean;
+};
+
+/**
+ * Build the read-only list of API-key / token statuses shown in the
+ * config page. Secrets are reported as Set/Missing and sourced-from so
+ * the UI can offer a Rotate action — raw values never leave the server.
+ */
+function computeSecretStatuses(): SecretStatusRow[] {
+	/** biome-ignore lint/correctness/noUnusedVariables: imported lazily */
+	const creds = loadStoredCredentials();
+	const rows: SecretStatusRow[] = [];
+	const envSet = (v: string | undefined): boolean =>
+		typeof v === "string" && v.length > 0;
+
+	rows.push({
+		id: "anthropic",
+		label: "Anthropic API key",
+		set:
+			(creds.anthropic?.method === "api_key" &&
+				!!creds.anthropic.apiKey) ||
+			envSet(process.env.ANTHROPIC_API_KEY),
+		fromEnv:
+			!creds.anthropic?.apiKey && envSet(process.env.ANTHROPIC_API_KEY),
+	});
+	rows.push({
+		id: "openai",
+		label: "OpenAI API key",
+		set: !!creds.openai?.apiKey || envSet(process.env.OPENAI_API_KEY),
+		fromEnv: !creds.openai?.apiKey && envSet(process.env.OPENAI_API_KEY),
+	});
+	rows.push({
+		id: "gemini",
+		label: "Gemini API key",
+		set: !!creds.gemini?.apiKey || envSet(process.env.GEMINI_API_KEY),
+		fromEnv: !creds.gemini?.apiKey && envSet(process.env.GEMINI_API_KEY),
+	});
+	rows.push({
+		id: "ollama",
+		label: "Ollama API key",
+		set:
+			!!creds.ollama?.apiKey || envSet(process.env.PAW_OLLAMA_API_KEY),
+		fromEnv:
+			!creds.ollama?.apiKey && envSet(process.env.PAW_OLLAMA_API_KEY),
+	});
+	rows.push({
+		id: "slack.bot",
+		label: "Slack bot token",
+		set: !!creds.slack?.botToken || envSet(process.env.SLACK_BOT_TOKEN),
+		fromEnv:
+			!creds.slack?.botToken && envSet(process.env.SLACK_BOT_TOKEN),
+	});
+	rows.push({
+		id: "slack.app",
+		label: "Slack app token",
+		set: !!creds.slack?.appToken || envSet(process.env.SLACK_APP_TOKEN),
+		fromEnv:
+			!creds.slack?.appToken && envSet(process.env.SLACK_APP_TOKEN),
+	});
+	rows.push({
+		id: "slack.signing",
+		label: "Slack signing secret",
+		set:
+			!!creds.slack?.signingSecret ||
+			envSet(process.env.SLACK_SIGNING_SECRET),
+		fromEnv:
+			!creds.slack?.signingSecret &&
+			envSet(process.env.SLACK_SIGNING_SECRET),
+	});
+	return rows;
+}
+
+function readTotals(
+	db: import("bun:sqlite").Database,
+): { sessions: number; messages: number } {
+	try {
+		const sessions =
+			db
+				.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sessions")
+				.get()?.n ?? 0;
+		const messages =
+			db
+				.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM messages")
+				.get()?.n ?? 0;
+		return { sessions, messages };
+	} catch {
+		return { sessions: 0, messages: 0 };
+	}
+}
 
 export function createWebApp(
 	kernel: Kernel,
@@ -308,6 +425,19 @@ export function createWebApp(
 			return c.html(LoginPage({ error: "Username and password are required" }));
 		}
 
+		// Destroy any existing session tied to the incoming cookie before
+		// authenticating. This prevents session-fixation: an attacker who
+		// pre-set the victim's cookie to a known value can no longer have
+		// it promoted to an authenticated session.
+		const existingToken = getCookie(c, "paw_session");
+		if (existingToken) {
+			try {
+				authManager.logout(existingToken);
+			} catch {
+				// Best-effort cleanup; do not block login on this.
+			}
+		}
+
 		const result = await authManager.login(username, password, totpCode, ip);
 
 		if (result.requireTotp) {
@@ -484,6 +614,14 @@ export function createWebApp(
 		const cronJobs = kernel.cron?.listJobs() ?? [];
 		const uptime = process.uptime() * 1000;
 
+		const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+			.toISOString()
+			.replace("T", " ")
+			.replace(/\.\d+Z$/, "");
+		const usage = kernel.costs?.getTotalCost({ since: sevenDaysAgo }) ?? null;
+		const feedbackStats = kernel.feedback?.getFeedbackStats() ?? null;
+		const totals = readTotals(kernel.database);
+
 		return c.html(
 			DashboardPage({
 				health,
@@ -492,8 +630,103 @@ export function createWebApp(
 				provider: config.provider,
 				plugins: kernel.pluginNames,
 				uptime,
+				usage,
+				feedback: feedbackStats,
+				totals,
 			}),
 		);
+	});
+
+	app.post("/api/credentials/:service", async (c) => {
+		const service = c.req.param("service");
+		const body = await c.req
+			.json<{ value?: string }>()
+			.catch(() => ({}) as { value?: string });
+		const value = (body.value ?? "").trim();
+		if (!value) return c.json({ error: "value is required" }, 400);
+		if (value.length < 8)
+			return c.json({ error: "value looks too short to be a secret" }, 400);
+
+		const creds = loadStoredCredentials();
+		const updated: StoredCredentials = { ...creds };
+
+		switch (service) {
+			case "anthropic":
+				updated.anthropic = {
+					...(updated.anthropic ?? { method: "api_key" }),
+					method: "api_key",
+					apiKey: value,
+				};
+				break;
+			case "openai":
+				updated.openai = { ...(updated.openai ?? {}), apiKey: value };
+				break;
+			case "gemini":
+				updated.gemini = { ...(updated.gemini ?? {}), apiKey: value };
+				break;
+			case "ollama":
+				updated.ollama = {
+					baseUrl: updated.ollama?.baseUrl ?? "http://localhost:11434",
+					model: updated.ollama?.model ?? "llama3.1",
+					...updated.ollama,
+					apiKey: value,
+				};
+				break;
+			case "slack.bot":
+				updated.slack = {
+					botToken: value,
+					appToken: updated.slack?.appToken ?? "",
+					signingSecret: updated.slack?.signingSecret ?? "",
+				};
+				break;
+			case "slack.app":
+				updated.slack = {
+					botToken: updated.slack?.botToken ?? "",
+					appToken: value,
+					signingSecret: updated.slack?.signingSecret ?? "",
+				};
+				break;
+			case "slack.signing":
+				updated.slack = {
+					botToken: updated.slack?.botToken ?? "",
+					appToken: updated.slack?.appToken ?? "",
+					signingSecret: value,
+				};
+				break;
+			default:
+				return c.json({ error: "Unknown service" }, 400);
+		}
+
+		saveCredentials(updated);
+
+		const session = c.get("session") as { user_id: number } | undefined;
+		const ip = getClientIp(c);
+		authManager.audit.log(
+			"credentials.rotate",
+			session?.user_id ?? null,
+			{ service },
+			ip,
+		);
+
+		return c.json({ rotated: true, service, restartRequired: true });
+	});
+
+	app.get("/api/stats", (c) => {
+		const sinceParam = c.req.query("since");
+		const usage = kernel.costs?.getTotalCost({
+			since: sinceParam || undefined,
+		}) ?? null;
+		const feedback = kernel.feedback?.getFeedbackStats() ?? null;
+		const memoryStats = kernel.memory?.getStats() ?? null;
+		const totals = readTotals(kernel.database);
+		return c.json({
+			provider: config.provider,
+			uptimeMs: Math.floor(process.uptime() * 1000),
+			memory: memoryStats,
+			usage,
+			feedback,
+			totals,
+		});
 	});
 
 	function liveConfig(): PawConfig {
@@ -558,6 +791,7 @@ export function createWebApp(
 				config: liveConfig(),
 				...getIcpConfig(),
 				agents: getAgentEntries(),
+				secrets: computeSecretStatuses(),
 			}),
 		);
 	});
@@ -1589,6 +1823,9 @@ export function createWebApp(
 			category: string;
 			source: string | null;
 			created_at: string;
+			confidence?: number;
+			access_count?: number;
+			last_accessed_at?: string | null;
 		}> = [];
 
 		if (kernel.memory) {
@@ -1604,6 +1841,8 @@ export function createWebApp(
 					category: r.metadata.category,
 					source: r.metadata.source ?? null,
 					created_at: r.created_at,
+					confidence: r.confidence,
+					access_count: r.access_count,
 				}));
 				// Filter by category client-side if search was used
 				if (category) {
@@ -1618,6 +1857,171 @@ export function createWebApp(
 		}
 
 		return c.html(MemoryPage({ memories, stats, query: q, category }));
+	});
+
+	// --- Search Page ---
+
+	app.get("/search", (c) => {
+		const q = c.req.query("q") ?? "";
+		const hits: SearchHit[] = q
+			? searchMessages(kernel.database, q, {
+					userId: "web-user",
+					limit: 50,
+				}).map((h) => ({
+					id: h.id,
+					session_id: h.session_id,
+					role: h.role,
+					snippet: h.snippet,
+					created_at: h.created_at,
+					session_title: h.session_title,
+					session_channel: h.session_channel,
+				}))
+			: [];
+		return c.html(SearchPage({ query: q, hits }));
+	});
+
+	app.get("/audit", (c) => {
+		const actionFilter = c.req.query("action") ?? undefined;
+		const userRaw = c.req.query("user");
+		const userFilter = userRaw && /^\d+$/.test(userRaw) ? userRaw : undefined;
+		const rows: AuditRow[] = authManager.audit.query({
+			limit: 200,
+			action: actionFilter,
+			userId: userFilter ? Number.parseInt(userFilter, 10) : undefined,
+		});
+		const actions = authManager.audit.distinctActions(100);
+		return c.html(
+			AuditPage({ rows, actions, actionFilter, userFilter }),
+		);
+	});
+
+	app.get("/prompts", (c) => {
+		const prompts = listPrompts(kernel.database, 200);
+		return c.html(PromptsPage({ prompts }));
+	});
+
+	app.get("/api/prompts", (c) => {
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "200", 10);
+		const prompts = listPrompts(
+			kernel.database,
+			Number.isFinite(limitRaw) ? limitRaw : 200,
+		);
+		return c.json({ prompts });
+	});
+
+	app.post("/api/prompts", async (c) => {
+		const body = await c.req
+			.json<{ title?: string; body?: string; tags?: string }>()
+			.catch(() => ({}) as { title?: string; body?: string; tags?: string });
+		try {
+			const prompt = createPrompt(kernel.database, {
+				title: body.title ?? "",
+				body: body.body ?? "",
+				tags: body.tags,
+			});
+			return c.json({ prompt });
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return c.json({ error: msg }, 400);
+		}
+	});
+
+	app.put("/api/prompts/:id", async (c) => {
+		const id = c.req.param("id");
+		const body = await c.req
+			.json<{ title?: string; body?: string; tags?: string | null }>()
+			.catch(
+				() =>
+					({}) as {
+						title?: string;
+						body?: string;
+						tags?: string | null;
+					},
+			);
+		const prompt = updatePrompt(kernel.database, id, body);
+		if (!prompt) return c.json({ error: "Prompt not found" }, 404);
+		return c.json({ prompt });
+	});
+
+	app.delete("/api/prompts/:id", (c) => {
+		const id = c.req.param("id");
+		const ok = deletePrompt(kernel.database, id);
+		if (!ok) return c.json({ error: "Prompt not found" }, 404);
+		return c.json({ deleted: true });
+	});
+
+	app.post("/api/prompts/:id/use", (c) => {
+		const id = c.req.param("id");
+		const prompt = getPrompt(kernel.database, id);
+		if (!prompt) return c.json({ error: "Prompt not found" }, 404);
+		recordPromptUse(kernel.database, id);
+		return c.json({ prompt });
+	});
+
+	app.get("/tools", (c) => {
+		const toolLog = kernel.tools;
+		if (!toolLog) {
+			return c.text("Tool log disabled", 400);
+		}
+		const toolFilter = c.req.query("tool") || undefined;
+		const errorsOnly = c.req.query("errors") === "1";
+		const rows: ToolLogRow[] = toolLog.query({
+			limit: 200,
+			tool: toolFilter,
+			errorsOnly,
+		});
+		return c.html(
+			ToolsPage({
+				rows,
+				tools: toolLog.distinctTools(100),
+				summary: toolLog.summary(),
+				toolFilter,
+				errorsOnly,
+			}),
+		);
+	});
+
+	app.get("/api/tools/log", (c) => {
+		const toolLog = kernel.tools;
+		if (!toolLog) return c.json({ error: "Tool log disabled" }, 400);
+		const limit = Number.parseInt(c.req.query("limit") ?? "100", 10);
+		const rows = toolLog.query({
+			limit: Number.isFinite(limit) ? limit : 100,
+			tool: c.req.query("tool") || undefined,
+			sessionId: c.req.query("session") || undefined,
+			errorsOnly: c.req.query("errors") === "1",
+		});
+		return c.json({ count: rows.length, rows, summary: toolLog.summary() });
+	});
+
+	app.get("/api/audit", (c) => {
+		const limit = Number.parseInt(c.req.query("limit") ?? "100", 10);
+		const action = c.req.query("action") ?? undefined;
+		const userRaw = c.req.query("user");
+		const userId =
+			userRaw && /^\d+$/.test(userRaw)
+				? Number.parseInt(userRaw, 10)
+				: undefined;
+		const rows = authManager.audit.query({
+			limit: Number.isFinite(limit) ? limit : 100,
+			action,
+			userId,
+		});
+		return c.json({ count: rows.length, rows });
+	});
+
+	app.get("/api/search", (c) => {
+		const q = c.req.query("q") ?? "";
+		const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const sessionId = c.req.query("session") ?? undefined;
+		const hits = q
+			? searchMessages(kernel.database, q, {
+					userId: "web-user",
+					limit: Number.isFinite(limit) ? limit : 50,
+					sessionId,
+				})
+			: [];
+		return c.json({ query: q, count: hits.length, hits });
 	});
 
 	// --- Sessions Page ---
@@ -1740,6 +2144,19 @@ export function createWebApp(
 		return c.json({ memories: results });
 	});
 
+	app.get("/api/memory/:id", (c) => {
+		if (!kernel.memory) {
+			return c.json({ error: "Memory system disabled" }, 400);
+		}
+		const id = c.req.param("id");
+		if (!/^[A-Za-z0-9-]+$/.test(id)) {
+			return c.json({ error: "Invalid memory id" }, 400);
+		}
+		const mem = kernel.memory.getById(id);
+		if (!mem) return c.json({ error: "Not found" }, 404);
+		return c.json({ memory: mem });
+	});
+
 	app.delete("/api/memory/:id", (c) => {
 		if (!kernel.memory) {
 			return c.json({ error: "Memory system disabled" }, 400);
@@ -1790,6 +2207,68 @@ export function createWebApp(
 			return c.redirect("/memory?success=1");
 		}
 		return c.json({ id });
+	});
+
+	app.post("/api/memory/import", async (c) => {
+		if (!kernel.memory) {
+			return c.json({ error: "Memory system disabled" }, 400);
+		}
+		type ImportBody = {
+			text?: string;
+			source?: string;
+			scope?: string;
+			category?: "fact" | "summary";
+		};
+		const body = await c.req
+			.json<ImportBody>()
+			.catch(() => ({}) as ImportBody);
+		const text = String(body.text ?? "");
+		if (!text.trim()) return c.json({ error: "text is required" }, 400);
+
+		// Hard size limit to protect the embedding pipeline + DB.
+		const MAX_IMPORT_BYTES = 2 * 1024 * 1024; // 2 MiB
+		if (text.length > MAX_IMPORT_BYTES) {
+			return c.json(
+				{ error: `text exceeds ${MAX_IMPORT_BYTES} bytes` },
+				413,
+			);
+		}
+
+		const source = (body.source ?? "").trim() || "import";
+		const scope = body.scope || "global";
+		const category: "fact" | "summary" =
+			body.category === "summary" ? "summary" : "fact";
+
+		const { chunkText } = await import("../memory/chunker.js");
+		const { chunks, totalChars } = chunkText(text);
+		if (chunks.length === 0) {
+			return c.json({ error: "empty after normalization" }, 400);
+		}
+
+		let stored = 0;
+		for (const chunk of chunks) {
+			try {
+				await kernel.memory.store(chunk, { scope, category, source });
+				stored++;
+			} catch {
+				// swallow and continue so partial success still reports
+			}
+		}
+
+		const session = c.get("session") as { user_id: number } | undefined;
+		authManager.audit.log(
+			"memory.import",
+			session?.user_id ?? null,
+			{ source, stored, total: chunks.length, totalChars },
+			getClientIp(c),
+		);
+
+		return c.json({
+			stored,
+			total: chunks.length,
+			totalChars,
+			source,
+		});
 	});
 
 	app.get("/api/cron/jobs", (c) => {
@@ -2424,6 +2903,105 @@ export function createWebApp(
 		const data = getSessionWithMessages(kernel.database, id);
 		if (!data) return c.json({ error: "Session not found" }, 404);
 		return c.json({ session: data.session, messages: data.messages });
+	});
+
+	app.post("/api/sessions/:id/fork", async (c) => {
+		const id = c.req.param("id");
+		const body = await c.req
+			.json<{ messageId?: string }>()
+			.catch(() => ({}) as { messageId?: string });
+		const messageId = (body.messageId ?? "").trim();
+		if (!messageId) {
+			return c.json({ error: "messageId is required" }, 400);
+		}
+		const newId = `web-${Date.now()}-fork`;
+		const result = forkSessionAtMessage(kernel.database, id, messageId, {
+			newSessionId: newId,
+		});
+		if (!result) {
+			return c.json({ error: "Source session or message not found" }, 404);
+		}
+		return c.json(result);
+	});
+
+	app.get("/api/sessions/:id/export", (c) => {
+		const id = c.req.param("id");
+		const rawFormat = (c.req.query("format") ?? "md").toLowerCase();
+		const format: ExportFormat =
+			rawFormat === "html" || rawFormat === "json"
+				? (rawFormat as ExportFormat)
+				: "md";
+
+		const result = exportSession(kernel.database, id, format);
+		if (!result) return c.json({ error: "Session not found" }, 404);
+
+		return new Response(result.body, {
+			headers: {
+				"Content-Type": result.contentType,
+				"Content-Disposition": `attachment; filename="${result.filename}"`,
+				"X-Content-Type-Options": "nosniff",
+			},
+		});
+	});
+
+	// --- Feedback API ---
+
+	app.post("/api/feedback", async (c) => {
+		const feedbackStore = kernel.feedback;
+		if (!feedbackStore) {
+			return c.json({ error: "Feedback system not available" }, 400);
+		}
+		const body = await c.req.json<{
+			messageId: string;
+			sessionId: string;
+			rating: "up" | "down";
+			reason?: string;
+		}>();
+		if (!body.messageId || !body.sessionId || !body.rating) {
+			return c.json({ error: "messageId, sessionId, and rating required" }, 400);
+		}
+		const id = feedbackStore.recordRating(
+			body.messageId,
+			body.sessionId,
+			body.rating,
+			body.reason,
+		);
+		return c.json({ id, recorded: true });
+	});
+
+	app.post("/api/chat/cancel", async (c) => {
+		const body = await c.req.json<{ sessionId: string }>();
+		if (!body.sessionId) {
+			return c.json({ error: "sessionId required" }, 400);
+		}
+		const cancelled = kernel.cancelSession(body.sessionId);
+		return c.json({ cancelled });
+	});
+
+	app.get("/api/usage", (c) => {
+		const costTracker = kernel.costs;
+		if (!costTracker) {
+			return c.json({ error: "Cost tracking not available" }, 400);
+		}
+		const since = c.req.query("since") || undefined;
+		return c.json(costTracker.getTotalCost({ since }));
+	});
+
+	app.get("/api/usage/:sessionId", (c) => {
+		const costTracker = kernel.costs;
+		if (!costTracker) {
+			return c.json({ error: "Cost tracking not available" }, 400);
+		}
+		const sessionId = c.req.param("sessionId");
+		return c.json(costTracker.getSessionCost(sessionId));
+	});
+
+	app.get("/api/feedback/stats", (c) => {
+		const feedbackStore = kernel.feedback;
+		if (!feedbackStore) {
+			return c.json({ error: "Feedback system not available" }, 400);
+		}
+		return c.json(feedbackStore.getFeedbackStats());
 	});
 
 	// Expose authManager for kernel integration

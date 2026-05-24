@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import type { EventBus } from "../kernel/bus.js";
 import type { CronScheduler } from "../cron/scheduler.js";
 import type { MemoryStore } from "../memory/store.js";
+import { runMemoryDecay } from "../memory/decay.js";
+import type { Database } from "bun:sqlite";
 import type { Logger } from "../types/plugin.js";
 
 export interface HeartbeatCheck {
@@ -22,6 +24,8 @@ export interface HeartbeatConfig {
 	intervalMinutes: number;
 	triggerAiOnFailure: boolean;
 	workspacePath: string;
+	memoryDecayRate?: number;
+	memoryDecayThresholdDays?: number;
 }
 
 export class HeartbeatChecker {
@@ -34,6 +38,7 @@ export class HeartbeatChecker {
 	>;
 	private memoryStore: MemoryStore | null;
 	private dbPath: string;
+	private database: Database | null;
 	private _timer: ReturnType<typeof setInterval> | null = null;
 	private _lastResult: HeartbeatResult | null = null;
 
@@ -47,6 +52,7 @@ export class HeartbeatChecker {
 		>;
 		memoryStore: MemoryStore | null;
 		dbPath: string;
+		database?: Database | null;
 	}) {
 		this.bus = opts.bus;
 		this.cronScheduler = opts.cronScheduler;
@@ -55,6 +61,7 @@ export class HeartbeatChecker {
 		this.healthCheckFn = opts.healthCheckFn;
 		this.memoryStore = opts.memoryStore;
 		this.dbPath = opts.dbPath;
+		this.database = opts.database ?? null;
 	}
 
 	start(): void {
@@ -123,6 +130,21 @@ export class HeartbeatChecker {
 				});
 			} catch (err) {
 				checks.push({ name: "memory", ok: false, details: String(err) });
+			}
+		}
+
+		// 3b. Memory confidence decay
+		if (this.memoryStore && this.database) {
+			try {
+				const { decayed } = runMemoryDecay(this.database, {
+					decayRate: this.config.memoryDecayRate,
+					thresholdDays: this.config.memoryDecayThresholdDays,
+				});
+				if (decayed > 0) {
+					this.logger.info("Memory decay applied", { decayed });
+				}
+			} catch (err) {
+				this.logger.warn("Memory decay failed", { error: String(err) });
 			}
 		}
 

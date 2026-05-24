@@ -19,8 +19,18 @@ import { getDb, closeDb } from "../store/db.js";
 import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
 import { appendMessage, getSessionMessages } from "../store/messages.js";
 import { MemoryStore } from "../memory/store.js";
+import { preloadEmbedder } from "../memory/embeddings.js";
 import { createMemoryTools } from "../memory/tools.js";
-import { extractMemories } from "../memory/auto-extract.js";
+import {
+	extractMemories,
+	storeExtractedMemories,
+} from "../memory/auto-extract.js";
+import { FeedbackStore } from "../feedback/store.js";
+import { detectCorrection } from "../feedback/correction-detector.js";
+import { ProviderRouter } from "../ai/router.js";
+import { CostTracker } from "../ai/cost-tracker.js";
+import { ToolLog } from "../observability/tool-log.js";
+import { createProactiveTriggerTools } from "../cron/trigger-tools.js";
 import { CronScheduler } from "../cron/scheduler.js";
 import { HeartbeatChecker } from "../heartbeat/checker.js";
 import { AccessController } from "../security/access-control.js";
@@ -51,10 +61,16 @@ export class Kernel {
 	private sandbox: Sandbox;
 	private toolRegistry: ToolRegistry;
 	private provider: AIProvider;
+	private allProviders: Map<string, AIProvider> = new Map();
+	private providerRouter: ProviderRouter | null = null;
+	private costTracker: CostTracker | null = null;
+	private toolLog: ToolLog | null = null;
+	private activeAbortControllers: Map<string, AbortController> = new Map();
 	private plugins: ChannelPlugin[] = [];
 	private config: PawConfig;
 	private db: Database;
 	private memoryStore: MemoryStore | null = null;
+	private feedbackStore: FeedbackStore | null = null;
 	private cronScheduler: CronScheduler | null = null;
 	private heartbeatChecker: HeartbeatChecker | null = null;
 	private accessController: AccessController | null = null;
@@ -143,6 +159,32 @@ export class Kernel {
 			);
 		}
 
+		// Store the primary provider in the provider map
+		this.allProviders.set(config.provider, this.provider);
+
+		// Initialize all other configured providers for routing
+		if (config.routing?.enabled) {
+			this.initSecondaryProviders(config, aiLogger);
+			this.providerRouter = new ProviderRouter({
+				providers: this.allProviders,
+				rules: config.routing.rules,
+				defaultProvider: this.provider,
+				logger: createLogger("router"),
+			});
+			this.logger.info("Provider router initialized", {
+				providers: [...this.allProviders.keys()],
+				rules: config.routing.rules.length,
+			});
+		}
+
+		// Initialize cost tracker
+		this.costTracker = new CostTracker(this.db);
+
+		// Initialize tool-execution log. Captures every tool call (inputs,
+		// outputs, duration, errors) for observability and audit.
+		this.toolLog = new ToolLog(this.db);
+		this.toolRegistry.setToolLog(this.toolLog);
+
 		// Initialize memory system
 		if (config.memory.enabled) {
 			this.memoryStore = new MemoryStore(this.db, {
@@ -151,7 +193,14 @@ export class Kernel {
 				embeddingModel: config.memory.embeddingModel,
 			});
 			this.toolRegistry.register(createMemoryTools(this.memoryStore));
+			this.feedbackStore = new FeedbackStore(this.db, this.memoryStore);
 			this.logger.info("Memory system initialized");
+
+			// Warm up the embedding pipeline in the background so the first
+			// user message doesn't pay model download + init latency.
+			void preloadEmbedder(config.memory.embeddingModel).catch((err) => {
+				this.logger.warn("Embedding preload failed", { error: String(err) });
+			});
 		}
 
 		// Register file/exec tools
@@ -211,6 +260,12 @@ export class Kernel {
 					timestamp: new Date().toISOString(),
 				});
 			});
+			this.cronScheduler.setAIProvider(this.provider);
+			this.cronScheduler.setWorkspacePath(config.heartbeat.workspacePath);
+			this.toolRegistry.register(
+				createProactiveTriggerTools(this.cronScheduler),
+			);
+
 			this.logger.info("Cron scheduler initialized");
 		}
 
@@ -377,10 +432,15 @@ export class Kernel {
 				bus: this.bus,
 				cronScheduler: this.cronScheduler,
 				logger: createLogger("heartbeat"),
-				config: this.config.heartbeat,
+				config: {
+					...this.config.heartbeat,
+					memoryDecayRate: this.config.memory.decayRate,
+					memoryDecayThresholdDays: this.config.memory.decayThresholdDays,
+				},
 				healthCheckFn: () => this.healthCheck(),
 				memoryStore: this.memoryStore,
 				dbPath: this.config.store.dbPath,
+				database: this.db,
 			});
 			this.heartbeatChecker.start();
 		}
@@ -498,7 +558,10 @@ export class Kernel {
 				});
 				if (memories.length > 0) {
 					memoryContext = memories
-						.map((m) => `- [${m.metadata.category}] ${m.text}`)
+						.map(
+							(m) =>
+								`- id=${m.id} [${m.metadata.category}] ${m.text}`,
+						)
 						.join("\n");
 				}
 			} catch (err) {
@@ -518,9 +581,10 @@ export class Kernel {
 		});
 
 		const messages: ChatMessage[] = [{ role: "user", content: task }];
+		const agentProvider = this.getProviderForAgent(agent);
 
 		try {
-			const response = await this.provider.chat(
+			const response = await agentProvider.chat(
 				messages,
 				systemPrompt,
 				agentSessionId,
@@ -643,7 +707,10 @@ export class Kernel {
 				});
 				if (memories.length > 0) {
 					memoryContext = memories
-						.map((m) => `- [${m.metadata.category}] ${m.text}`)
+						.map(
+							(m) =>
+								`- id=${m.id} [${m.metadata.category}] ${m.text}`,
+						)
 						.join("\n");
 				}
 			} catch (err) {
@@ -663,12 +730,13 @@ export class Kernel {
 		});
 
 		const messages: ChatMessage[] = [{ role: "user", content: task }];
+		const agentProvider = this.getProviderForAgent(agent);
 
 		try {
 			let fullText = "";
 
-			if (this.provider.chatStream) {
-				for await (const chunk of this.provider.chatStream(
+			if (agentProvider.chatStream) {
+				for await (const chunk of agentProvider.chatStream(
 					messages,
 					systemPrompt,
 					agentSessionId,
@@ -725,7 +793,7 @@ export class Kernel {
 				}
 			} else {
 				// Provider doesn't support streaming — fall back to non-streaming
-				const response = await this.provider.chat(
+				const response = await agentProvider.chat(
 					messages,
 					systemPrompt,
 					agentSessionId,
@@ -882,12 +950,21 @@ export class Kernel {
 		let memoryContext: string | undefined;
 		if (this.memoryStore && msg.channel !== "canvas") {
 			try {
+				// Pre-compute the query embedding once and share it across the
+				// two scoped recalls to halve the embedding CPU cost.
+				const sharedEmbedding =
+					(await this.memoryStore.embed(msg.content)) ?? undefined;
 				const [userMemories, globalMemories] = await Promise.all([
 					this.memoryStore.recall(msg.content, {
 						limit: 3,
 						scope: msg.user.id,
+						embedding: sharedEmbedding,
 					}),
-					this.memoryStore.recall(msg.content, { limit: 3, scope: "global" }),
+					this.memoryStore.recall(msg.content, {
+						limit: 3,
+						scope: "global",
+						embedding: sharedEmbedding,
+					}),
 				]);
 
 				const allMemories = [...userMemories, ...globalMemories];
@@ -900,7 +977,10 @@ export class Kernel {
 
 				if (unique.length > 0) {
 					memoryContext = unique
-						.map((m) => `- [${m.metadata.category}] ${m.text}`)
+						.map(
+							(m) =>
+								`- id=${m.id} [${m.metadata.category}] ${m.text}`,
+						)
 						.join("\n");
 					await this.bus.emit("memory:recalled", {
 						query: msg.content,
@@ -912,6 +992,36 @@ export class Kernel {
 				}
 			} catch (err) {
 				this.logger.warn("Memory recall failed", { error: String(err) });
+			}
+		}
+
+		// Detect implicit corrections
+		if (this.feedbackStore && messages.length >= 2) {
+			const correction = detectCorrection(messages);
+			if (correction) {
+				const assistantMessages = history.filter(
+					(m) => m.role === "assistant",
+				);
+				const lastAssistant =
+					assistantMessages[assistantMessages.length - 1];
+				if (lastAssistant) {
+					this.feedbackStore.recordCorrection(
+						msg.sessionId,
+						lastAssistant.id,
+						correction.correctionText,
+					);
+				}
+			}
+		}
+
+		let feedbackContext: string | undefined;
+		if (this.feedbackStore) {
+			try {
+				feedbackContext =
+					this.feedbackStore.getRecentNegativeFeedback(msg.user.id, 5) ??
+					undefined;
+			} catch {
+				// Non-critical
 			}
 		}
 
@@ -935,6 +1045,7 @@ export class Kernel {
 			agentName,
 			customPrompt: agentPrompt || undefined,
 			memoryContext,
+			feedbackContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
 		});
 
@@ -1086,12 +1197,19 @@ export class Kernel {
 		let memoryContext: string | undefined;
 		if (this.memoryStore && msg.channel !== "canvas") {
 			try {
+				const sharedEmbedding =
+					(await this.memoryStore.embed(msg.content)) ?? undefined;
 				const [userMemories, globalMemories] = await Promise.all([
 					this.memoryStore.recall(msg.content, {
 						limit: 3,
 						scope: msg.user.id,
+						embedding: sharedEmbedding,
 					}),
-					this.memoryStore.recall(msg.content, { limit: 3, scope: "global" }),
+					this.memoryStore.recall(msg.content, {
+						limit: 3,
+						scope: "global",
+						embedding: sharedEmbedding,
+					}),
 				]);
 
 				const allMemories = [...userMemories, ...globalMemories];
@@ -1104,7 +1222,10 @@ export class Kernel {
 
 				if (unique.length > 0) {
 					memoryContext = unique
-						.map((m) => `- [${m.metadata.category}] ${m.text}`)
+						.map(
+							(m) =>
+								`- id=${m.id} [${m.metadata.category}] ${m.text}`,
+						)
 						.join("\n");
 					await this.bus.emit("memory:recalled", {
 						query: msg.content,
@@ -1113,6 +1234,40 @@ export class Kernel {
 				}
 			} catch (err) {
 				this.logger.warn("Memory recall failed", { error: String(err) });
+			}
+		}
+
+		// Detect implicit corrections and record them
+		if (this.feedbackStore && messages.length >= 2) {
+			const correction = detectCorrection(messages);
+			if (correction) {
+				const assistantMessages = history.filter(
+					(m) => m.role === "assistant",
+				);
+				const lastAssistant =
+					assistantMessages[assistantMessages.length - 1];
+				if (lastAssistant) {
+					this.feedbackStore.recordCorrection(
+						msg.sessionId,
+						lastAssistant.id,
+						correction.correctionText,
+					);
+					this.logger.info("Implicit correction detected", {
+						sessionId: msg.sessionId,
+					});
+				}
+			}
+		}
+
+		// Get recent negative feedback for system prompt
+		let feedbackContext: string | undefined;
+		if (this.feedbackStore) {
+			try {
+				feedbackContext =
+					this.feedbackStore.getRecentNegativeFeedback(msg.user.id, 5) ??
+					undefined;
+			} catch {
+				// Non-critical
 			}
 		}
 
@@ -1135,6 +1290,7 @@ export class Kernel {
 			agentName,
 			customPrompt: agentPrompt || undefined,
 			memoryContext,
+			feedbackContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
 		});
 
@@ -1161,6 +1317,20 @@ export class Kernel {
 
 		const { messages, systemPrompt } = prepared;
 		let fullText = "";
+		let cancelled = false;
+
+		// Register an abort controller so the /api/chat/cancel endpoint can
+		// signal this stream. One per session; a new message replaces the
+		// previous controller.
+		const controller = new AbortController();
+		const prev = this.activeAbortControllers.get(msg.sessionId);
+		if (prev) prev.abort();
+		this.activeAbortControllers.set(msg.sessionId, controller);
+
+		let inputTokensTotal = 0;
+		let outputTokensTotal = 0;
+		let lastProvider: string | undefined;
+		let lastModel: string | undefined;
 
 		try {
 			if (this.provider.chatStream) {
@@ -1169,9 +1339,33 @@ export class Kernel {
 					systemPrompt,
 					msg.sessionId,
 				)) {
+					if (controller.signal.aborted) {
+						cancelled = true;
+						break;
+					}
 					if (chunk.type === "text_delta" && chunk.text) {
 						fullText += chunk.text;
 					}
+					if (chunk.type === "usage" && chunk.usage) {
+						inputTokensTotal += chunk.usage.inputTokens ?? 0;
+						outputTokensTotal += chunk.usage.outputTokens ?? 0;
+						lastProvider = chunk.usage.provider ?? lastProvider;
+						lastModel = chunk.usage.model ?? lastModel;
+						const estimatedCostUsd = lastModel
+							? CostTracker.estimateCost(
+									lastModel,
+									chunk.usage.inputTokens ?? 0,
+									chunk.usage.outputTokens ?? 0,
+								)
+							: undefined;
+						yield {
+							...chunk,
+							usage: { ...chunk.usage, estimatedCostUsd },
+						};
+						continue;
+					}
+					// Skip provider's done — kernel emits its own with messageId
+					if (chunk.type === "done") continue;
 					yield chunk;
 				}
 			} else {
@@ -1183,11 +1377,58 @@ export class Kernel {
 				);
 				fullText = response.text;
 				yield { type: "text_delta", text: response.text };
+				if (response.usage) {
+					inputTokensTotal += response.usage.inputTokens;
+					outputTokensTotal += response.usage.outputTokens;
+				}
+			}
+
+			if (cancelled) {
+				this.logger.info("Stream cancelled by user", {
+					sessionId: msg.sessionId,
+				});
+				yield { type: "error", error: "Generation stopped by user" };
 				yield { type: "done" };
+				return;
 			}
 
 			const replyText = fullText || "";
-			appendMessage(this.db, msg.sessionId, "assistant", replyText);
+			const storedMsg = appendMessage(
+				this.db,
+				msg.sessionId,
+				"assistant",
+				replyText,
+			);
+
+			// Persist usage for the session if anything was recorded.
+			if (
+				this.costTracker &&
+				(inputTokensTotal > 0 || outputTokensTotal > 0)
+			) {
+				try {
+					const resolvedProvider =
+						lastProvider ?? this.provider.name ?? this.config.provider;
+					const resolvedModel = lastModel ?? this.config.ai.model;
+					const estimatedCostUsd = CostTracker.estimateCost(
+						resolvedModel,
+						inputTokensTotal,
+						outputTokensTotal,
+					);
+					this.costTracker.recordUsage({
+						sessionId: msg.sessionId,
+						provider: resolvedProvider,
+						model: resolvedModel,
+						inputTokens: inputTokensTotal,
+						outputTokens: outputTokensTotal,
+						estimatedCostUsd,
+					});
+				} catch (err) {
+					this.logger.warn("Cost tracking failed", { error: String(err) });
+				}
+			}
+
+			// Yield the message ID so the frontend can attach feedback
+			yield { type: "done", messageId: storedMsg.id };
 
 			if (
 				this.memoryStore &&
@@ -1202,6 +1443,12 @@ export class Kernel {
 			this.logger.error("Stream error", { error: String(err) });
 			yield { type: "error", error: String(err) };
 			yield { type: "done" };
+		} finally {
+			// Only clear if we still own the entry; a subsequent message may
+			// have replaced it.
+			if (this.activeAbortControllers.get(msg.sessionId) === controller) {
+				this.activeAbortControllers.delete(msg.sessionId);
+			}
 		}
 	}
 
@@ -1217,16 +1464,22 @@ export class Kernel {
 		];
 
 		const extracted = await extractMemories(this.provider, recentMessages);
-		for (const text of extracted) {
-			const id = await this.memoryStore.store(text, {
-				scope: msg.user.id,
-				category: "fact",
-				source: `session:${msg.sessionId}`,
-			});
-			await this.bus.emit("memory:stored", { id, text, category: "fact" });
-		}
-
 		if (extracted.length > 0) {
+			const storedIds = await storeExtractedMemories(
+				this.memoryStore,
+				extracted,
+				{
+					scope: msg.user.id,
+					source: `session:${msg.sessionId}`,
+				},
+			);
+			for (let i = 0; i < storedIds.length; i++) {
+				await this.bus.emit("memory:stored", {
+					id: storedIds[i],
+					text: extracted[i],
+					category: "fact",
+				});
+			}
 			this.logger.info("Auto-extracted memories", {
 				count: extracted.length,
 				sessionId: msg.sessionId,
@@ -1301,6 +1554,102 @@ export class Kernel {
 				return response.text;
 			},
 		};
+	}
+
+	private initSecondaryProviders(
+		config: PawConfig,
+		logger: ReturnType<typeof createLogger>,
+	): void {
+		const maxRoundtrips = config.ai.maxToolRoundtrips;
+		const providerConfigs: Array<{
+			name: string;
+			factory: () => AIProvider;
+			hasKey: boolean;
+		}> = [
+			{
+				name: "claude",
+				factory: () =>
+					new ClaudeProvider(
+						config.ai,
+						this.toolRegistry,
+						logger,
+						this.skillManager,
+					),
+				hasKey: !!config.ai.apiKey,
+			},
+			{
+				name: "ollama",
+				factory: () =>
+					new OllamaProvider(
+						{ ...config.ollama, maxToolRoundtrips: maxRoundtrips },
+						this.toolRegistry,
+						logger,
+						this.skillManager,
+					),
+				hasKey: true, // Ollama doesn't always need a key
+			},
+			{
+				name: "openai",
+				factory: () =>
+					new OpenAIProvider(
+						{ ...config.openai, maxToolRoundtrips: maxRoundtrips },
+						this.toolRegistry,
+						logger,
+						this.skillManager,
+					),
+				hasKey: !!config.openai.apiKey,
+			},
+			{
+				name: "gemini",
+				factory: () =>
+					new GeminiProvider(
+						{ ...config.gemini, maxToolRoundtrips: maxRoundtrips },
+						this.toolRegistry,
+						logger,
+						this.skillManager,
+					),
+				hasKey: !!config.gemini.apiKey,
+			},
+		];
+
+		for (const pc of providerConfigs) {
+			if (!this.allProviders.has(pc.name) && pc.hasKey) {
+				try {
+					this.allProviders.set(pc.name, pc.factory());
+				} catch (err) {
+					this.logger.warn("Failed to init secondary provider", {
+						provider: pc.name,
+						error: String(err),
+					});
+				}
+			}
+		}
+	}
+
+	/**
+	 * Get the appropriate provider for an agent, respecting
+	 * the agent's provider override and routing rules.
+	 */
+	private getProviderForAgent(agent: AgentDefinition): AIProvider {
+		// Explicit provider override on the agent definition takes priority
+		if (agent.provider) {
+			const specific = this.allProviders.get(agent.provider);
+			if (specific) return specific;
+			this.logger.warn("Agent requested provider not available, using default", {
+				agent: agent.name,
+				requestedProvider: agent.provider,
+			});
+		}
+
+		// Use router if available
+		if (this.providerRouter) {
+			return this.providerRouter.selectProvider({
+				agentName: agent.name,
+				isSubAgent: true,
+			});
+		}
+
+		return this.provider;
 	}
 
 	async shutdown(): Promise<void> {
@@ -1385,6 +1734,29 @@ export class Kernel {
 		return this.memoryStore;
 	}
 
+	get feedback(): FeedbackStore | null {
+		return this.feedbackStore;
+	}
+
+	get costs(): CostTracker | null {
+		return this.costTracker;
+	}
+
+	get tools(): ToolLog | null {
+		return this.toolLog;
+	}
+
+	cancelSession(sessionId: string): boolean {
+		const controller = this.activeAbortControllers.get(sessionId);
+		if (controller) {
+			controller.abort();
+			this.activeAbortControllers.delete(sessionId);
+			this.logger.info("Session cancelled", { sessionId });
+			return true;
+		}
+		return false;
+	}
+
 	get database(): Database {
 		return this.db;
 	}
@@ -1425,6 +1797,25 @@ export class Kernel {
 				}
 			}
 		}
-		this.toolRegistry.register(tools);
+
+		// Drop any tool whose name already exists. MCP-sourced tools can't be
+		// allowed to shadow built-ins; built-ins register first, so the first
+		// writer wins. We also dedupe among the new batch itself.
+		const accepted: ToolDefinition[] = [];
+		const batchSeen = new Set<string>();
+		for (const tool of tools) {
+			if (this.toolRegistry.has(tool.name) || batchSeen.has(tool.name)) {
+				this.logger.warn("Tool name collision — skipping", {
+					tool: tool.name,
+					plugin: tool.plugin,
+				});
+				continue;
+			}
+			batchSeen.add(tool.name);
+			accepted.push(tool);
+		}
+		if (accepted.length > 0) {
+			this.toolRegistry.register(accepted);
+		}
 	}
 }

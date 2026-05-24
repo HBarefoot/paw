@@ -37,6 +37,7 @@ export interface StoredCredentials {
 	ollama?: {
 		baseUrl: string;
 		model: string;
+		apiKey?: string;
 	};
 	openai?: {
 		apiKey: string;
@@ -241,14 +242,20 @@ export function getGeminiCredentials():
 }
 
 export function getOllamaConfig():
-	| { baseUrl: string; model: string }
+	| { baseUrl: string; model: string; apiKey?: string }
 	| undefined {
 	const creds = loadCredentials();
-	if (creds.ollama?.baseUrl) return creds.ollama;
+	if (creds.ollama?.baseUrl) {
+		return {
+			...creds.ollama,
+			apiKey: creds.ollama.apiKey ?? process.env.PAW_OLLAMA_API_KEY,
+		};
+	}
 	if (process.env.PAW_OLLAMA_BASE_URL) {
 		return {
 			baseUrl: process.env.PAW_OLLAMA_BASE_URL,
 			model: process.env.PAW_OLLAMA_MODEL ?? "llama3.1",
+			apiKey: process.env.PAW_OLLAMA_API_KEY,
 		};
 	}
 	return undefined;

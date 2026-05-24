@@ -13,17 +13,33 @@ export interface MemoryResult {
 	score: number;
 	metadata: MemoryMetadata;
 	created_at: string;
+	confidence: number;
+	access_count: number;
 }
 
 export interface RecallOptions {
 	limit?: number;
 	scope?: string;
 	minScore?: number;
+	/**
+	 * Pre-computed query embedding. If provided, recall skips the embedding
+	 * step — callers can share a single embedding across multiple recalls
+	 * for the same query (e.g. user-scope + global-scope within one turn).
+	 */
+	embedding?: Float32Array;
 }
 
 export interface MemoryStats {
 	totalMemories: number;
 	byCategory: Record<string, number>;
+}
+
+export interface MemoryLink {
+	id: string;
+	sourceId: string;
+	targetId: string;
+	linkType: "related" | "contradicts" | "supersedes" | "refines";
+	createdAt: string;
 }
 
 export class MemoryStore {
@@ -55,7 +71,11 @@ export class MemoryStore {
 		}
 	}
 
-	async store(text: string, metadata: MemoryMetadata): Promise<string> {
+	async store(
+		text: string,
+		metadata: MemoryMetadata,
+		opts?: { supersedes?: string },
+	): Promise<string> {
 		const id = crypto.randomUUID();
 		this.db.run(
 			"INSERT INTO memories (id, text, scope, category, source) VALUES (?, ?, ?, ?, ?)",
@@ -80,7 +100,30 @@ export class MemoryStore {
 			}
 		}
 
+		// If this memory supersedes an older one, create a link and lower confidence
+		if (opts?.supersedes) {
+			this.linkMemories(id, opts.supersedes, "supersedes");
+			this.db.run(
+				"UPDATE memories SET superseded_by = ?, confidence = confidence * 0.3 WHERE id = ?",
+				[id, opts.supersedes],
+			);
+		}
+
 		return id;
+	}
+
+	/**
+	 * Compute the query embedding without running a full recall. Useful for
+	 * callers that want to issue multiple scoped recalls for the same query
+	 * while only paying the embedding cost once.
+	 */
+	async embed(query: string): Promise<Float32Array | null> {
+		if (!this.vecAvailable) return null;
+		try {
+			return await getEmbedding(query, this.embeddingModel);
+		} catch {
+			return null;
+		}
 	}
 
 	async recall(query: string, opts?: RecallOptions): Promise<MemoryResult[]> {
@@ -91,7 +134,9 @@ export class MemoryStore {
 		const vecScores = new Map<string, number>();
 		if (this.vecAvailable) {
 			try {
-				const embedding = await getEmbedding(query, this.embeddingModel);
+				const embedding =
+					opts?.embedding ??
+					(await getEmbedding(query, this.embeddingModel));
 				const vecResults = this.db
 					.prepare<
 						{ memory_id: string; distance: number },
@@ -114,22 +159,30 @@ export class MemoryStore {
 			}
 		}
 
-		// 2. FTS5 keyword search
-		const ftsResults = this.db
-			.prepare<{ rowid: number; rank: number }, [string, number]>(
-				`SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`,
-			)
-			.all(
-				query
-					.replace(/[^\w\s]/g, " ")
-					.replace(/\s+/g, " ")
-					.trim()
-					.split(/\s+/)
-					.filter(Boolean)
-					.map((t) => `"${t}"`)
-					.join(" "),
-				limit * 2,
-			);
+		// 2. FTS5 keyword search — skipped when vector search already found
+		// enough strong matches. Leaves FTS as a fallback path for cases
+		// where sqlite-vec isn't available or the query doesn't embed well.
+		const strongVecHits = [...vecScores.values()].filter(
+			(s) => s >= 0.6,
+		).length;
+		const skipFts = strongVecHits >= limit;
+
+		const ftsTerms = query
+			.replace(/[^\w\s]/g, " ")
+			.replace(/\s+/g, " ")
+			.trim()
+			.split(/\s+/)
+			.filter(Boolean)
+			.map((t) => `"${t}"`)
+			.join(" ");
+
+		const ftsResults = skipFts || !ftsTerms
+			? []
+			: this.db
+					.prepare<{ rowid: number; rank: number }, [string, number]>(
+						`SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`,
+					)
+					.all(ftsTerms, limit * 2);
 
 		// Map FTS rowids to memory IDs (batch query instead of N individual lookups)
 		const ftsScores = new Map<string, number>();
@@ -170,7 +223,7 @@ export class MemoryStore {
 
 		if (topIds.length === 0) return [];
 
-		// 4. Fetch full memory records (batch query instead of N individual lookups)
+		// 4. Fetch full memory records with confidence (batch query)
 		const results: MemoryResult[] = [];
 		if (topIds.length > 0) {
 			const placeholders = topIds.map(() => "?").join(",");
@@ -185,24 +238,47 @@ export class MemoryStore {
 						category: string;
 						source: string | null;
 						created_at: string;
+						confidence: number;
+						access_count: number;
 					},
 					string[]
 				>(
-					`SELECT id, text, scope, category, source, created_at FROM memories WHERE id IN (${placeholders})`,
+					`SELECT id, text, scope, category, source, created_at, confidence, access_count FROM memories WHERE id IN (${placeholders})`,
 				)
 				.all(...ids);
 			for (const row of rows) {
+				const rawScore = scoreMap.get(row.id)!;
 				results.push({
 					id: row.id,
 					text: row.text,
-					score: scoreMap.get(row.id)!,
+					score: rawScore * row.confidence,
 					metadata: {
 						scope: row.scope,
 						category: row.category as MemoryMetadata["category"],
 						source: row.source ?? undefined,
 					},
 					created_at: row.created_at,
+					confidence: row.confidence,
+					access_count: row.access_count,
 				});
+			}
+
+			// Re-sort by confidence-weighted score
+			results.sort((a, b) => b.score - a.score);
+
+			// 5. Update access tracking for returned results — one UPDATE for
+			// all rows instead of N round-trips.
+			if (results.length > 0) {
+				const now = new Date().toISOString();
+				const accessIds = results.map((r) => r.id);
+				const placeholdersAccess = accessIds.map(() => "?").join(",");
+				this.db.run(
+					`UPDATE memories
+             SET access_count = access_count + 1,
+                 last_accessed_at = ?
+           WHERE id IN (${placeholdersAccess})`,
+					[now, ...accessIds],
+				);
 			}
 		}
 
@@ -210,7 +286,15 @@ export class MemoryStore {
 	}
 
 	forget(memoryId: string): boolean {
-		const result = this.db.run("DELETE FROM memories WHERE id = ?", [memoryId]);
+		// Clean up any links involving this memory
+		this.db.run(
+			"DELETE FROM memory_links WHERE source_id = ? OR target_id = ?",
+			[memoryId, memoryId],
+		);
+
+		const result = this.db.run("DELETE FROM memories WHERE id = ?", [
+			memoryId,
+		]);
 		if (result.changes > 0) {
 			if (this.vecAvailable) {
 				try {
@@ -229,17 +313,17 @@ export class MemoryStore {
 		return false;
 	}
 
-	list(opts?: { limit?: number; category?: string }): Array<{
+	getById(id: string): {
 		id: string;
 		text: string;
 		scope: string;
 		category: string;
 		source: string | null;
 		created_at: string;
-	}> {
-		const limit = opts?.limit ?? 50;
-		if (opts?.category) {
-			return this.db
+		confidence: number;
+	} | null {
+		return (
+			this.db
 				.prepare<
 					{
 						id: string;
@@ -248,33 +332,68 @@ export class MemoryStore {
 						category: string;
 						source: string | null;
 						created_at: string;
+						confidence: number;
 					},
-					[string, number]
+					[string]
 				>(
-					"SELECT id, text, scope, category, source, created_at FROM memories WHERE category = ? ORDER BY created_at DESC LIMIT ?",
+					`SELECT id, text, scope, category, source, created_at, confidence
+             FROM memories WHERE id = ?`,
+				)
+				.get(id) ?? null
+		);
+	}
+
+	list(opts?: { limit?: number; category?: string }): Array<{
+		id: string;
+		text: string;
+		scope: string;
+		category: string;
+		source: string | null;
+		created_at: string;
+		confidence: number;
+		access_count: number;
+		last_accessed_at: string | null;
+	}> {
+		const limit = opts?.limit ?? 50;
+		type Row = {
+			id: string;
+			text: string;
+			scope: string;
+			category: string;
+			source: string | null;
+			created_at: string;
+			confidence: number;
+			access_count: number;
+			last_accessed_at: string | null;
+		};
+		if (opts?.category) {
+			return this.db
+				.prepare<Row, [string, number]>(
+					`SELECT id, text, scope, category, source, created_at,
+                  confidence, access_count, last_accessed_at
+             FROM memories
+            WHERE category = ?
+            ORDER BY created_at DESC
+            LIMIT ?`,
 				)
 				.all(opts.category, limit);
 		}
 		return this.db
-			.prepare<
-				{
-					id: string;
-					text: string;
-					scope: string;
-					category: string;
-					source: string | null;
-					created_at: string;
-				},
-				[number]
-			>(
-				"SELECT id, text, scope, category, source, created_at FROM memories ORDER BY created_at DESC LIMIT ?",
+			.prepare<Row, [number]>(
+				`SELECT id, text, scope, category, source, created_at,
+                confidence, access_count, last_accessed_at
+           FROM memories
+          ORDER BY created_at DESC
+          LIMIT ?`,
 			)
 			.all(limit);
 	}
 
 	getStats(): MemoryStats {
 		const total = this.db
-			.prepare<{ count: number }, []>("SELECT COUNT(*) as count FROM memories")
+			.prepare<{ count: number }, []>(
+				"SELECT COUNT(*) as count FROM memories",
+			)
 			.get();
 
 		const categories = this.db
@@ -292,5 +411,72 @@ export class MemoryStore {
 			totalMemories: total?.count ?? 0,
 			byCategory,
 		};
+	}
+
+	// --- Memory Links ---
+
+	linkMemories(
+		sourceId: string,
+		targetId: string,
+		linkType: MemoryLink["linkType"],
+	): string {
+		const id = crypto.randomUUID();
+		this.db.run(
+			"INSERT INTO memory_links (id, source_id, target_id, link_type) VALUES (?, ?, ?, ?)",
+			[id, sourceId, targetId, linkType],
+		);
+		return id;
+	}
+
+	getLinkedMemories(
+		memoryId: string,
+	): Array<MemoryLink & { linkedText: string }> {
+		return this.db
+			.prepare<
+				{
+					id: string;
+					source_id: string;
+					target_id: string;
+					link_type: string;
+					created_at: string;
+					linked_text: string;
+				},
+				[string, string, string]
+			>(
+				`SELECT ml.id, ml.source_id, ml.target_id, ml.link_type, ml.created_at,
+              m.text as linked_text
+       FROM memory_links ml
+       JOIN memories m ON m.id = CASE WHEN ml.source_id = ? THEN ml.target_id ELSE ml.source_id END
+       WHERE ml.source_id = ? OR ml.target_id = ?`,
+			)
+			.all(memoryId, memoryId, memoryId)
+			.map((row) => ({
+				id: row.id,
+				sourceId: row.source_id,
+				targetId: row.target_id,
+				linkType: row.link_type as MemoryLink["linkType"],
+				createdAt: row.created_at,
+				linkedText: row.linked_text,
+			}));
+	}
+
+	/**
+	 * Find existing memories that may contradict the given text.
+	 * Returns top candidates with high similarity but different content.
+	 * The caller (auto-extract or AI) decides if they truly contradict.
+	 */
+	async findContradictionCandidates(
+		text: string,
+		opts?: { limit?: number; scope?: string },
+	): Promise<MemoryResult[]> {
+		const candidates = await this.recall(text, {
+			limit: opts?.limit ?? 5,
+			scope: opts?.scope,
+			minScore: 0.4,
+		});
+		// Filter to same-topic memories (high score) that aren't identical
+		return candidates.filter(
+			(m) => m.text.toLowerCase() !== text.toLowerCase(),
+		);
 	}
 }

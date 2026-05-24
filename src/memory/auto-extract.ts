@@ -1,4 +1,5 @@
 import type { AIProvider, ChatMessage } from "../ai/base-provider.js";
+import type { MemoryStore } from "./store.js";
 
 const EXTRACT_PROMPT = `You are a memory extraction system. Analyze the conversation below and extract key facts, preferences, or decisions that should be remembered for future conversations.
 
@@ -30,7 +31,7 @@ export async function extractMemories(
 			extractMessages,
 			"You are a concise memory extraction system. Return one memory per line, or NONE.",
 		);
-		const lines = response
+		const lines = response.text
 			.split("\n")
 			.map((l) => l.trim())
 			.filter((l) => l.length > 0 && l.toUpperCase() !== "NONE");
@@ -42,4 +43,47 @@ export async function extractMemories(
 	} catch {
 		return [];
 	}
+}
+
+/**
+ * Store extracted memories with contradiction detection.
+ * For each extracted memory, checks if it contradicts existing memories.
+ * If a contradiction is found, creates a supersedes link and lowers
+ * the old memory's confidence.
+ */
+export async function storeExtractedMemories(
+	memoryStore: MemoryStore,
+	memories: string[],
+	opts?: { scope?: string; source?: string },
+): Promise<string[]> {
+	const scope = opts?.scope ?? "global";
+	const source = opts?.source ?? "auto-extract";
+	const storedIds: string[] = [];
+
+	for (const text of memories) {
+		try {
+			// Check for contradictions
+			const candidates = await memoryStore.findContradictionCandidates(text, {
+				scope,
+				limit: 3,
+			});
+
+			// If a very high-similarity match exists (score > 0.8), it's likely
+			// an update rather than a new fact — supersede the top match
+			const topMatch = candidates[0];
+			const supersedes =
+				topMatch && topMatch.score > 0.8 ? topMatch.id : undefined;
+
+			const id = await memoryStore.store(
+				text,
+				{ scope, category: "fact", source },
+				{ supersedes },
+			);
+			storedIds.push(id);
+		} catch {
+			// Non-critical — skip this memory
+		}
+	}
+
+	return storedIds;
 }

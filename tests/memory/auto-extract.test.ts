@@ -4,7 +4,7 @@ import type { AIProvider, ChatMessage } from "../../src/ai/base-provider.js";
 
 function mockProvider(response: string): AIProvider {
 	return {
-		chat: mock(() => Promise.resolve(response)),
+		chat: mock(() => Promise.resolve({ text: response })),
 	} as unknown as AIProvider;
 }
 

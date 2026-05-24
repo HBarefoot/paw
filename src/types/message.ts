@@ -43,6 +43,13 @@ export interface ToolDefinition {
 	plugin: string;
 	handler: (input: Record<string, unknown>) => Promise<ToolResult>;
 	/**
+	 * Optional per-tool execution timeout (milliseconds). Overrides the
+	 * provider-level default used by parallel-tools dispatch. Use short
+	 * values for fast tools (e.g. classification) and leave undefined for
+	 * long-running tools (discovery, LLM-backed extraction, etc).
+	 */
+	timeoutMs?: number;
+	/**
 	 * Optional streaming handler for tools that produce incremental progress.
 	 * When present and the provider is streaming, the provider yields each
 	 * StreamChunk from the generator to the parent stream. The generator's

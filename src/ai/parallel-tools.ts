@@ -26,6 +26,22 @@ interface Logger {
  * Executes multiple tool calls in parallel with per-tool timeout and error isolation.
  * Returns results in the same order as the input calls.
  */
+function resolveTimeout(
+	toolRegistry: ToolRegistry,
+	name: string,
+	defaultMs: number,
+): number {
+	const def = toolRegistry.get(name);
+	if (def?.timeoutMs && def.timeoutMs > 0) return def.timeoutMs;
+	return defaultMs;
+}
+
+function formatTimeout(ms: number): string {
+	if (ms < 1000) return `${ms}ms`;
+	if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+	return `${Math.round(ms / 60_000)} min`;
+}
+
 export async function executeToolsParallel(
 	calls: ToolCallRequest[],
 	toolRegistry: ToolRegistry,
@@ -34,7 +50,16 @@ export async function executeToolsParallel(
 ): Promise<ToolCallResult[]> {
 	const promises = calls.map(async (call): Promise<ToolCallResult> => {
 		const startTime = Date.now();
-		logger.info("Executing tool", { tool: call.name, id: call.id });
+		const effectiveTimeoutMs = resolveTimeout(
+			toolRegistry,
+			call.name,
+			timeoutMs,
+		);
+		logger.info("Executing tool", {
+			tool: call.name,
+			id: call.id,
+			timeoutMs: effectiveTimeoutMs,
+		});
 		let result: ToolResult;
 		try {
 			result = await Promise.race([
@@ -44,10 +69,10 @@ export async function executeToolsParallel(
 						() =>
 							reject(
 								new Error(
-									`Tool "${call.name}" timed out after ${Math.round(timeoutMs / 60_000)} minutes`,
+									`Tool "${call.name}" timed out after ${formatTimeout(effectiveTimeoutMs)}`,
 								),
 							),
-						timeoutMs,
+						effectiveTimeoutMs,
 					),
 				),
 			]);
@@ -121,7 +146,16 @@ export async function* executeToolsParallelStreaming(
 				};
 			}
 		} else {
-			logger.info("Executing tool", { tool: call.name, id: call.id });
+			const effectiveTimeoutMs = resolveTimeout(
+				toolRegistry,
+				call.name,
+				timeoutMs,
+			);
+			logger.info("Executing tool", {
+				tool: call.name,
+				id: call.id,
+				timeoutMs: effectiveTimeoutMs,
+			});
 			try {
 				result = await Promise.race([
 					toolRegistry.execute(call.name, call.input),
@@ -130,10 +164,10 @@ export async function* executeToolsParallelStreaming(
 							() =>
 								reject(
 									new Error(
-										`Tool "${call.name}" timed out after ${Math.round(timeoutMs / 60_000)} minutes`,
+										`Tool "${call.name}" timed out after ${formatTimeout(effectiveTimeoutMs)}`,
 									),
 								),
-							timeoutMs,
+							effectiveTimeoutMs,
 						),
 					),
 				]);
@@ -215,6 +249,11 @@ export async function* executeToolsParallelStreaming(
 						}
 						result = next.value;
 					} else {
+						const effectiveTimeoutMs = resolveTimeout(
+							toolRegistry,
+							call.name,
+							timeoutMs,
+						);
 						result = await Promise.race([
 							toolRegistry.execute(call.name, call.input),
 							new Promise<never>((_, reject) =>
@@ -222,10 +261,10 @@ export async function* executeToolsParallelStreaming(
 									() =>
 										reject(
 											new Error(
-												`Tool "${call.name}" timed out after ${Math.round(timeoutMs / 60_000)} minutes`,
+												`Tool "${call.name}" timed out after ${formatTimeout(effectiveTimeoutMs)}`,
 											),
 										),
-									timeoutMs,
+									effectiveTimeoutMs,
 								),
 							),
 						]);

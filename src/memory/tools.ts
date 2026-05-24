@@ -1,5 +1,6 @@
 import type { MemoryStore } from "./store.js";
 import type { ToolDefinition } from "../types/message.js";
+import { chunkText } from "./chunker.js";
 
 export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
 	return [
@@ -21,6 +22,11 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
 						type: "string",
 						description: "Scope: 'global' or a user ID. Defaults to 'global'.",
 					},
+					supersedes: {
+						type: "string",
+						description:
+							"ID of an existing memory this one replaces. The old memory's confidence will be lowered and a supersedes link created.",
+					},
 				},
 				required: ["text", "category"],
 			},
@@ -33,8 +39,31 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
 					| "decision"
 					| "summary";
 				const scope = (input.scope as string) || "global";
-				const id = await store.store(text, { scope, category });
-				return { content: `Memory stored (id: ${id}): "${text}"` };
+				const supersedes = input.supersedes as string | undefined;
+
+				// Check for potential contradictions before storing
+				let warning = "";
+				try {
+					const candidates =
+						await store.findContradictionCandidates(text, { scope });
+					if (candidates.length > 0 && !supersedes) {
+						const hints = candidates
+							.slice(0, 3)
+							.map(
+								(c) =>
+									`  - [${c.metadata.category}] (id: ${c.id}, confidence: ${c.confidence.toFixed(2)}): ${c.text}`,
+							)
+							.join("\n");
+						warning = `\n\nPotential contradictions found. Consider using 'supersedes' to replace:\n${hints}`;
+					}
+				} catch {
+					// Non-critical — store the memory regardless
+				}
+
+				const id = await store.store(text, { scope, category }, { supersedes });
+				return {
+					content: `Memory stored (id: ${id}): "${text}"${warning}`,
+				};
 			},
 		},
 		{
@@ -98,6 +127,66 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
 				return deleted
 					? { content: `Memory ${memoryId} deleted.` }
 					: { content: `Memory ${memoryId} not found.`, is_error: true };
+			},
+		},
+		{
+			name: "import_document",
+			description:
+				"Chunk a long document and store each chunk as a separate memory. Use this to ingest docs, notes, PDFs, or transcripts so they become retrievable via memory_recall. Each chunk carries the same source metadata for traceability.",
+			input_schema: {
+				type: "object",
+				properties: {
+					text: {
+						type: "string",
+						description: "Full document text to ingest.",
+					},
+					source: {
+						type: "string",
+						description:
+							"Origin identifier (file name, URL, doc title). Stored on every chunk.",
+					},
+					scope: {
+						type: "string",
+						description: "Scope: 'global' or a user ID. Defaults to 'global'.",
+					},
+					category: {
+						type: "string",
+						enum: ["fact", "summary"],
+						description: "Memory category for all chunks. Defaults to 'fact'.",
+					},
+				},
+				required: ["text", "source"],
+			},
+			plugin: "kernel",
+			handler: async (input) => {
+				const text = String(input.text ?? "");
+				const source = String(input.source ?? "").trim() || "import";
+				const scope = (input.scope as string) || "global";
+				const category =
+					(input.category as "fact" | "summary") ?? "fact";
+				const { chunks, totalChars } = chunkText(text);
+				if (chunks.length === 0) {
+					return {
+						content: "No content to import (empty after normalization).",
+						is_error: true,
+					};
+				}
+				const storedIds: string[] = [];
+				for (const chunk of chunks) {
+					try {
+						const id = await store.store(chunk, {
+							scope,
+							category,
+							source,
+						});
+						storedIds.push(id);
+					} catch (err) {
+						// Non-fatal — keep going and report the count at the end.
+					}
+				}
+				return {
+					content: `Imported ${storedIds.length}/${chunks.length} chunk(s) from "${source}" (${totalChars} chars).`,
+				};
 			},
 		},
 	];

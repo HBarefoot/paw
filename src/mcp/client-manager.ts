@@ -49,6 +49,18 @@ function isPrivateHost(hostname: string): boolean {
 	return PRIVATE_IP_PATTERNS.some((p) => p.test(hostname));
 }
 
+/**
+ * Reject MCP tool/server identifiers that could break the qualified-name
+ * scheme (`mcp__<server>__<tool>`). Double underscores inside either part
+ * let a remote MCP tool masquerade as another namespace.
+ */
+function isSafeMcpIdentifier(name: string): boolean {
+	if (!name || name.length > 128) return false;
+	if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(name)) return false;
+	if (name.includes("__")) return false;
+	return true;
+}
+
 interface MCPTool {
 	name: string;
 	description?: string;
@@ -136,6 +148,12 @@ export class MCPClientManager {
 	}
 
 	async connectServer(name: string, config: MCPServerConfig): Promise<void> {
+		if (!isSafeMcpIdentifier(name)) {
+			this.logger.error("Invalid MCP server name — refusing to connect", {
+				server: name,
+			});
+			return;
+		}
 		const serverEntry: ConnectedServer = {
 			name,
 			config,
@@ -235,7 +253,21 @@ export class MCPClientManager {
 			const { tools } = await server.client.listTools();
 			server.tools = tools;
 
-			return tools.map((tool) =>
+			// Filter out tools whose names would produce invalid or confusing
+			// qualified identifiers. Names must match a conservative allowlist
+			// and contain no `__` sequences that could break namespacing.
+			const validTools = tools.filter((t) => {
+				if (!isSafeMcpIdentifier(t.name)) {
+					this.logger.warn("MCP tool skipped: unsafe name", {
+						server: serverName,
+						tool: t.name,
+					});
+					return false;
+				}
+				return true;
+			});
+
+			return validTools.map((tool) =>
 				this.wrapMCPTool(serverName, server.client!, tool),
 			);
 		} catch (err) {

@@ -23,11 +23,24 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 				`<script>document.querySelector(".content").classList.add("content-full")</script>`,
 			)}
 			<div class="chat-toolbar">
+				<input
+					type="search"
+					id="session-search"
+					class="session-search"
+					placeholder="Search sessions..."
+					aria-label="Search sessions"
+				/>
 				<select id="session-selector">
 					<option value="">New conversation</option>
 				</select>
 				{raw(
 					`<button class="chat-toolbar-btn primary" id="new-chat-btn" onclick="newChat()">+ New Chat</button>`,
+				)}
+				{raw(
+					`<button class="chat-toolbar-btn" id="export-btn" onclick="exportSession()" title="Export current conversation">Export</button>`,
+				)}
+				{raw(
+					`<button class="chat-toolbar-btn" id="prompts-btn" onclick="openPrompts()" title="Insert a saved prompt">Prompts</button>`,
 				)}
 				{raw(
 					`<button class="chat-toolbar-btn" id="canvas-toggle" onclick="toggleCanvasMode()">${canvasIconSvg} Canvas</button>`,
@@ -110,6 +123,18 @@ export function getChatScript(): string {
   var input = document.getElementById("chat-input");
   var typingDiv = document.getElementById("typing");
   var selector = document.getElementById("session-selector");
+  var sessionSearch = document.getElementById("session-search");
+  if (sessionSearch && selector) {
+    sessionSearch.addEventListener("input", function() {
+      var q = sessionSearch.value.trim().toLowerCase();
+      for (var i = 0; i < selector.options.length; i++) {
+        var opt = selector.options[i];
+        if (!opt.value) continue; // keep placeholder
+        var match = !q || opt.text.toLowerCase().indexOf(q) !== -1;
+        opt.hidden = !match;
+      }
+    });
+  }
   var fileInput = document.getElementById("file-input");
   var attachmentsDiv = document.getElementById("chat-attachments");
   var pendingImages = [];
@@ -123,37 +148,94 @@ export function getChatScript(): string {
       file.type === "application/vnd.ms-excel";
   }
 
+  function ingestFile(file) {
+    if (file.size > MAX_FILE_SIZE) {
+      pawModal.alert("File too large", file.name + " exceeds the 5MB size limit.");
+      return;
+    }
+    if (isSpreadsheet(file)) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var base64 = btoa(new Uint8Array(e.target.result).reduce(function(data, byte) { return data + String.fromCharCode(byte); }, ""));
+        var mimeType = file.type || "application/octet-stream";
+        pendingFiles.push({ data: base64, mimeType: mimeType, name: file.name });
+        renderPendingAttachments();
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var dataUrl = e.target.result;
+        var base64 = dataUrl.split(",")[1];
+        var mimeType = dataUrl.split(":")[1].split(";")[0];
+        pendingImages.push({ data: base64, mimeType: mimeType, dataUrl: dataUrl });
+        renderPendingAttachments();
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
   fileInput.addEventListener("change", function() {
     var files = fileInput.files;
-    for (var i = 0; i < files.length; i++) {
-      (function(file) {
-        if (file.size > MAX_FILE_SIZE) {
-          pawModal.alert("File too large", file.name + " exceeds the 5MB size limit.");
-          return;
-        }
-        if (isSpreadsheet(file)) {
-          var reader = new FileReader();
-          reader.onload = function(e) {
-            var base64 = btoa(new Uint8Array(e.target.result).reduce(function(data, byte) { return data + String.fromCharCode(byte); }, ""));
-            var mimeType = file.type || "application/octet-stream";
-            pendingFiles.push({ data: base64, mimeType: mimeType, name: file.name });
-            renderPendingAttachments();
-          };
-          reader.readAsArrayBuffer(file);
-        } else {
-          var reader = new FileReader();
-          reader.onload = function(e) {
-            var dataUrl = e.target.result;
-            var base64 = dataUrl.split(",")[1];
-            var mimeType = dataUrl.split(":")[1].split(";")[0];
-            pendingImages.push({ data: base64, mimeType: mimeType, dataUrl: dataUrl });
-            renderPendingAttachments();
-          };
-          reader.readAsDataURL(file);
-        }
-      })(files[i]);
-    }
+    for (var i = 0; i < files.length; i++) ingestFile(files[i]);
     fileInput.value = "";
+  });
+
+  // Drag-and-drop over the chat container. Ignore non-file drags so text
+  // drags (e.g. selecting in the page) don't accidentally trigger the
+  // drop overlay.
+  var chatContainer = document.getElementById("chat-container");
+  if (chatContainer) {
+    var dragDepth = 0;
+    function hasFiles(e) {
+      return e.dataTransfer && e.dataTransfer.types &&
+        Array.prototype.indexOf.call(e.dataTransfer.types, "Files") !== -1;
+    }
+    chatContainer.addEventListener("dragenter", function(e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      chatContainer.classList.add("drag-active");
+    });
+    chatContainer.addEventListener("dragover", function(e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+    });
+    chatContainer.addEventListener("dragleave", function(e) {
+      if (!hasFiles(e)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) chatContainer.classList.remove("drag-active");
+    });
+    chatContainer.addEventListener("drop", function(e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth = 0;
+      chatContainer.classList.remove("drag-active");
+      var files = e.dataTransfer.files;
+      for (var i = 0; i < files.length; i++) ingestFile(files[i]);
+    });
+  }
+
+  // Clipboard paste — capture images pasted into the input (e.g. from
+  // screenshot tools) and treat them like any other attachment.
+  input.addEventListener("paste", function(e) {
+    if (!e.clipboardData || !e.clipboardData.items) return;
+    var items = e.clipboardData.items;
+    var handled = false;
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      if (item.kind === "file" && item.type.indexOf("image/") === 0) {
+        var blob = item.getAsFile();
+        if (!blob) continue;
+        var ext = (item.type.split("/")[1] || "png").split(";")[0];
+        var named = new File([blob], "pasted-" + Date.now() + "." + ext, {
+          type: item.type,
+        });
+        ingestFile(named);
+        handled = true;
+      }
+    }
+    if (handled) e.preventDefault();
   });
 
   function renderPendingAttachments() {
@@ -290,10 +372,36 @@ export function getChatScript(): string {
   }
 
   input.addEventListener("keydown", function(e) {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    // Enter sends (Shift+Enter = newline). Ctrl/Cmd+Enter also sends so
+    // users accustomed to Slack/Discord bindings feel at home.
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      sendMessage();
+    }
   });
 
   input.addEventListener("input", autoResizeInput);
+
+  // Delegate clicks for code-block copy buttons. Because markdown is
+  // rendered via innerHTML, we can't attach handlers directly.
+  messagesDiv.addEventListener("click", function(e) {
+    var t = e.target;
+    if (t && t.classList && t.classList.contains("code-copy")) {
+      var block = t.closest(".code-block");
+      var code = block ? block.querySelector("pre code") : null;
+      if (!code) return;
+      var text = code.textContent || "";
+      try {
+        navigator.clipboard.writeText(text);
+      } catch (err) { /* ignore */ }
+      var orig = t.textContent;
+      t.textContent = "Copied!";
+      setTimeout(function() { t.textContent = orig; }, 1200);
+    }
+  });
 
   function createStreamingBubble() {
     var wrapper = document.createElement("div");
@@ -361,8 +469,29 @@ export function getChatScript(): string {
   }
 
   function hideThinking(streamBubble) {
+    // If we have thinking text content, collapse it instead of removing
+    var textEl = streamBubble.thinkingDiv.querySelector(".thinking-text-content");
+    if (textEl && textEl.textContent.trim()) {
+      var details = streamBubble.thinkingDiv.querySelector("details");
+      if (details) details.removeAttribute("open");
+      return;
+    }
     streamBubble.thinkingDiv.style.display = "none";
     streamBubble.thinkingDiv.innerHTML = "";
+  }
+
+  function showThinkingText(streamBubble, text) {
+    var area = streamBubble.thinkingDiv;
+    area.style.display = "";
+    // Create the collapsible thinking section if it doesn't exist
+    if (!area.querySelector(".thinking-text-content")) {
+      area.innerHTML = '<details open class="thinking-details"><summary class="thinking-summary"><span class="activity-spinner"></span> Thinking...</summary><div class="thinking-text-content"></div></details>';
+    }
+    var contentEl = area.querySelector(".thinking-text-content");
+    if (contentEl) {
+      contentEl.textContent += text;
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
   }
 
   function addActivityStep(streamBubble, chunk) {
@@ -537,8 +666,25 @@ export function getChatScript(): string {
     var sendBtn = document.getElementById("send-btn");
     sendBtn.disabled = true;
 
-    // Show typing indicator
+    // Show typing indicator with stop button
     typingDiv.style.display = "flex";
+    var stopBtn = document.createElement("button");
+    stopBtn.className = "stop-btn";
+    stopBtn.textContent = "Stop";
+    stopBtn.title = "Stop generation";
+    typingDiv.appendChild(stopBtn);
+    var abortCtrl = new AbortController();
+    stopBtn.onclick = function() {
+      abortCtrl.abort();
+      stopBtn.disabled = true;
+      stopBtn.textContent = "Stopping...";
+      // Also tell the server to cancel
+      fetch("/api/chat/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: sessionId })
+      }).catch(function() {});
+    };
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
     // Save session ID to localStorage BEFORE sending so it survives mid-stream reloads
@@ -559,6 +705,7 @@ export function getChatScript(): string {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: abortCtrl.signal,
     })
     .then(function(res) {
       if (!res.ok) {
@@ -575,7 +722,7 @@ export function getChatScript(): string {
             if (buffer.trim()) {
               processSSELines(buffer.split("\\n"));
             }
-            finalize();
+            finalize(_doneMessageId);
             return;
           }
           buffer += decoder.decode(result.value, { stream: true });
@@ -586,6 +733,8 @@ export function getChatScript(): string {
         });
       }
 
+      var _doneMessageId = null;
+      var _totalUsage = { inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 };
       function processSSELines(lines) {
         for (var i = 0; i < lines.length; i++) {
           var line = lines[i];
@@ -595,17 +744,25 @@ export function getChatScript(): string {
               if (chunk.type === "text_delta" && chunk.text) {
                 fullText += chunk.text;
                 updateStreamContent(streamBubble.mdDiv, fullText);
+              } else if (chunk.type === "thinking_delta" && chunk.thinkingText) {
+                showThinkingText(streamBubble, chunk.thinkingText);
               } else if (chunk.type === "tool_start" || chunk.type === "tool_end" || chunk.type === "thinking" || chunk.type === "roundtrip_start") {
                 addActivityStep(streamBubble, chunk);
               } else if (chunk.type === "error") {
                 addActivityStep(streamBubble, chunk);
+              } else if (chunk.type === "usage" && chunk.usage) {
+                _totalUsage.inputTokens += chunk.usage.inputTokens || 0;
+                _totalUsage.outputTokens += chunk.usage.outputTokens || 0;
+                _totalUsage.estimatedCostUsd += chunk.usage.estimatedCostUsd || 0;
+              } else if (chunk.type === "done" && chunk.messageId) {
+                _doneMessageId = chunk.messageId;
               }
             } catch(e) { /* ignore parse errors */ }
           }
         }
       }
 
-      function finalize() {
+      function finalize(doneMessageId) {
         // Clean up: hide thinking indicator, stop timers
         hideThinking(streamBubble);
         for (var t = 0; t < streamBubble._timers.length; t++) {
@@ -635,20 +792,48 @@ export function getChatScript(): string {
           if (chevron) chevron.classList.add("expanded");
         }
         updateActivitySummary(streamBubble);
+        // Show usage badge if we have token data
+        if (_totalUsage.inputTokens > 0 || _totalUsage.outputTokens > 0) {
+          var usageBadge = document.createElement("div");
+          usageBadge.className = "usage-badge";
+          var totalTokens = _totalUsage.inputTokens + _totalUsage.outputTokens;
+          var tokenText = totalTokens > 1000 ? (totalTokens / 1000).toFixed(1) + "k" : totalTokens;
+          usageBadge.textContent = tokenText + " tokens";
+          if (_totalUsage.estimatedCostUsd > 0) {
+            usageBadge.textContent += " · $" + _totalUsage.estimatedCostUsd.toFixed(4);
+          }
+          var bubble = streamBubble.wrapper.querySelector(".msg.assistant");
+          if (bubble) bubble.appendChild(usageBadge);
+        }
+        // Add feedback buttons if we have a message ID
+        if (doneMessageId && fullText) {
+          addFeedbackButtons(streamBubble.wrapper.querySelector(".msg.assistant"), doneMessageId, sessionId);
+        }
         localStorage.setItem(STORAGE_KEY, sessionId);
         loadSessions(true);
         sendBtn.disabled = false;
         typingDiv.style.display = "none";
+        if (stopBtn.parentNode) stopBtn.remove();
       }
 
       return pump();
     })
     .catch(function(err) {
-      if (!fullText) {
+      if (err.name === "AbortError") {
+        // User cancelled — show what we have so far
+        if (!fullText) {
+          streamBubble.mdDiv.innerHTML = "<p><em>Generation stopped.</em></p>";
+        }
+      } else if (!fullText) {
         streamBubble.mdDiv.innerHTML = "<p>Error: " + escapeHtml(err.message) + "</p>";
       }
       sendBtn.disabled = false;
       typingDiv.style.display = "none";
+      if (stopBtn.parentNode) stopBtn.remove();
+      // Clean up timers
+      for (var t = 0; t < streamBubble._timers.length; t++) {
+        clearInterval(streamBubble._timers[t]);
+      }
     });
   };
 
@@ -663,6 +848,64 @@ export function getChatScript(): string {
     selector.value = "";
     clearMessages();
     input.focus();
+  };
+
+  window.openPrompts = async function openPrompts() {
+    var res = await fetch("/api/prompts?limit=100");
+    if (!res.ok) {
+      await pawModal.alert("Prompts", "Could not load the prompt library (HTTP " + res.status + ").");
+      return;
+    }
+    var data = await res.json();
+    var prompts = (data.prompts || []);
+    if (prompts.length === 0) {
+      var create = await pawModal.confirm("Prompts", "You don't have any saved prompts yet. Open the Prompts page to create one?", { confirmLabel: "Open Prompts" });
+      if (create) window.location.href = "/prompts";
+      return;
+    }
+    var items = prompts.map(function(p) {
+      var tags = p.tags ? " · " + p.tags : "";
+      var preview = (p.body || "").slice(0, 80).replace(/\\s+/g, " ");
+      return '<div class="prompt-pick" data-pid="' + p.id + '">'
+        + '<div><strong>' + escapeHtml(p.title) + '</strong>'
+        + '<span class="text-xs text-muted" style="margin-left:6px">' + escapeHtml(tags) + '</span></div>'
+        + '<div class="text-xs text-muted" style="margin-top:4px">' + escapeHtml(preview) + '...</div></div>';
+    }).join("");
+    pawModal._show(
+      "Insert a prompt",
+      '<div class="prompt-pick-list">' + items + '</div>',
+      '<button class="btn-cancel">Cancel</button>'
+    );
+    pawModal._overlay.querySelector(".btn-cancel").onclick = function() { pawModal._close(); };
+    pawModal._overlay.querySelectorAll(".prompt-pick").forEach(function(el) {
+      el.onclick = async function() {
+        var pid = el.dataset.pid;
+        pawModal._close();
+        var useRes = await fetch("/api/prompts/" + encodeURIComponent(pid) + "/use", { method: "POST" });
+        if (!useRes.ok) return;
+        var useData = await useRes.json();
+        var body = (useData.prompt && useData.prompt.body) || "";
+        input.value = input.value ? input.value + "\\n\\n" + body : body;
+        autoResizeInput();
+        input.focus();
+      };
+    });
+  };
+
+  window.exportSession = async function exportSession() {
+    if (!sessionId || !selector.value) {
+      await pawModal.alert("Export", "Select or send a message first to export.");
+      return;
+    }
+    var format = await pawModal.prompt(
+      "Export conversation",
+      'Choose format: <code>md</code> (default), <code>html</code>, or <code>json</code>.',
+      "md"
+    );
+    if (!format) return;
+    var f = String(format).trim().toLowerCase();
+    if (f !== "md" && f !== "html" && f !== "json") f = "md";
+    window.location.href = "/api/sessions/" + encodeURIComponent(sessionId) + "/export?format=" + f;
   };
 
   function appendMsg(role, text, images, fileNames) {
@@ -718,6 +961,105 @@ export function getChatScript(): string {
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   }
 
+  function addFeedbackButtons(bubbleEl, messageId, sid) {
+    if (!bubbleEl || !messageId) return;
+    var bar = document.createElement("div");
+    bar.className = "feedback-bar";
+
+    var copyBtn = document.createElement("button");
+    copyBtn.className = "feedback-btn action-btn";
+    copyBtn.textContent = "Copy";
+    copyBtn.title = "Copy message";
+    copyBtn.onclick = function() {
+      var md = bubbleEl.querySelector(".md-content");
+      var text = md ? (md.innerText || md.textContent || "") : "";
+      if (!text) return;
+      try { navigator.clipboard.writeText(text); } catch (e) { /* ignore */ }
+      var orig = copyBtn.textContent;
+      copyBtn.textContent = "Copied!";
+      setTimeout(function() { copyBtn.textContent = orig; }, 1200);
+    };
+
+    var retryBtn = document.createElement("button");
+    retryBtn.className = "feedback-btn action-btn";
+    retryBtn.textContent = "Retry";
+    retryBtn.title = "Regenerate from last user message";
+    retryBtn.onclick = function() {
+      // Find the last user message bubble preceding this one.
+      var wrappers = messagesDiv.querySelectorAll(".msg-wrapper");
+      var target = null;
+      var thisWrapper = bubbleEl.closest(".msg-wrapper");
+      for (var i = wrappers.length - 1; i >= 0; i--) {
+        if (wrappers[i] === thisWrapper) continue;
+        var userMsg = wrappers[i].querySelector(".msg.user .md-content");
+        if (userMsg) { target = userMsg; break; }
+      }
+      if (!target) return;
+      input.value = target.innerText || target.textContent || "";
+      autoResizeInput();
+      input.focus();
+    };
+
+    var forkBtn = document.createElement("button");
+    forkBtn.className = "feedback-btn action-btn";
+    forkBtn.textContent = "Fork";
+    forkBtn.title = "Branch the conversation at this message into a new session";
+    forkBtn.onclick = async function() {
+      try {
+        var res = await fetch("/api/sessions/" + encodeURIComponent(sid) + "/fork", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messageId: messageId })
+        });
+        var data = await res.json();
+        if (!res.ok || !data.newSessionId) {
+          await pawModal.alert("Fork failed", data.error || ("HTTP " + res.status));
+          return;
+        }
+        // Jump to the forked session: setting the selector triggers loadSession.
+        await loadSessions(true);
+        selector.value = data.newSessionId;
+        selector.dispatchEvent(new Event("change"));
+      } catch (e) {
+        await pawModal.alert("Fork failed", String(e));
+      }
+    };
+
+    var upBtn = document.createElement("button");
+    upBtn.className = "feedback-btn";
+    upBtn.innerHTML = "\\u{1F44D}";
+    upBtn.title = "Good response";
+    var downBtn = document.createElement("button");
+    downBtn.className = "feedback-btn";
+    downBtn.innerHTML = "\\u{1F44E}";
+    downBtn.title = "Bad response";
+
+    function sendFeedback(rating) {
+      var payload = { messageId: messageId, sessionId: sid, rating: rating };
+      if (rating === "down") {
+        var reason = prompt("What was wrong with this response? (optional)");
+        if (reason) payload.reason = reason;
+      }
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      bar.innerHTML = rating === "up"
+        ? '<span class="feedback-thanks">\\u{1F44D} Thanks!</span>'
+        : '<span class="feedback-thanks">\\u{1F44E} Noted</span>';
+    }
+
+    upBtn.onclick = function() { sendFeedback("up"); };
+    downBtn.onclick = function() { sendFeedback("down"); };
+    bar.appendChild(copyBtn);
+    bar.appendChild(retryBtn);
+    bar.appendChild(forkBtn);
+    bar.appendChild(upBtn);
+    bar.appendChild(downBtn);
+    bubbleEl.appendChild(bar);
+  }
+
   function escapeHtml(str) {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\\n/g, "<br>");
   }
@@ -737,7 +1079,15 @@ export function getChatScript(): string {
       var body = lang ? lines.slice(1).join("\\n") : code;
       if (lang && body.charAt(0) === "\\n") body = body.substring(1);
       if (!lang && body.charAt(0) === "\\n") body = body.substring(1);
-      codeBlocks.push('<pre><code' + (lang ? ' class="language-' + esc(lang) + '"' : '') + '>' + esc(body.replace(/\\n$/, "")) + '</code></pre>');
+      var bodyTrimmed = body.replace(/\\n$/, "");
+      var langLabel = lang ? '<span class="code-lang">' + esc(lang) + '</span>' : '';
+      var copyBtn = '<button class="code-copy" type="button" title="Copy code" aria-label="Copy code">Copy</button>';
+      codeBlocks.push(
+        '<div class="code-block">'
+        + '<div class="code-header">' + langLabel + copyBtn + '</div>'
+        + '<pre><code' + (lang ? ' class="language-' + esc(lang) + '"' : '') + '>' + esc(bodyTrimmed) + '</code></pre>'
+        + '</div>'
+      );
       return "%%CODEBLOCK_" + (codeBlocks.length - 1) + "%%";
     });
 
@@ -864,8 +1214,19 @@ export function getChatScript(): string {
     s = s.replace(/\\*(.+?)\\*/g, "<em>$1</em>");
     // Strikethrough
     s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
-    // Links
-    s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // Links — validate scheme to prevent javascript:/data:/vbscript: XSS
+    s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(m, label, url) {
+      var u = String(url).trim();
+      var safe = /^(https?:|mailto:|\\/|#)/i.test(u) || /^[a-zA-Z0-9._~\\-]/.test(u);
+      if (!safe) return label;
+      return '<a href="' + u + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+    });
+
+    // Memory citations — \\[mem:<id>\\] becomes a clickable footnote badge.
+    // IDs are restricted to safe chars so they can't escape the attribute.
+    s = s.replace(/\\[mem:([a-zA-Z0-9-]{4,64})\\]/g, function(_m, id) {
+      return '<sup class="mem-cite" data-mem-id="' + id + '" title="Click to view memory" tabindex="0">[' + id.slice(0, 6) + ']</sup>';
+    });
 
     // Restore inline code
     s = s.replace(/%%INLINE_(\\d+)%%/g, function(m, idx) {
@@ -874,6 +1235,32 @@ export function getChatScript(): string {
 
     return s;
   }
+
+  // Lazy-fetch + show the text behind a [mem:ID] citation.
+  messagesDiv.addEventListener("click", async function(e) {
+    var t = e.target;
+    if (!t || !t.classList || !t.classList.contains("mem-cite")) return;
+    var id = t.dataset.memId;
+    if (!id) return;
+    try {
+      var res = await fetch("/api/memory/" + encodeURIComponent(id));
+      if (!res.ok) {
+        await pawModal.alert("Memory unavailable", "Could not load memory " + id + " (HTTP " + res.status + ").");
+        return;
+      }
+      var data = await res.json();
+      var mem = data.memory || {};
+      var body = "<div style='max-height:40vh;overflow:auto;font-size:14px;line-height:1.5'>"
+        + "<div class='text-xs text-muted' style='margin-bottom:8px'>"
+        + "ID: <code>" + id + "</code> \\u00B7 category: " + escapeHtml(mem.category || "?")
+        + (mem.source ? " \\u00B7 source: " + escapeHtml(mem.source) : "")
+        + "</div>"
+        + "<div>" + escapeHtml(mem.text || "") + "</div></div>";
+      await pawModal.alert("Memory " + id.slice(0, 6), body);
+    } catch (err) {
+      await pawModal.alert("Memory unavailable", String(err));
+    }
+  });
 
   // ===== CANVAS MODE =====
   var _canvasRefreshTimer = null;

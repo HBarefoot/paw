@@ -36,6 +36,8 @@ export const configSchema = z.object({
 		ftsWeight: z.number().default(0.3),
 		autoExtract: z.boolean().default(true),
 		maxRecallResults: z.number().int().positive().default(10),
+		decayRate: z.number().min(0).max(1).default(0.995),
+		decayThresholdDays: z.number().int().positive().default(7),
 	}),
 	cron: z.object({
 		enabled: z.boolean().default(true),
@@ -107,6 +109,33 @@ export const configSchema = z.object({
 		.object({
 			name: z.string().default("Paw"),
 			systemPrompt: z.string().default(""),
+		})
+		.default({}),
+	routing: z
+		.object({
+			enabled: z.boolean().default(false),
+			rules: z
+				.array(
+					z.object({
+						match: z.object({
+							taskType: z
+								.enum([
+									"classification",
+									"extraction",
+									"summarization",
+									"reasoning",
+									"coding",
+									"general",
+								])
+								.optional(),
+							skillName: z.string().optional(),
+							agentName: z.string().optional(),
+						}),
+						provider: z.enum(["claude", "ollama", "openai", "gemini"]),
+						model: z.string().optional(),
+					}),
+				)
+				.default([]),
 		})
 		.default({}),
 	store: z.object({

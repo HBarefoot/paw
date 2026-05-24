@@ -32,6 +32,20 @@ async function init(model: string): Promise<void> {
 	pipelineInstance = await pipeline("feature-extraction", model);
 }
 
+/**
+ * Preload the embedding pipeline without waiting for a user query. Safe to
+ * call during boot when memory is enabled, so the first recall doesn't pay
+ * model-download + compile latency on the request path.
+ */
+export async function preloadEmbedder(
+	model = "Xenova/all-MiniLM-L6-v2",
+): Promise<void> {
+	if (!initPromise) {
+		initPromise = init(model);
+	}
+	await initPromise;
+}
+
 export function embeddingDimension(): number {
 	return EMBEDDING_DIM;
 }

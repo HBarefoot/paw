@@ -267,19 +267,27 @@ async function loginGemini(creds: StoredCredentials): Promise<void> {
 }
 
 async function loginOllama(creds: StoredCredentials): Promise<void> {
-	console.log("\n  Ollama runs locally — no API key needed.");
-	console.log("  Make sure Ollama is running: https://ollama.ai\n");
+	console.log("\n  Ollama can run locally or via Ollama Cloud (https://ollama.com).");
+	console.log("  Local Ollama: https://ollama.ai — no API key needed.");
+	console.log("  Ollama Cloud: paste your API key when prompted.\n");
 
 	const baseUrl = await promptText(
 		"Ollama base URL (default: http://localhost:11434):",
 	);
 	const model = await promptText("Model name (default: llama3.1):");
+	const apiKey = await promptSecret(
+		"API key (press Enter to skip for local Ollama):",
+	);
 
 	creds.ollama = {
 		baseUrl: baseUrl || "http://localhost:11434",
 		model: model || "llama3.1",
+		...(apiKey ? { apiKey } : {}),
 	};
-	console.log(`  ✓ Ollama configured (${creds.ollama.model} at ${creds.ollama.baseUrl})`);
+	const authSuffix = apiKey ? " with API key" : " (no API key)";
+	console.log(
+		`  ✓ Ollama configured (${creds.ollama.model} at ${creds.ollama.baseUrl})${authSuffix}`,
+	);
 }
 
 async function loginSlack(creds: StoredCredentials): Promise<void> {

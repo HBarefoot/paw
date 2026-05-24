@@ -44,7 +44,25 @@ function parseField(field: string, min: number, max: number): number[] {
 	return [...values].filter((v) => v >= min && v <= max).sort((a, b) => a - b);
 }
 
+const scheduleCache = new Map<string, CronSchedule>();
+const SCHEDULE_CACHE_MAX = 256;
+
 export function parseCron(expression: string): CronSchedule {
+	const normalized = expression.trim();
+	const cached = scheduleCache.get(normalized);
+	if (cached) return cached;
+
+	const result = parseCronUncached(normalized);
+
+	if (scheduleCache.size >= SCHEDULE_CACHE_MAX) {
+		const first = scheduleCache.keys().next().value;
+		if (first !== undefined) scheduleCache.delete(first);
+	}
+	scheduleCache.set(normalized, result);
+	return result;
+}
+
+function parseCronUncached(expression: string): CronSchedule {
 	const fields = expression.trim().split(/\s+/);
 	if (fields.length !== 5) {
 		throw new Error(
