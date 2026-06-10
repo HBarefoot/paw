@@ -63,11 +63,13 @@ import {
 	deleteBrand,
 	getActiveBrand,
 	getBrand,
+	getBrandPalette,
 	getBrandUi,
 	listBrands,
 	renderBrandAppThemeCss,
 	renderBrandTokensCss,
 	updateBrand,
+	type Brand,
 	type BrandDefinition,
 } from "../store/brands.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
@@ -1169,6 +1171,33 @@ export function createWebApp(
 	// Brand assets live next to the canvas workspace (same volume → persists).
 	const brandRoot = resolve(dirname(canvasRoot), "brand");
 
+	// Inline the active brand's light logo as a data: URI so surfaces that can't
+	// load external resources (the sandboxed, null-origin canvas placeholder
+	// iframe) can still show it. Returns null when there's no brand/logo.
+	function brandLogoDataUri(brand: Brand | null): string | null {
+		const file = brand?.data.logos?.light;
+		if (!brand || !file) return null;
+		const full = resolve(brandRoot, brand.id, file);
+		if (relative(brandRoot, full).startsWith("..") || !existsSync(full)) {
+			return null;
+		}
+		const mime: Record<string, string> = {
+			".png": "image/png",
+			".jpg": "image/jpeg",
+			".jpeg": "image/jpeg",
+			".gif": "image/gif",
+			".webp": "image/webp",
+			".svg": "image/svg+xml",
+		};
+		const type = mime[extname(full).toLowerCase()];
+		if (!type) return null;
+		try {
+			return `data:${type};base64,${readFileSync(full).toString("base64")}`;
+		} catch {
+			return null;
+		}
+	}
+
 	// In-memory event buffer for canvas polling (replaces SSE which Bun can't sustain)
 	const canvasEvents = new Map<
 		string,
@@ -2209,10 +2238,28 @@ export function createWebApp(
 				// No external resources (e.g. web fonts): this page renders inside the
 				// sandboxed, null-origin canvas iframe, where cross-origin loads can
 				// trip Safari's "Unsafe attempt to load URL" guard. System fonts only.
+				// The active brand is baked in server-side: colors inline, the logo as
+				// a data: URI (no external load), and the name in the copy.
+				const brand = getActiveBrand(kernel.database);
+				const pal = getBrandPalette(brand);
+				const brandName = (brand?.name ?? "Paw").replace(
+					/[&<>"]/g,
+					(ch) =>
+						({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch] ??
+						ch,
+				);
+				const logoUri = brandLogoDataUri(brand);
+				const acc = pal?.accent ?? pal?.primary ?? "#6a4bf0";
+				const rootVars = pal
+					? `:root { --accent:${acc}; --accent-bright:${pal.primary ?? acc}; --accent-press:${acc}; --soft:color-mix(in srgb, ${acc} 14%, transparent); --bg:${pal.bg ?? pal.surface ?? "#08090b"}; --fg:${pal.muted ?? "#6b7079"}; --title:${pal.text ?? "#f4f5f7"}; }`
+					: `:root { --accent:#6a4bf0; --accent-bright:#7c5cff; --accent-press:#4f2fdf; --soft:rgba(106,75,240,.10); --bg:#f7f7f9; --fg:#82858e; --title:#14151a; }
+          @media (prefers-color-scheme: dark) { :root { --accent:#7458f5; --accent-bright:#a78bfa; --accent-press:#6446e8; --soft:rgba(116,88,245,.15); --bg:#08090b; --fg:#6b7079; --title:#f4f5f7; } }`;
+				const iconHtml = logoUri
+					? `<img src="${logoUri}" alt="" style="width:64px;height:64px;object-fit:contain;border-radius:16px;">`
+					: `<div class="app-icon"><svg width="31" height="31" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="6.4" cy="9.2" rx="2.05" ry="2.6"/><ellipse cx="10.2" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="13.9" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="17.7" cy="9.2" rx="2.05" ry="2.6"/><path d="M12 11.4c-3 0-5.6 2.2-5.6 4.9 0 2.1 1.8 3 3.4 3 1 0 1.5-.4 2.2-.4s1.2.4 2.2.4c1.6 0 3.4-.9 3.4-3 0-2.7-2.6-4.9-5.6-4.9Z"/></svg></div>`;
 				return c.html(`<!DOCTYPE html><html><head><meta charset="UTF-8">
         <style>
-          :root { --accent:#6a4bf0; --accent-bright:#7c5cff; --accent-press:#4f2fdf; --soft:rgba(106,75,240,.10); --bg:#f7f7f9; --fg:#82858e; --title:#14151a; }
-          @media (prefers-color-scheme: dark) { :root { --accent:#7458f5; --accent-bright:#a78bfa; --accent-press:#6446e8; --soft:rgba(116,88,245,.15); --bg:#08090b; --fg:#6b7079; --title:#f4f5f7; } }
+          ${rootVars}
           * { box-sizing: border-box; }
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; display: flex; align-items: center; justify-content: center;
                  height: 100vh; margin: 0; color: var(--fg); background: radial-gradient(70% 55% at 50% 38%, var(--soft), transparent 70%), var(--bg);
@@ -2226,9 +2273,9 @@ export function createWebApp(
           .placeholder .title { font-size: 18px; font-weight: 600; letter-spacing: -.02em; color: var(--title); }
           .placeholder p { font-size: 13px; max-width: 260px; margin: 0; }
         </style></head><body><div class="placeholder">
-        <div class="app-icon"><svg width="31" height="31" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="6.4" cy="9.2" rx="2.05" ry="2.6"/><ellipse cx="10.2" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="13.9" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="17.7" cy="9.2" rx="2.05" ry="2.6"/><path d="M12 11.4c-3 0-5.6 2.2-5.6 4.9 0 2.1 1.8 3 3.4 3 1 0 1.5-.4 2.2-.4s1.2.4 2.2.4c1.6 0 3.4-.9 3.4-3 0-2.7-2.6-4.9-5.6-4.9Z"/></svg></div>
+        ${iconHtml}
         <div class="title">Canvas</div>
-        <p>Your live preview will render here once Paw writes to the canvas.</p></div>
+        <p>Your live preview will render here once ${brandName} writes to the canvas.</p></div>
         </body></html>`);
 			}
 			return c.text("Not found", 404);

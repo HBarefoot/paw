@@ -253,15 +253,20 @@ export function renderBrandAppThemeCss(brand: Brand | null): string {
 		);
 		m.push(`--border-strong: color-mix(in srgb, ${surface} 74%, ${anchor});`);
 	}
-	if (text) {
-		m.push(`--text-primary: ${text};`);
-		m.push(`--text-secondary: color-mix(in srgb, ${text} 72%, ${onSurface});`);
-		m.push(
-			`--text-tertiary: ${muted ?? `color-mix(in srgb, ${text} 52%, ${onSurface})`};`,
-		);
-	} else if (muted) {
-		m.push(`--text-tertiary: ${muted};`);
-	}
+	if (text) m.push(`--text-primary: ${text};`);
+	// Secondary text tier: the brand's Muted color drives it (operator choice);
+	// fall back to a derived shade of the primary text when Muted is unset.
+	const secondary =
+		muted ?? (text ? `color-mix(in srgb, ${text} 72%, ${onSurface})` : null);
+	if (secondary) m.push(`--text-secondary: ${secondary};`);
+	// Faintest tier: a step dimmer than secondary (Muted mixed toward the
+	// surface), so the three tiers stay distinct. --text-muted aliases this.
+	const tertiary = muted
+		? `color-mix(in srgb, ${muted} 70%, ${onSurface})`
+		: text
+			? `color-mix(in srgb, ${text} 50%, ${onSurface})`
+			: null;
+	if (tertiary) m.push(`--text-tertiary: ${tertiary};`);
 	if (body)
 		m.push(
 			`--font-sans: "${body}", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;`,
@@ -296,6 +301,25 @@ export function getBrandUi(
 		logo: asset(logos.light) ?? asset(logos.icon),
 		favicon: asset(logos.favicon) ?? asset(logos.icon) ?? asset(logos.light),
 	};
+}
+
+/**
+ * The active brand's sanitized color palette (`{primary, accent, bg, surface,
+ * text, muted}`, only keys with a valid color). Used to brand server-rendered
+ * surfaces that can't `<link>` the theme stylesheet (e.g. the sandboxed canvas
+ * placeholder iframe). Returns null when no brand / no valid colors.
+ */
+export function getBrandPalette(
+	brand: Brand | null,
+): Record<string, string> | null {
+	if (!brand) return null;
+	const c = brand.data.colors ?? {};
+	const out: Record<string, string> = {};
+	for (const key of ["primary", "accent", "bg", "surface", "text", "muted"]) {
+		const col = safeColor(c[key]);
+		if (col) out[key] = col;
+	}
+	return Object.keys(out).length ? out : null;
 }
 
 /**
