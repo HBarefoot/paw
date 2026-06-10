@@ -1,5 +1,6 @@
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import { brandIdentityScript } from "./layout.js";
 
 interface TotpSetupPageProps {
 	secret: string;
@@ -189,7 +190,9 @@ export const TotpSetupPage: FC<TotpSetupPageProps> = ({
 		<head>
 			<meta charset="UTF-8" />
 			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-			<link rel="icon" type="image/png" href="/favicon.png" />
+			{raw(
+				`<link rel="icon" id="favicon" type="image/png" href="/favicon.png" />`,
+			)}
 			<link rel="preconnect" href="https://fonts.googleapis.com" />
 			{raw(
 				`<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`,
@@ -200,6 +203,8 @@ export const TotpSetupPage: FC<TotpSetupPageProps> = ({
 			/>
 			<title>TOTP Setup - Paw</title>
 			{raw(`<style>${totpCss}</style>`)}
+			{raw(`<link rel="stylesheet" href="/api/brand/theme.css">`)}
+			{raw(`<script>${brandIdentityScript()}</script>`)}
 		</head>
 		<body>
 			<div class="setup-card">

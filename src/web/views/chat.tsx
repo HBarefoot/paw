@@ -58,12 +58,13 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 					<div class="chat-messages" id="messages">
 						{raw(`<div class="chat-welcome">
 							<div class="app-icon welcome-icon" style="width:56px;height:56px">${pawMark(31)}</div>
-							<div class="welcome-title">Welcome to Paw</div>
+							<img class="welcome-logo" data-brand-logo alt="" style="display:none;height:56px;max-width:200px;object-fit:contain;border-radius:10px">
+							<div class="welcome-title">Welcome to <span data-brand-name>Paw</span></div>
 							<p>Your autonomous agent workspace. Send a message to begin.</p>
 						</div>`)}
 						<div id="typing" class="msg-wrapper" style="display: none">
 							<div class="avatar bot-avatar">
-								<img src="/paw-logo.jpg" alt="Paw" />
+								<img src="/paw-logo.jpg" alt="" data-brand-avatar />
 							</div>
 							<div class="typing-indicator">
 								<span></span>
@@ -369,7 +370,12 @@ export function getChatScript(): string {
     if (!welcome) {
       var w = document.createElement("div");
       w.className = "chat-welcome";
-      w.innerHTML = '<div class="app-icon welcome-icon" style="width:56px;height:56px">${pawMark(31)}</div><div class="welcome-title">Welcome to Paw</div><p>Your autonomous agent workspace. Send a message to begin.</p>';
+      var bn = window.__brandName || "Paw";
+      var bl = window.__brandLogo;
+      var icon = bl
+        ? '<img class="welcome-logo" src="' + bl + '" alt="" style="height:56px;max-width:200px;object-fit:contain;border-radius:10px">'
+        : '<div class="app-icon welcome-icon" style="width:56px;height:56px">${pawMark(31)}</div>';
+      w.innerHTML = icon + '<div class="welcome-title">Welcome to ' + bn + '</div><p>Your autonomous agent workspace. Send a message to begin.</p>';
       messagesDiv.insertBefore(w, typingDiv);
     }
   }
@@ -954,7 +960,7 @@ export function getChatScript(): string {
     if (role === "user") {
       avatar.textContent = "U";
     } else {
-      avatar.innerHTML = '<img src="/paw-logo.jpg" alt="Paw" />';
+      avatar.innerHTML = '<img src="' + (window.__brandLogo || "/paw-logo.jpg") + '" alt="" />';
     }
 
     var bubble = document.createElement("div");

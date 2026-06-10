@@ -191,6 +191,114 @@ export function renderBrandTokensCss(brand: Brand | null): string {
 }
 
 /**
+ * App-chrome theme stylesheet: maps the active brand's palette + fonts onto the
+ * Paw design-system tokens (`--accent*`, `--bg-*`, `--text-*`, `--font-*`) so
+ * the whole console + auth screens re-skin to the brand. Served at
+ * `/api/brand/theme.css` and `<link>`ed by the chrome `<head>`s.
+ *
+ * Returns an empty (no-op) sheet when no brand is active — so the default Paw
+ * look is byte-for-byte unchanged. Only emits an override for the brand keys
+ * actually present, applied to BOTH `:root` and `:root.dark` (a brand defines a
+ * single white-label look); tokens the brand omits keep their light/dark DS
+ * behavior, so partial palettes degrade gracefully. All values are sanitized
+ * (hex/rgb colors, font-name stripping, Google-Fonts-only `@import`), then only
+ * composed via `var()` / `color-mix()` — no new injection surface.
+ */
+export function renderBrandAppThemeCss(brand: Brand | null): string {
+	if (!brand) return "/* no active brand */\n";
+	const c = brand.data.colors ?? {};
+	const f = brand.data.fonts ?? {};
+	const primary = safeColor(c.primary) ?? safeColor(c.accent);
+	const accent = safeColor(c.accent) ?? primary;
+	const bg = safeColor(c.bg);
+	const surface = safeColor(c.surface) ?? bg;
+	const text = safeColor(c.text);
+	const muted = safeColor(c.muted);
+	const display = safeFont(f.display);
+	const body = safeFont(f.body);
+	const mono = safeFont(f.mono);
+	const fontImport = safeGoogleFontsUrl(f.googleFontsUrl);
+
+	// Contrast anchor for deriving hover/border shades; brand text if given.
+	const anchor = text ?? "#15161b";
+	const onSurface = surface ?? bg ?? "#ffffff";
+	const m: string[] = [];
+
+	if (accent) {
+		m.push(`--accent: ${accent};`);
+		m.push(`--accent-hover: color-mix(in srgb, ${accent} 86%, #000);`);
+		m.push(`--accent-press: color-mix(in srgb, ${accent} 74%, #000);`);
+		m.push(`--accent-bright: color-mix(in srgb, ${accent} 82%, #fff);`);
+		m.push(`--accent-subtle: color-mix(in srgb, ${accent} 12%, transparent);`);
+		m.push(`--accent-line: color-mix(in srgb, ${accent} 30%, transparent);`);
+		m.push(`--border-focus: color-mix(in srgb, ${accent} 30%, transparent);`);
+		m.push(
+			`--accent-gradient: linear-gradient(150deg, color-mix(in srgb, ${accent} 82%, #fff), ${accent} 55%, color-mix(in srgb, ${accent} 74%, #000));`,
+		);
+	}
+	if (bg) {
+		m.push(`--bg-secondary: ${bg};`);
+		m.push(`--bg-sidebar: ${bg};`);
+	}
+	if (surface) {
+		m.push(`--bg-primary: ${surface};`);
+		m.push(`--bg-card: ${surface};`);
+		m.push(`--bg-input: ${surface};`);
+		m.push(`--bg-tertiary: color-mix(in srgb, ${surface} 93%, ${anchor});`);
+		m.push(`--bg-hover: color-mix(in srgb, ${surface} 93%, ${anchor});`);
+		m.push(`--bg-active: color-mix(in srgb, ${surface} 86%, ${anchor});`);
+		m.push(`--border-primary: color-mix(in srgb, ${surface} 86%, ${anchor});`);
+		m.push(
+			`--border-secondary: color-mix(in srgb, ${surface} 92%, ${anchor});`,
+		);
+		m.push(`--border-strong: color-mix(in srgb, ${surface} 74%, ${anchor});`);
+	}
+	if (text) {
+		m.push(`--text-primary: ${text};`);
+		m.push(`--text-secondary: color-mix(in srgb, ${text} 72%, ${onSurface});`);
+		m.push(
+			`--text-tertiary: ${muted ?? `color-mix(in srgb, ${text} 52%, ${onSurface})`};`,
+		);
+	} else if (muted) {
+		m.push(`--text-tertiary: ${muted};`);
+	}
+	if (body)
+		m.push(
+			`--font-sans: "${body}", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;`,
+		);
+	if (mono) m.push(`--font-mono: "${mono}", ui-monospace, monospace;`);
+	if (display) m.push(`--font-display: "${display}", var(--font-sans);`);
+
+	const header = fontImport ? `@import url("${fontImport}");\n` : "";
+	if (!m.length) return `${header}/* brand has no themeable tokens */\n`;
+	const displayRule = display
+		? "\nh1, h2, h3, .wordmark .name, .welcome-title { font-family: var(--font-display); }\n"
+		: "";
+	return `${header}/* brand UI theme: ${brand.name.replace(/[*/]/g, "")} */\n:root, :root.dark {\n  ${m.join("\n  ")}\n}\n${displayRule}`;
+}
+
+/**
+ * Slim identity for theming the Paw web UI (sidebar wordmark, favicon, page
+ * title, "Welcome to …" wording). Returns null when no brand is active so the
+ * UI falls back to the default Paw identity. Asset URLs reuse the public
+ * `/api/brand/asset/<id>/<file>` route.
+ */
+export function getBrandUi(
+	brand: Brand | null,
+	assetBase = "/api/brand/asset",
+): { name: string; logo: string | null; favicon: string | null } | null {
+	if (!brand) return null;
+	const asset = (file?: string) =>
+		file ? `${assetBase}/${brand.id}/${file}` : null;
+	const logos = brand.data.logos ?? {};
+	return {
+		name: brand.name,
+		logo: asset(logos.light) ?? asset(logos.icon),
+		favicon: asset(logos.favicon) ?? asset(logos.icon) ?? asset(logos.light),
+	};
+}
+
+/**
  * Compile the active brand into a compact text brief for the system prompt.
  * `assetBase` is the public URL prefix for this brand's assets.
  */
