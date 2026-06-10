@@ -45,6 +45,7 @@ import { parseUploadedFiles } from "./file-parser.js";
 import { createAuthMiddleware } from "./middleware/auth.js";
 import { createSecurityHeaders } from "./middleware/security-headers.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
+import { BrandPage } from "./views/brand-page.js";
 import { ConfigPage } from "./views/config-page.js";
 // canvas-page.tsx removed — canvas is now merged into chat
 import { CronPage } from "./views/cron-page.js";
@@ -55,6 +56,18 @@ import { MCPPage } from "./views/mcp-page.js";
 import { MemoryPage } from "./views/memory-page.js";
 import { SearchPage, type SearchHit } from "./views/search-page.js";
 import { getSessionMessages, searchMessages } from "../store/messages.js";
+import {
+	activateBrand,
+	compileBrandBrief,
+	createBrand,
+	deleteBrand,
+	getActiveBrand,
+	getBrand,
+	listBrands,
+	renderBrandTokensCss,
+	updateBrand,
+	type BrandDefinition,
+} from "../store/brands.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
 import { ToolsPage, type ToolLogRow } from "./views/tools-page.js";
 import { PromptsPage } from "./views/prompts-page.js";
@@ -1151,6 +1164,8 @@ export function createWebApp(
 	const canvasRoot = resolveProjectPath(
 		config.web.canvas?.root ?? "./data/canvas",
 	);
+	// Brand assets live next to the canvas workspace (same volume → persists).
+	const brandRoot = resolve(dirname(canvasRoot), "brand");
 
 	// In-memory event buffer for canvas polling (replaces SSE which Bun can't sustain)
 	const canvasEvents = new Map<
@@ -1376,6 +1391,22 @@ export function createWebApp(
 		}
 
 		const hasExistingFiles = canvasFilesSummary.length > 0;
+		// Brand compliance for generated canvases: link the shared brand
+		// stylesheet (centrally restyleable) and use its CSS variables + logo.
+		const activeBrand = getActiveBrand(kernel.database);
+		const brandLogo = activeBrand?.data.logos?.light
+			? `/api/brand/asset/${activeBrand.id}/${activeBrand.data.logos.light}`
+			: null;
+		const brandDirective = activeBrand
+			? [
+					`BRAND COMPLIANCE: An active brand ("${activeBrand.name}") is set. Keep this canvas on-brand by default.`,
+					'A brand stylesheet is served at /api/brand/tokens.css exposing CSS variables: <link rel="stylesheet" href="/api/brand/tokens.css"> in <head>, then use var(--brand-primary), var(--brand-accent), var(--brand-bg), var(--brand-surface), var(--brand-text), var(--brand-muted), var(--brand-font-display) and var(--brand-font-body) for colors and typography.',
+					brandLogo
+						? `Embed the brand logo where appropriate using <img src="${brandLogo}" alt="${activeBrand.name}">.`
+						: "",
+					"Match the brand's voice, tone and guidelines (provided in your brand_guidelines). Stay on-brand unless the user explicitly asks you to ignore or change the brand for this canvas.",
+				].filter(Boolean)
+			: [];
 		const canvasInstruction = [
 			"[CANVAS MODE] You are working in a live canvas environment.",
 			"You MUST use the canvas_write tool to create/update files (HTML, CSS, JS).",
@@ -1387,6 +1418,7 @@ export function createWebApp(
 			"Write complete, self-contained HTML files with inline CSS and JS when possible.",
 			"Organize related pages into folders with canvas_mkdir / canvas_move (e.g. 'sales-campaign/', 'blog/', 'cms/') so the workspace stays a tidy operations hub.",
 			"REAL BACKEND WIRING: to make a page's form/button actually capture data (leads, signups, contacts), FIRST call canvas_action_create (type 'strapi' for a CMS content-type, or 'hubspot' for a CRM contact) with a fieldMap, then build the page's <form action> to POST to the returned submitUrl with <input name> matching the fieldMap keys. Never fake a form that goes nowhere — wire it to a real action so submissions route to the CRM/CMS and appear in Submissions.",
+			...brandDirective,
 			// Reliability for weaker tool-callers: always emit the full
 			// document inline too. If the model forgets to call canvas_write,
 			// the server extracts this fenced block and writes it (see
@@ -2428,6 +2460,10 @@ export function createWebApp(
 		return c.html(SubmissionsPage({ actions, submissions, actionFilter }));
 	});
 
+	app.get("/brand", (c) => {
+		return c.html(BrandPage({ brands: listBrands(kernel.database) }));
+	});
+
 	app.get("/prompts", (c) => {
 		const prompts = listPrompts(kernel.database, 200);
 		return c.html(PromptsPage({ prompts }));
@@ -3341,6 +3377,178 @@ export function createWebApp(
 			}
 		}
 		return c.json({ ok: true, total: eps.length, connected });
+	});
+
+	// ===== Brand Kit =====
+	function brandAssetResolve(id: string, file: string): string | null {
+		if (!id || !file) return null;
+		const full = resolve(brandRoot, id, file);
+		const rel = relative(brandRoot, full);
+		if (rel.startsWith("..") || full.includes("\0")) return null;
+		return full;
+	}
+	const IMG_MIME: Record<string, string> = {
+		".png": "image/png",
+		".jpg": "image/jpeg",
+		".jpeg": "image/jpeg",
+		".gif": "image/gif",
+		".webp": "image/webp",
+		".svg": "image/svg+xml",
+		".ico": "image/x-icon",
+	};
+	function extForMime(mime: string): string {
+		const hit = Object.entries(IMG_MIME).find(([, v]) => v === mime);
+		return hit ? hit[0] : ".png";
+	}
+
+	// Public: brand CSS variables for the active (or ?brand=) brand.
+	app.get("/api/brand/tokens.css", (c) => {
+		const id = c.req.query("brand");
+		const brand = id
+			? getBrand(kernel.database, id)
+			: getActiveBrand(kernel.database);
+		c.header("Content-Type", "text/css; charset=utf-8");
+		c.header("Cache-Control", "no-cache");
+		return c.body(renderBrandTokensCss(brand));
+	});
+
+	// Public: serve a brand asset file (logo etc.).
+	app.get("/api/brand/asset/*", async (c) => {
+		const prefix = "/api/brand/asset/";
+		const rest = decodeURIComponent(c.req.path.slice(prefix.length));
+		const slash = rest.indexOf("/");
+		const id = slash > 0 ? rest.slice(0, slash) : "";
+		const file = slash > 0 ? rest.slice(slash + 1) : "";
+		const full = brandAssetResolve(id, file);
+		if (!full || !existsSync(full) || statSync(full).isDirectory()) {
+			return c.text("Not found", 404);
+		}
+		c.header("Content-Type", IMG_MIME[extname(full).toLowerCase()] ?? "application/octet-stream");
+		c.header("Cache-Control", "public, max-age=300");
+		return c.body(await Bun.file(full).arrayBuffer());
+	});
+
+	// --- Auth-guarded brand management ---
+	app.get("/api/brands", (c) => c.json({ brands: listBrands(kernel.database) }));
+
+	app.post("/api/brands", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as {
+			name?: string;
+			data?: Partial<BrandDefinition>;
+		};
+		const name = (body.name ?? "").trim();
+		if (!name) return c.json({ error: "Brand name is required" }, 400);
+		const brand = createBrand(kernel.database, name, body.data ?? {});
+		return c.json({ ok: true, brand }, 201);
+	});
+
+	app.put("/api/brands/:id", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as {
+			name?: string;
+			data?: Partial<BrandDefinition>;
+		};
+		const brand = updateBrand(kernel.database, c.req.param("id"), body);
+		if (!brand) return c.json({ error: "Brand not found" }, 404);
+		return c.json({ ok: true, brand });
+	});
+
+	app.delete("/api/brands/:id", (c) => {
+		const ok = deleteBrand(kernel.database, c.req.param("id"));
+		return c.json({ ok }, ok ? 200 : 404);
+	});
+
+	app.post("/api/brands/:id/activate", (c) => {
+		const ok = activateBrand(kernel.database, c.req.param("id"));
+		return c.json({ ok }, ok ? 200 : 404);
+	});
+
+	// Upload a logo (base64) into a brand's asset dir, recording the filename.
+	app.post("/api/brands/:id/logo", async (c) => {
+		const id = c.req.param("id");
+		const brand = getBrand(kernel.database, id);
+		if (!brand) return c.json({ error: "Brand not found" }, 404);
+		const body = (await c.req.json().catch(() => ({}))) as {
+			slot?: string;
+			data?: string;
+			mimeType?: string;
+		};
+		const slot = ["light", "dark", "icon", "favicon"].includes(body.slot ?? "")
+			? (body.slot as "light" | "dark" | "icon" | "favicon")
+			: "light";
+		const mime = body.mimeType ?? "";
+		if (!body.data || !IMG_MIME[extForMime(mime)] || !mime.startsWith("image/")) {
+			return c.json({ error: "An image file is required" }, 400);
+		}
+		const buf = Buffer.from(body.data, "base64");
+		if (buf.length > 2_000_000) {
+			return c.json({ error: "Logo too large (max 2MB)" }, 400);
+		}
+		const filename = `logo-${slot}${extForMime(mime)}`;
+		const dir = resolve(brandRoot, id);
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(resolve(dir, filename), buf);
+		updateBrand(kernel.database, id, {
+			data: { logos: { ...brand.data.logos, [slot]: filename } },
+		});
+		return c.json({
+			ok: true,
+			slot,
+			url: `/api/brand/asset/${id}/${filename}`,
+		});
+	});
+
+	// AI-assisted setup: the agent (vision) reads an uploaded logo/brand-guide
+	// and proposes brand fields to pre-fill the form.
+	app.post("/api/brands/analyze", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as {
+			data?: string;
+			mimeType?: string;
+		};
+		if (!body.data || !body.mimeType?.startsWith("image/")) {
+			return c.json({ error: "An image is required" }, 400);
+		}
+		const prompt =
+			"You are a brand designer. Study this logo / brand asset and infer the brand identity. " +
+			"Respond with ONLY a JSON object (no prose, no code fences): " +
+			'{"name": string, "tagline": string, "colors": {"primary":"#hex","accent":"#hex","bg":"#hex","surface":"#hex","text":"#hex","muted":"#hex"}, ' +
+			'"fonts": {"display": string, "body": string}, "voice": string, "guidelines": string}. ' +
+			"Use hex colors actually present in the asset; pick web-safe font families that match the style.";
+		try {
+			const res = await kernel.aiProvider.chat(
+				[
+					{
+						role: "user",
+						content: prompt,
+						attachments: [
+							{
+								type: "image",
+								data: Buffer.from(body.data, "base64"),
+								mimeType: body.mimeType,
+							},
+						],
+					},
+				],
+				"You analyze brand assets and return strict JSON.",
+				`brand-analyze-${Date.now()}`,
+				{},
+			);
+			const text = (res.text ?? "").trim();
+			const jsonStr = text
+				.replace(/^```(?:json)?\s*/i, "")
+				.replace(/\s*```\s*$/i, "")
+				.trim();
+			const suggestion = JSON.parse(jsonStr);
+			return c.json({ ok: true, suggestion });
+		} catch (err) {
+			return c.json(
+				{
+					error:
+						"Could not analyze the image. The model may not support vision, or returned unparseable output.",
+					detail: err instanceof Error ? err.message : String(err),
+				},
+				422,
+			);
+		}
 	});
 
 	app.delete("/api/mcp/servers/:name", async (c) => {
