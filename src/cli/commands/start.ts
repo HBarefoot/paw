@@ -58,6 +58,24 @@ export async function startCommand(): Promise<void> {
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);
 
+	// Last-resort handlers so a stray error in one request can't silently take
+	// the whole server down (which surfaces in the browser as ERR_CONNECTION_
+	// REFUSED with no clue why). We log loudly and keep serving. NOTE: this
+	// can't catch an OS OOM-kill — that's bounded separately by the provider's
+	// generation caps (see OllamaProvider MAX_RESPONSE_CHARS / num_predict).
+	process.on("unhandledRejection", (reason) => {
+		console.error(
+			"\n  ⚠ Unhandled promise rejection (server kept alive):\n   ",
+			reason instanceof Error ? reason.stack || reason.message : reason,
+		);
+	});
+	process.on("uncaughtException", (err) => {
+		console.error(
+			"\n  ⚠ Uncaught exception (server kept alive):\n   ",
+			err?.stack || err?.message || err,
+		);
+	});
+
 	await kernel.boot();
 
 	if (config.web.enabled) {

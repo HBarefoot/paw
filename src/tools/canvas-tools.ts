@@ -1,4 +1,4 @@
-import { resolve, relative } from "node:path";
+import { resolve, relative, dirname } from "node:path";
 import {
 	existsSync,
 	statSync,
@@ -6,6 +6,8 @@ import {
 	mkdirSync,
 	realpathSync,
 	readFileSync,
+	rmSync,
+	renameSync,
 } from "node:fs";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
 import type { Database } from "bun:sqlite";
@@ -178,5 +180,133 @@ export function createCanvasTools(config: CanvasToolsConfig): ToolDefinition[] {
 		},
 	};
 
-	return [canvasWrite, canvasRead, canvasList];
+	const canvasMkdir: ToolDefinition = {
+		name: "canvas_mkdir",
+		description:
+			"Create a folder in the canvas workspace. Use to organize canvases by department/operation (e.g. 'sales-campaign', 'cms/blog'). Creates parent folders automatically.",
+		plugin: "kernel",
+		input_schema: {
+			type: "object",
+			properties: {
+				path: {
+					type: "string",
+					description:
+						"Folder path relative to canvas root (e.g. 'sales-campaign')",
+				},
+			},
+			required: ["path"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			const rel = (input.path as string)?.trim();
+			if (!rel || rel === "." || rel === "/")
+				return { content: "Error: invalid folder path", is_error: true };
+			const dirPath = safePath(rel, root);
+			if (!dirPath)
+				return {
+					content: "Error: path is outside canvas root",
+					is_error: true,
+				};
+			mkdirSync(dirPath, { recursive: true });
+			return { content: JSON.stringify({ created: true, path: rel }) };
+		},
+	};
+
+	const canvasDelete: ToolDefinition = {
+		name: "canvas_delete",
+		description:
+			"Delete a file or folder (recursively) from the canvas workspace. Use with care — this is permanent.",
+		plugin: "kernel",
+		input_schema: {
+			type: "object",
+			properties: {
+				path: {
+					type: "string",
+					description: "File or folder path relative to canvas root",
+				},
+			},
+			required: ["path"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			const rel = (input.path as string)?.trim();
+			// Refuse empty/root deletes that would wipe the whole workspace.
+			if (!rel || rel === "." || rel === "/" || rel === "./")
+				return {
+					content: "Error: refusing to delete the canvas root",
+					is_error: true,
+				};
+			const target = safePath(rel, root);
+			if (!target)
+				return {
+					content: "Error: path is outside canvas root",
+					is_error: true,
+				};
+			if (resolve(target) === root)
+				return {
+					content: "Error: refusing to delete the canvas root",
+					is_error: true,
+				};
+			if (!existsSync(target))
+				return { content: `Error: not found: ${rel}`, is_error: true };
+			rmSync(target, { recursive: true, force: true });
+			return { content: JSON.stringify({ deleted: true, path: rel }) };
+		},
+	};
+
+	const canvasMove: ToolDefinition = {
+		name: "canvas_move",
+		description:
+			"Move or rename a file or folder within the canvas workspace (e.g. move 'index.html' into 'sales-campaign/index.html').",
+		plugin: "kernel",
+		input_schema: {
+			type: "object",
+			properties: {
+				from: {
+					type: "string",
+					description: "Current path relative to canvas root",
+				},
+				to: {
+					type: "string",
+					description: "Destination path relative to canvas root",
+				},
+			},
+			required: ["from", "to"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			const fromRel = (input.from as string)?.trim();
+			const toRel = (input.to as string)?.trim();
+			if (!fromRel || !toRel)
+				return {
+					content: "Error: 'from' and 'to' are required",
+					is_error: true,
+				};
+			const fromPath = safePath(fromRel, root);
+			const toPath = safePath(toRel, root);
+			if (!fromPath || !toPath)
+				return {
+					content: "Error: path is outside canvas root",
+					is_error: true,
+				};
+			if (!existsSync(fromPath))
+				return { content: `Error: not found: ${fromRel}`, is_error: true };
+			if (existsSync(toPath))
+				return {
+					content: `Error: destination exists: ${toRel}`,
+					is_error: true,
+				};
+			mkdirSync(dirname(toPath), { recursive: true });
+			renameSync(fromPath, toPath);
+			return {
+				content: JSON.stringify({ moved: true, from: fromRel, to: toRel }),
+			};
+		},
+	};
+
+	return [
+		canvasWrite,
+		canvasRead,
+		canvasList,
+		canvasMkdir,
+		canvasDelete,
+		canvasMove,
+	];
 }

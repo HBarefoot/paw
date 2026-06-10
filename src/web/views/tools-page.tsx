@@ -43,22 +43,34 @@ export const ToolsPage: FC<ToolsPageProps> = ({
 	return (
 		<Layout title="Tool Executions" currentPath="/tools">
 			<div class="grid mb-md">
-				<div class="card">
-					<h3>Total calls</h3>
-					<div class="stat-value">{summary.total}</div>
+				<div class="card metric">
+					<span class="m-label">Total calls</span>
+					<span class="m-value">{summary.total}</span>
+					<span class="m-sub">all tools · all time</span>
 				</div>
-				<div class="card">
-					<h3>Errors</h3>
-					<div class="stat-value">{summary.errors}</div>
-					<div class="stat-label">
-						{summary.total > 0
-							? `${((summary.errors / summary.total) * 100).toFixed(1)}% error rate`
-							: "no data"}
-					</div>
+				<div class="card metric">
+					<span class="m-label">Errors</span>
+					<span
+						class="m-value"
+						style={summary.errors > 0 ? "color:var(--danger)" : ""}
+					>
+						{summary.errors}
+					</span>
+					<span class="m-sub">
+						{summary.total > 0 ? (
+							<span class={summary.errors > 0 ? "m-delta-down" : "m-delta-up"}>
+								{((summary.errors / summary.total) * 100).toFixed(1)}% error
+								rate
+							</span>
+						) : (
+							"no data"
+						)}
+					</span>
 				</div>
-				<div class="card">
-					<h3>Avg duration</h3>
-					<div class="stat-value">{formatDuration(summary.avgDurationMs)}</div>
+				<div class="card metric">
+					<span class="m-label">Avg duration</span>
+					<span class="m-value">{formatDuration(summary.avgDurationMs)}</span>
+					<span class="m-sub mono">p50 latency</span>
 				</div>
 			</div>
 
@@ -128,7 +140,9 @@ export const ToolsPage: FC<ToolsPageProps> = ({
 										<td class="text-xs text-muted">{r.plugin ?? "—"}</td>
 										<td class="text-xs">{formatDuration(r.duration_ms)}</td>
 										<td>
-											<span class={`badge ${r.is_error ? "danger" : "success"}`}>
+											<span
+												class={`badge ${r.is_error ? "danger" : "success"}`}
+											>
 												{r.is_error ? "error" : "ok"}
 											</span>
 										</td>

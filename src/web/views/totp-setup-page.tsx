@@ -8,150 +8,174 @@ interface TotpSetupPageProps {
 	csrfToken?: string;
 }
 
+// Paw "control-room" TOTP setup — violet accent, Geist, near-black hero.
+// Standalone page: tokens are inlined since it doesn't load the app shell.
 const totpCss = `
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg-0: #08090b; --bg-1: #0e0f13; --bg-2: #15161b;
+    --border: #23252c; --border-strong: #313440;
+    --text-0: #f4f5f7; --text-1: #a6abb5; --text-2: #6b7079; --text-3: #474b53;
+    --accent: #7458f5; --accent-hover: #876ef8; --accent-press: #6446e8;
+    --accent-bright: #a78bfa; --accent-soft: rgba(116,88,245,.15); --accent-line: rgba(116,88,245,.35);
+    --danger: #f87171;
+    --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: "Geist Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+  }
   body {
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    background: #f8f9fb;
-    color: #111827;
+    font-family: var(--font-sans);
+    background: var(--bg-0);
+    color: var(--text-0);
     display: flex;
     align-items: center;
     justify-content: center;
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    position: relative;
+    overflow: hidden;
   }
-  @media (prefers-color-scheme: dark) {
-    body { background: #09090b; color: #f4f4f5; }
-    .setup-card { background: #131316; border-color: #27272a; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.4); }
-    .setup-header h1 { color: #f4f4f5; }
-    .setup-header p { color: #a1a1aa; }
-    .form-group label { color: #d4d4d8; }
-    input { background: #1e1e22; border-color: #3f3f46; color: #f4f4f5; }
-    input::placeholder { color: #71717a; }
-    input:focus { border-color: #818cf8; box-shadow: 0 0 0 3px rgba(99,102,241,0.2); }
-    .secret-box { background: #1e1e22; border-color: #3f3f46; }
-    .secret-label { color: #a1a1aa; }
-    .secret-value { color: #f4f4f5; }
-    .uri-box { color: #a1a1aa; }
-    .uri-box code { background: #27272a; color: #d4d4d8; }
-    .skip-link { color: #a1a1aa; }
-    .skip-link:hover { color: #818cf8; }
-    .error-msg { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); }
-    .setup-footer { color: #71717a; }
+  body::before {
+    content: '';
+    position: absolute;
+    top: 40%; left: 50%;
+    width: 720px; height: 720px;
+    background: radial-gradient(circle, var(--accent-soft) 0%, rgba(8,9,11,0) 68%);
+    transform: translate(-50%, -50%);
+    filter: blur(14px);
+    z-index: 0; pointer-events: none;
   }
   .setup-card {
-    background: #ffffff;
-    border: 1px solid #e2e4e9;
-    border-radius: 12px;
+    position: relative; z-index: 1;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 18px;
     padding: 40px;
     width: 100%;
     max-width: 440px;
-    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.07);
+    box-shadow: 0 24px 60px -12px rgba(0,0,0,.7);
   }
   .setup-header {
     text-align: center;
     margin-bottom: 24px;
   }
-  .setup-header h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; color: #111827; }
-  .setup-header p { font-size: 14px; color: #4b5563; margin: 0; line-height: 1.5; }
+  .setup-header h1 { font-size: 21px; font-weight: 600; letter-spacing: -.03em; margin: 0 0 8px; color: var(--text-0); }
+  .setup-header p { font-size: 14px; color: var(--text-1); margin: 0; line-height: 1.5; }
   .secret-box {
-    background: #f8f9fb;
-    border: 1px solid #e2e4e9;
-    border-radius: 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 9px;
     padding: 14px;
     margin: 20px 0;
     text-align: center;
   }
   .secret-label {
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
     font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #4b5563;
+    letter-spacing: 0.1em;
+    color: var(--text-2);
     margin-bottom: 8px;
   }
   .secret-value {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-mono);
     font-size: 16px;
     font-weight: 500;
     letter-spacing: 0.1em;
     word-break: break-all;
-    color: #111827;
+    color: var(--accent-bright);
   }
   .uri-box {
     margin: 12px 0 20px;
     font-size: 12px;
-    color: #4b5563;
+    color: var(--text-2);
     word-break: break-all;
   }
   .uri-box code {
-    background: #f0f2f5;
-    padding: 2px 4px;
-    border-radius: 4px;
+    background: var(--bg-2);
+    padding: 2px 5px;
+    border-radius: 5px;
+    font-family: var(--font-mono);
     font-size: 11px;
-    color: #374151;
+    color: var(--text-1);
   }
   .form-group { margin-bottom: 16px; }
   .form-group label {
     display: block;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
     font-weight: 500;
-    color: #374151;
-    margin-bottom: 6px;
+    color: var(--text-2);
+    margin-bottom: 7px;
   }
   .form-group input {
     width: 100%;
-    padding: 10px 14px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
+    padding: 11px 14px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
     font-size: 14px;
     font-family: inherit;
-    color: #111827;
-    background: #ffffff;
+    color: var(--text-0);
+    background: var(--bg-2);
     outline: none;
-    transition: border-color 150ms, box-shadow 150ms;
+    transition: border-color .16s, box-shadow .16s, background .16s;
   }
-  .form-group input::placeholder { color: #9ca3af; }
+  .form-group input::placeholder { color: var(--text-3); }
   .form-group input:focus {
-    border-color: #6366f1;
-    box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    background: var(--bg-1);
   }
   .setup-btn {
     width: 100%;
-    padding: 10px;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
-    color: white;
-    border: none;
-    border-radius: 8px;
+    padding: 11px;
+    background: var(--accent);
+    color: #fff;
+    border: 1px solid transparent;
+    border-radius: 9px;
     font-size: 14px;
-    font-weight: 500;
+    font-weight: 600;
+    letter-spacing: -.01em;
     cursor: pointer;
     font-family: inherit;
+    box-shadow: 0 1px 0 rgba(255,255,255,.12) inset;
+    transition: all .16s cubic-bezier(.22,.61,.36,1);
   }
-  .setup-btn:hover { opacity: 0.9; }
+  .setup-btn:hover {
+    background: var(--accent-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 0 0 1px var(--accent-line), 0 10px 40px -8px rgba(116,88,245,.45);
+  }
+  .setup-btn:active { background: var(--accent-press); transform: translateY(0); }
   .skip-link {
     display: block;
     text-align: center;
     margin-top: 16px;
     font-size: 13px;
-    color: #4b5563;
+    color: var(--text-2);
     text-decoration: none;
+    transition: color .16s;
   }
-  .skip-link:hover { color: #6366f1; }
+  .skip-link:hover { color: var(--accent-bright); }
   .error-msg {
-    background: rgba(239,68,68,0.1);
-    color: #ef4444;
+    background: rgba(248,113,113,.14);
+    color: var(--danger);
     padding: 10px 14px;
-    border-radius: 8px;
+    border-radius: 9px;
     font-size: 13px;
     margin-bottom: 16px;
-    border: 1px solid rgba(239,68,68,0.2);
+    border: 1px solid rgba(248,113,113,.3);
   }
   .setup-footer {
     text-align: center;
     margin-top: 24px;
-    font-size: 12px;
-    color: #6b7280;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: .04em;
+    color: var(--text-2);
   }
 `;
 
@@ -171,7 +195,7 @@ export const TotpSetupPage: FC<TotpSetupPageProps> = ({
 				`<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`,
 			)}
 			<link
-				href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+				href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
 				rel="stylesheet"
 			/>
 			<title>TOTP Setup - Paw</title>

@@ -177,6 +177,14 @@ export const configSchema = z.object({
 			timeout: z.number().int().positive().default(10_000),
 		})
 		.default({}),
+	hubspot: z
+		.object({
+			enabled: z.boolean().default(false),
+			// Private-app access token. Sent as Authorization: Bearer.
+			token: z.string().default(""),
+			timeout: z.number().int().positive().default(10_000),
+		})
+		.default({}),
 	mcpServers: z
 		.record(
 			z.string(),

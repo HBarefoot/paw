@@ -59,116 +59,197 @@ export const DashboardPage: FC<DashboardProps> = ({
 	const formatUsd = (n: number): string =>
 		n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`;
 
+	const healthEntries = Object.entries(health);
+	const healthyCount = healthEntries.filter(([, r]) => r.ok).length;
+	const totalServices = healthEntries.length;
+	const allHealthy = totalServices > 0 && healthyCount === totalServices;
+	const totalTokens = usage
+		? usage.totalInputTokens + usage.totalOutputTokens
+		: 0;
+
+	// Sparkline values drawn from real category/provider distribution —
+	// not a fabricated time series. Tallest bar gets the bright accent.
+	const sparkValues: number[] = memoryStats
+		? Object.values(memoryStats.byCategory)
+		: usage
+			? Object.values(usage.byProvider).map(
+					(v) => v.inputTokens + v.outputTokens,
+				)
+			: [];
+	const sparkMax = Math.max(...sparkValues, 1);
+
 	return (
 		<Layout title="Dashboard" currentPath="/">
+			{/* Status strip */}
+			<div class="flex items-center gap-sm flex-wrap mb-md">
+				<span class="badge badge-neutral" style="gap:8px">
+					{allHealthy ? (
+						<span class="live-dot" />
+					) : (
+						<span
+							class="dot"
+							style={`background:${totalServices === 0 ? "var(--text-tertiary)" : "var(--warning)"}`}
+						/>
+					)}
+					{totalServices > 0
+						? `${healthyCount}/${totalServices} services healthy`
+						: "no plugins running"}
+				</span>
+				<span class="badge badge-accent">{provider}</span>
+				{plugins.length > 0 && (
+					<span class="badge badge-neutral">
+						{plugins.length} plugin{plugins.length === 1 ? "" : "s"}
+					</span>
+				)}
+				<span class="badge badge-neutral mono">up {uptimeStr}</span>
+			</div>
+
+			{/* Metric tiles */}
 			<div class="grid">
-				<div class="card">
-					<h3>System</h3>
-					<div class="stat-value">{uptimeStr}</div>
-					<div class="stat-label">Uptime</div>
-					<p class="mt-sm text-secondary">
-						Provider: <strong>{provider}</strong>
-					</p>
-					<p class="text-secondary">
-						Plugins: <strong>{plugins.join(", ") || "none"}</strong>
-					</p>
+				<div class="card metric">
+					<span class="m-label">Uptime</span>
+					<span class="m-value">{uptimeStr}</span>
+					<span class="m-sub">
+						<span>
+							provider <span class="mono">{provider}</span>
+						</span>
+					</span>
 				</div>
 
+				<div class="card metric">
+					<span class="m-label">Memories</span>
+					<span class="m-value">
+						{memoryStats ? memoryStats.totalMemories : "—"}
+					</span>
+					<span class="m-sub">
+						{memoryStats
+							? `${Object.keys(memoryStats.byCategory).length} categories`
+							: "memory disabled"}
+					</span>
+				</div>
+
+				{usage ? (
+					<div class="card metric">
+						<span class="m-label">Tokens · 7d</span>
+						<span class="m-value">{formatTokens(totalTokens)}</span>
+						<span class="m-sub">
+							<span class="mono">{formatUsd(usage.estimatedCostUsd)}</span> est.
+							cost
+						</span>
+					</div>
+				) : (
+					<div class="card metric">
+						<span class="m-label">Services</span>
+						<span
+							class="m-value"
+							style={allHealthy ? "" : "color:var(--warning)"}
+						>
+							{totalServices > 0 ? `${healthyCount}/${totalServices}` : "0"}
+						</span>
+						<span class="m-sub">healthy</span>
+					</div>
+				)}
+
+				{totals ? (
+					<div class="card metric">
+						<span class="m-label">Sessions</span>
+						<span class="m-value">{totals.sessions}</span>
+						<span class="m-sub">
+							<span class="mono">{totals.messages}</span> messages
+						</span>
+					</div>
+				) : feedback ? (
+					<div class="card metric">
+						<span class="m-label">Feedback · 7d</span>
+						<span class="m-value">
+							{feedback.thumbsUp + feedback.thumbsDown}
+						</span>
+						<span class="m-sub">
+							<span class="m-delta-up">▲ {feedback.thumbsUp}</span>
+							<span class="m-delta-down">▼ {feedback.thumbsDown}</span>
+							<span class="mono">{feedback.corrections} fixes</span>
+						</span>
+					</div>
+				) : (
+					<div class="card metric">
+						<span class="m-label">Plugins</span>
+						<span class="m-value">{plugins.length}</span>
+						<span class="m-sub">{plugins.join(", ") || "none"}</span>
+					</div>
+				)}
+			</div>
+
+			{/* Distribution + health feed */}
+			<div class="dash-split">
 				<div class="card">
-					<h3>Memory</h3>
-					{memoryStats ? (
-						<div>
-							<div class="stat-value">{memoryStats.totalMemories}</div>
-							<div class="stat-label">Memories stored</div>
-							{Object.entries(memoryStats.byCategory).map(([cat, count]) => (
-								<p class="mt-sm text-secondary">
-									{cat}: {count}
-								</p>
-							))}
-						</div>
+					<div class="flex justify-between items-center mb-md">
+						<span class="label-xs">
+							{memoryStats
+								? "Memory by category"
+								: usage
+									? "Tokens by provider"
+									: "Distribution"}
+						</span>
+						{usage && <span class="badge badge-accent">7d</span>}
+					</div>
+					{sparkValues.length > 0 ? (
+						<>
+							<div class="spark" style="height:90px">
+								{sparkValues.map((v) => (
+									<span
+										class={v === sparkMax ? "hi" : ""}
+										style={`height:${Math.max(6, Math.round((v / sparkMax) * 100))}%`}
+									/>
+								))}
+							</div>
+							<div class="flex flex-wrap gap-sm mt-sm">
+								{memoryStats
+									? Object.entries(memoryStats.byCategory).map(([cat, n]) => (
+											<span class="text-xs text-muted mono">
+												{cat}:{n}
+											</span>
+										))
+									: usage
+										? Object.entries(usage.byProvider).map(([name, v]) => (
+												<span class="text-xs text-muted mono">
+													{name}:{formatTokens(v.inputTokens + v.outputTokens)}
+												</span>
+											))
+										: null}
+							</div>
+						</>
 					) : (
 						<div class="empty-state">
-							<p>Memory system disabled</p>
+							<p>No activity data yet</p>
 						</div>
 					)}
 				</div>
 
-				{usage && (
-					<div class="card">
-						<h3>Usage (7d)</h3>
-						<div class="stat-value">
-							{formatTokens(
-								usage.totalInputTokens + usage.totalOutputTokens,
-							)}
-						</div>
-						<div class="stat-label">Tokens total</div>
-						<p class="mt-sm text-secondary">
-							Estimated cost:{" "}
-							<strong>{formatUsd(usage.estimatedCostUsd)}</strong>
-						</p>
-						{Object.keys(usage.byProvider).length > 0 && (
-							<div class="mt-sm">
-								{Object.entries(usage.byProvider).map(([name, v]) => (
-									<p class="text-xs text-muted">
-										{name}: {formatTokens(v.inputTokens + v.outputTokens)}{" "}
-										tokens · {formatUsd(v.costUsd)}
-									</p>
-								))}
+				<div class="card">
+					<span class="label-xs">System health</span>
+					<div class="flex-col gap-sm mt-sm">
+						{healthEntries.map(([name, result]) => (
+							<div class="flex items-center gap-sm justify-between">
+								<span class="flex items-center gap-sm">
+									<span
+										class="dot"
+										style={`width:7px;height:7px;border-radius:50%;flex:none;background:${result.ok ? "var(--success)" : "var(--danger)"}`}
+									/>
+									<span class="text-sm">{name}</span>
+								</span>
+								<span
+									class={`badge ${result.ok ? "badge-success" : "badge-danger"}`}
+								>
+									{result.ok ? "ok" : "fail"}
+								</span>
+							</div>
+						))}
+						{totalServices === 0 && (
+							<div class="empty-state">
+								<p>No plugins running</p>
 							</div>
 						)}
 					</div>
-				)}
-
-				{feedback && (
-					<div class="card">
-						<h3>Feedback</h3>
-						<div class="flex gap-sm items-center">
-							<span class="badge success">
-								👍 {feedback.thumbsUp}
-							</span>
-							<span class="badge danger">
-								👎 {feedback.thumbsDown}
-							</span>
-							<span class="badge warning">
-								✎ {feedback.corrections} corrections
-							</span>
-						</div>
-						<p class="text-xs text-muted mt-sm">
-							Last 7 days — corrections feed the feedback context so future
-							responses avoid repeat mistakes.
-						</p>
-					</div>
-				)}
-
-				{totals && (
-					<div class="card">
-						<h3>Totals</h3>
-						<div class="stat-value">{totals.sessions}</div>
-						<div class="stat-label">Sessions</div>
-						<p class="mt-sm text-secondary">
-							Messages: <strong>{totals.messages}</strong>
-						</p>
-					</div>
-				)}
-
-				<div class="card">
-					<h3>Health</h3>
-					{Object.entries(health).map(([name, result]) => (
-						<div
-							class="flex justify-between items-center"
-							style="padding: 6px 0"
-						>
-							<span>{name}</span>
-							<span class={`badge ${result.ok ? "success" : "error"}`}>
-								{result.ok ? "OK" : "FAIL"}
-							</span>
-						</div>
-					))}
-					{Object.keys(health).length === 0 && (
-						<div class="empty-state">
-							<p>No plugins running</p>
-						</div>
-					)}
 				</div>
 			</div>
 

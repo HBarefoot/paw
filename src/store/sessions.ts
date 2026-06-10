@@ -125,10 +125,36 @@ export function getSessionWithMessages(
 	return { session, messages };
 }
 
+/**
+ * Run a write that may touch the messages_fts virtual table. If that index is
+ * corrupt (SQLITE_CORRUPT_VTAB), rebuild it once and retry so a damaged search
+ * index can't wedge message/session deletes. The index is derived data.
+ */
+function withFtsHeal<T>(db: Database, fn: () => T): T {
+	try {
+		return fn();
+	} catch (err) {
+		const corrupt =
+			err != null &&
+			typeof err === "object" &&
+			((err as { code?: string }).code === "SQLITE_CORRUPT_VTAB" ||
+				/malformed|corrupt/i.test((err as { message?: string }).message ?? ""));
+		if (!corrupt) throw err;
+		try {
+			db.exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild');");
+		} catch {
+			// best-effort; the retry below may still surface the original error
+		}
+		return fn();
+	}
+}
+
 export function deleteSession(db: Database, id: string): boolean {
-	db.run("DELETE FROM messages WHERE session_id = ?", [id]);
-	const result = db.run("DELETE FROM sessions WHERE id = ?", [id]);
-	return result.changes > 0;
+	return withFtsHeal(db, () => {
+		db.run("DELETE FROM messages WHERE session_id = ?", [id]);
+		const result = db.run("DELETE FROM sessions WHERE id = ?", [id]);
+		return result.changes > 0;
+	});
 }
 
 export function deleteSessionOwnedBy(
@@ -136,15 +162,17 @@ export function deleteSessionOwnedBy(
 	id: string,
 	userId: string,
 ): boolean {
-	const result = db.run(
-		"DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE id = ? AND user_id = ?)",
-		[id, userId],
-	);
-	const sessionResult = db.run(
-		"DELETE FROM sessions WHERE id = ? AND user_id = ?",
-		[id, userId],
-	);
-	return result.changes > 0 || sessionResult.changes > 0;
+	return withFtsHeal(db, () => {
+		const result = db.run(
+			"DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE id = ? AND user_id = ?)",
+			[id, userId],
+		);
+		const sessionResult = db.run(
+			"DELETE FROM sessions WHERE id = ? AND user_id = ?",
+			[id, userId],
+		);
+		return result.changes > 0 || sessionResult.changes > 0;
+	});
 }
 
 export function updateSessionTitle(

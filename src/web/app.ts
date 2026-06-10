@@ -5,11 +5,13 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
+	renameSync,
 	rmSync,
 	statSync,
 	watch,
+	writeFileSync,
 } from "node:fs";
-import { extname, relative, resolve } from "node:path";
+import { dirname, extname, relative, resolve } from "node:path";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { getCookie, setCookie } from "hono/cookie";
@@ -69,14 +71,16 @@ import {
 	saveCredentials,
 	type StoredCredentials,
 } from "../auth/credential-store.js";
-import {
-	exportSession,
-	type ExportFormat,
-} from "./exporters.js";
+import { exportSession, type ExportFormat } from "./exporters.js";
 import { SessionDetailPage, SessionsListPage } from "./views/sessions-page.js";
 import { SkillsPage } from "./views/skills-page.js";
 import { TotpSetupPage } from "./views/totp-setup-page.js";
 import { WebhooksPage } from "./views/webhooks-page.js";
+import {
+	SubmissionsPage,
+	type CanvasAction,
+	type CanvasSubmission,
+} from "./views/submissions-page.js";
 
 // Fields that cannot be modified through the web config form
 const BLOCKED_CONFIG_FIELDS = new Set([
@@ -125,11 +129,9 @@ function computeSecretStatuses(): SecretStatusRow[] {
 		id: "anthropic",
 		label: "Anthropic API key",
 		set:
-			(creds.anthropic?.method === "api_key" &&
-				!!creds.anthropic.apiKey) ||
+			(creds.anthropic?.method === "api_key" && !!creds.anthropic.apiKey) ||
 			envSet(process.env.ANTHROPIC_API_KEY),
-		fromEnv:
-			!creds.anthropic?.apiKey && envSet(process.env.ANTHROPIC_API_KEY),
+		fromEnv: !creds.anthropic?.apiKey && envSet(process.env.ANTHROPIC_API_KEY),
 	});
 	rows.push({
 		id: "openai",
@@ -146,50 +148,43 @@ function computeSecretStatuses(): SecretStatusRow[] {
 	rows.push({
 		id: "ollama",
 		label: "Ollama API key",
-		set:
-			!!creds.ollama?.apiKey || envSet(process.env.PAW_OLLAMA_API_KEY),
-		fromEnv:
-			!creds.ollama?.apiKey && envSet(process.env.PAW_OLLAMA_API_KEY),
+		set: !!creds.ollama?.apiKey || envSet(process.env.PAW_OLLAMA_API_KEY),
+		fromEnv: !creds.ollama?.apiKey && envSet(process.env.PAW_OLLAMA_API_KEY),
 	});
 	rows.push({
 		id: "slack.bot",
 		label: "Slack bot token",
 		set: !!creds.slack?.botToken || envSet(process.env.SLACK_BOT_TOKEN),
-		fromEnv:
-			!creds.slack?.botToken && envSet(process.env.SLACK_BOT_TOKEN),
+		fromEnv: !creds.slack?.botToken && envSet(process.env.SLACK_BOT_TOKEN),
 	});
 	rows.push({
 		id: "slack.app",
 		label: "Slack app token",
 		set: !!creds.slack?.appToken || envSet(process.env.SLACK_APP_TOKEN),
-		fromEnv:
-			!creds.slack?.appToken && envSet(process.env.SLACK_APP_TOKEN),
+		fromEnv: !creds.slack?.appToken && envSet(process.env.SLACK_APP_TOKEN),
 	});
 	rows.push({
 		id: "slack.signing",
 		label: "Slack signing secret",
 		set:
-			!!creds.slack?.signingSecret ||
-			envSet(process.env.SLACK_SIGNING_SECRET),
+			!!creds.slack?.signingSecret || envSet(process.env.SLACK_SIGNING_SECRET),
 		fromEnv:
-			!creds.slack?.signingSecret &&
-			envSet(process.env.SLACK_SIGNING_SECRET),
+			!creds.slack?.signingSecret && envSet(process.env.SLACK_SIGNING_SECRET),
 	});
 	return rows;
 }
 
-function readTotals(
-	db: import("bun:sqlite").Database,
-): { sessions: number; messages: number } {
+function readTotals(db: import("bun:sqlite").Database): {
+	sessions: number;
+	messages: number;
+} {
 	try {
 		const sessions =
-			db
-				.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sessions")
-				.get()?.n ?? 0;
+			db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sessions").get()
+				?.n ?? 0;
 		const messages =
-			db
-				.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM messages")
-				.get()?.n ?? 0;
+			db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM messages").get()
+				?.n ?? 0;
 		return { sessions, messages };
 	} catch {
 		return { sessions: 0, messages: 0 };
@@ -261,6 +256,13 @@ export function createWebApp(
 		}
 		// Skip CSRF for incoming webhook endpoints (external services)
 		if (c.req.path.startsWith("/api/webhooks/incoming/")) {
+			return next();
+		}
+		// Skip CSRF for public canvas form receivers — these are submitted by
+		// sandboxed canvas pages (Origin: null) and bound to a typed action that
+		// only ever routes to its declared destination. Abuse is bounded by the
+		// per-action rate limit + honeypot + field allowlist on the handler.
+		if (c.req.path.startsWith("/api/forms/")) {
 			return next();
 		}
 		return csrf({ origin: (origin) => allowedOrigins.has(origin) })(c, next);
@@ -390,6 +392,151 @@ export function createWebApp(
 			});
 
 		return c.json({ ok: true });
+	});
+
+	// --- Public canvas form receiver (before auth — canvas pages are the public face) ---
+	// A canvas <form> posts here; the bound action routes the (field-allowlisted)
+	// payload to its declared destination (Strapi/HubSpot). Never runs arbitrary
+	// skills. Abuse is bounded by rate-limit + honeypot + field allowlist.
+	const formRateLimit = new Map<string, { count: number; resetAt: number }>();
+	function checkFormRate(
+		key: string,
+		limit: number,
+		windowMs: number,
+	): boolean {
+		const now = Date.now();
+		const e = formRateLimit.get(key);
+		if (!e || now > e.resetAt) {
+			formRateLimit.set(key, { count: 1, resetAt: now + windowMs });
+			return true;
+		}
+		if (e.count >= limit) return false;
+		e.count++;
+		return true;
+	}
+	const FORM_CORS = {
+		"Access-Control-Allow-Origin": "*",
+		"Access-Control-Allow-Methods": "POST, OPTIONS",
+		"Access-Control-Allow-Headers": "Content-Type, X-Paw-Form-Secret",
+	};
+	app.options("/api/forms/:actionId", (c) => c.body(null, 204, FORM_CORS));
+	app.post("/api/forms/:actionId", async (c) => {
+		const actionId = c.req.param("actionId");
+		const action = kernel.database
+			.prepare("SELECT * FROM canvas_actions WHERE id = ? AND active = 1")
+			.get(actionId) as
+			| {
+					id: string;
+					type: string;
+					config_json: string;
+					field_map_json: string;
+					redirect_url: string | null;
+					honeypot_field: string | null;
+					secret: string | null;
+			  }
+			| undefined;
+		if (!action) return c.json({ error: "Unknown form" }, 404, FORM_CORS);
+
+		const ip = getClientIp(c);
+		if (
+			!checkFormRate(`a:${actionId}`, 120, 60_000) ||
+			!checkFormRate(`ip:${actionId}:${ip}`, 20, 60_000)
+		) {
+			return c.json({ error: "Too many submissions" }, 429, FORM_CORS);
+		}
+
+		// Parse JSON or form-encoded body
+		let raw: Record<string, unknown> = {};
+		const ct = c.req.header("Content-Type") ?? "";
+		try {
+			if (ct.includes("application/json")) {
+				raw = (await c.req.json()) as Record<string, unknown>;
+			} else {
+				raw = (await c.req.parseBody()) as Record<string, unknown>;
+			}
+		} catch {
+			raw = {};
+		}
+
+		// Honeypot — silently accept & drop suspected bots
+		if (
+			action.honeypot_field &&
+			String(raw[action.honeypot_field] ?? "").trim() !== ""
+		) {
+			return c.json({ ok: true }, 200, FORM_CORS);
+		}
+		// Optional shared secret
+		if (action.secret) {
+			const provided =
+				c.req.header("x-paw-form-secret") ?? String(raw._secret ?? "");
+			if (provided !== action.secret)
+				return c.json({ error: "Forbidden" }, 403, FORM_CORS);
+		}
+
+		// Field allowlist via field_map (only mapped fields are kept/forwarded)
+		const fieldMap = JSON.parse(action.field_map_json || "{}") as Record<
+			string,
+			string
+		>;
+		const mapped: Record<string, unknown> = {};
+		for (const [incoming, dest] of Object.entries(fieldMap)) {
+			const v = raw[incoming];
+			if (v !== undefined && v !== null && v !== "") {
+				mapped[dest] = typeof v === "string" ? v.slice(0, 5000) : v;
+			}
+		}
+
+		// Durable inbox first (no lead lost even if the external call fails)
+		const ins = kernel.database.run(
+			"INSERT INTO canvas_submissions (action_id, data_json, status, ip, user_agent) VALUES (?, ?, 'received', ?, ?)",
+			[
+				actionId,
+				JSON.stringify(mapped),
+				ip,
+				(c.req.header("User-Agent") ?? "").slice(0, 300),
+			],
+		);
+		const submissionId = Number(ins.lastInsertRowid);
+		kernel.database.run(
+			"UPDATE canvas_actions SET submit_count = submit_count + 1, updated_at = datetime('now') WHERE id = ?",
+			[actionId],
+		);
+
+		// Route to the declared destination
+		let status = "failed";
+		let targetRef = "";
+		try {
+			const cfg = JSON.parse(action.config_json || "{}") as {
+				contentType?: string;
+			};
+			if (action.type === "strapi") {
+				if (!kernel.strapi) throw new Error("Strapi not configured");
+				const res = await kernel.strapi.create(String(cfg.contentType), mapped);
+				targetRef = `strapi:${res?.data?.documentId ?? res?.data?.id ?? "ok"}`;
+				status = "routed";
+			} else if (action.type === "hubspot") {
+				if (!kernel.hubspotClient) throw new Error("HubSpot not configured");
+				const res = await kernel.hubspotClient.createContact(mapped);
+				targetRef = `hubspot:${res.id}`;
+				status = "routed";
+			} else {
+				throw new Error(`Unknown action type: ${action.type}`);
+			}
+		} catch (err) {
+			targetRef = (err instanceof Error ? err.message : String(err)).slice(
+				0,
+				300,
+			);
+		}
+		kernel.database.run(
+			"UPDATE canvas_submissions SET status = ?, target_ref = ? WHERE id = ?",
+			[status, targetRef, submissionId],
+		);
+
+		if (action.redirect_url && status === "routed") {
+			return c.redirect(action.redirect_url, 303);
+		}
+		return c.json({ ok: status === "routed", status }, 200, FORM_CORS);
 	});
 
 	// Session auth middleware
@@ -733,9 +880,10 @@ export function createWebApp(
 
 	app.get("/api/stats", (c) => {
 		const sinceParam = c.req.query("since");
-		const usage = kernel.costs?.getTotalCost({
-			since: sinceParam || undefined,
-		}) ?? null;
+		const usage =
+			kernel.costs?.getTotalCost({
+				since: sinceParam || undefined,
+			}) ?? null;
 		const feedback = kernel.feedback?.getFeedbackStats() ?? null;
 		const memoryStats = kernel.memory?.getStats() ?? null;
 		const totals = readTotals(kernel.database);
@@ -1209,6 +1357,8 @@ export function createWebApp(
 				: "The canvas is currently empty. Start by writing an index.html file.",
 			"Do NOT use file_write — only canvas_write works for the live preview.",
 			"Write complete, self-contained HTML files with inline CSS and JS when possible.",
+			"Organize related pages into folders with canvas_mkdir / canvas_move (e.g. 'sales-campaign/', 'blog/', 'cms/') so the workspace stays a tidy operations hub.",
+			"REAL BACKEND WIRING: to make a page's form/button actually capture data (leads, signups, contacts), FIRST call canvas_action_create (type 'strapi' for a CMS content-type, or 'hubspot' for a CRM contact) with a fieldMap, then build the page's <form action> to POST to the returned submitUrl with <input name> matching the fieldMap keys. Never fake a form that goes nowhere — wire it to a real action so submissions route to the CRM/CMS and appear in Submissions.",
 			// Reliability for weaker tool-callers: always emit the full
 			// document inline too. If the model forgets to call canvas_write,
 			// the server extracts this fenced block and writes it (see
@@ -1803,6 +1953,168 @@ export function createWebApp(
 		return c.json({ files });
 	});
 
+	// Resolve a canvas-relative path safely (logical + symlink guard). Mirrors
+	// safePath() in canvas-tools.ts. Returns the absolute path or null.
+	function canvasResolve(rel: string): string | null {
+		if (typeof rel !== "string") return null;
+		const full = resolve(canvasRoot, rel);
+		const r = relative(canvasRoot, full);
+		if (r.startsWith("..") || full.includes("\0")) return null;
+		if (existsSync(full)) {
+			try {
+				if (relative(canvasRoot, realpathSync(full)).startsWith(".."))
+					return null;
+			} catch {
+				return null;
+			}
+		}
+		return full;
+	}
+
+	// Full workspace tree (files AND folders, so empty folders show in the explorer).
+	app.get("/api/canvas/tree", (c) => {
+		const entries: Array<{
+			path: string;
+			type: "file" | "dir";
+			size?: number;
+			mtime?: number;
+		}> = [];
+		if (!existsSync(canvasRoot)) return c.json({ entries });
+		function walk(dir: string, depth: number): void {
+			if (entries.length >= 1000 || depth > 12) return;
+			for (const item of readdirSync(dir, { withFileTypes: true })) {
+				if (item.name.startsWith(".")) continue;
+				const full = resolve(dir, item.name);
+				const rel = relative(canvasRoot, full);
+				if (item.isDirectory()) {
+					entries.push({ path: rel, type: "dir" });
+					walk(full, depth + 1);
+				} else {
+					const stat = statSync(full);
+					entries.push({
+						path: rel,
+						type: "file",
+						size: stat.size,
+						mtime: stat.mtimeMs,
+					});
+				}
+			}
+		}
+		walk(canvasRoot, 0);
+		return c.json({ entries });
+	});
+
+	app.post("/api/canvas/mkdir", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as { path?: string };
+		const rel = (body.path ?? "").trim();
+		if (!rel || rel === "." || rel === "/")
+			return c.json({ error: "Invalid path" }, 400);
+		const full = canvasResolve(rel);
+		if (!full) return c.json({ error: "Invalid path" }, 400);
+		mkdirSync(full, { recursive: true });
+		pushFileChanged(rel);
+		return c.json({ ok: true, path: rel });
+	});
+
+	app.post("/api/canvas/delete", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as { path?: string };
+		const rel = (body.path ?? "").trim();
+		if (!rel || rel === "." || rel === "/" || rel === "./")
+			return c.json({ error: "Refusing to delete canvas root" }, 400);
+		const full = canvasResolve(rel);
+		if (!full || resolve(full) === resolve(canvasRoot))
+			return c.json({ error: "Invalid path" }, 400);
+		if (!existsSync(full)) return c.json({ error: "Not found" }, 404);
+		rmSync(full, { recursive: true, force: true });
+		pushFileChanged(rel);
+		return c.json({ ok: true, path: rel });
+	});
+
+	app.post("/api/canvas/rename", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as {
+			from?: string;
+			to?: string;
+		};
+		const from = (body.from ?? "").trim();
+		const to = (body.to ?? "").trim();
+		if (!from || !to) return c.json({ error: "from and to are required" }, 400);
+		const fromFull = canvasResolve(from);
+		const toFull = canvasResolve(to);
+		if (!fromFull || !toFull) return c.json({ error: "Invalid path" }, 400);
+		if (!existsSync(fromFull)) return c.json({ error: "Not found" }, 404);
+		if (existsSync(toFull)) return c.json({ error: "Destination exists" }, 409);
+		mkdirSync(dirname(toFull), { recursive: true });
+		renameSync(fromFull, toFull);
+		pushFileChanged(to);
+		pushFileChanged(from);
+		return c.json({ ok: true, from, to });
+	});
+
+	app.post("/api/canvas/new-file", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as {
+			path?: string;
+			content?: string;
+		};
+		const rel = (body.path ?? "").trim();
+		if (!rel || rel.endsWith("/"))
+			return c.json({ error: "Invalid path" }, 400);
+		const full = canvasResolve(rel);
+		if (!full) return c.json({ error: "Invalid path" }, 400);
+		if (existsSync(full)) return c.json({ error: "File exists" }, 409);
+		mkdirSync(dirname(full), { recursive: true });
+		writeFileSync(full, typeof body.content === "string" ? body.content : "");
+		pushFileChanged(rel);
+		return c.json({ ok: true, path: rel });
+	});
+
+	// Search canvas files by name (always) and optionally by content.
+	app.get("/api/canvas/search", (c) => {
+		const q = (c.req.query("q") ?? "").trim().toLowerCase();
+		const searchContent = c.req.query("content") === "1";
+		const results: Array<{ path: string; line?: number; snippet?: string }> =
+			[];
+		if (!q || !existsSync(canvasRoot)) return c.json({ results });
+		let scanned = 0;
+		function walk(dir: string, depth: number): void {
+			if (results.length >= 100 || depth > 12) return;
+			for (const item of readdirSync(dir, { withFileTypes: true })) {
+				if (item.name.startsWith(".")) continue;
+				const full = resolve(dir, item.name);
+				const rel = relative(canvasRoot, full);
+				if (item.isDirectory()) {
+					walk(full, depth + 1);
+					continue;
+				}
+				if (rel.toLowerCase().includes(q)) {
+					results.push({ path: rel });
+					continue;
+				}
+				if (searchContent && scanned < 300) {
+					scanned++;
+					try {
+						const stat = statSync(full);
+						if (stat.size > 512 * 1024) continue; // skip large/binary
+						const text = readFileSync(full, "utf-8");
+						const idx = text.toLowerCase().indexOf(q);
+						if (idx !== -1) {
+							const line = text.slice(0, idx).split("\n").length;
+							const lineText = text.split("\n")[line - 1] ?? "";
+							results.push({
+								path: rel,
+								line,
+								snippet: lineText.trim().slice(0, 160),
+							});
+						}
+					} catch {
+						// unreadable/binary — skip
+					}
+				}
+			}
+		}
+		walk(canvasRoot, 0);
+		return c.json({ results });
+	});
+
 	app.get("/api/canvas/preview/*", async (c) => {
 		const reqPath =
 			c.req.path.replace("/api/canvas/preview/", "").replace(/^\/+/, "") ||
@@ -1832,15 +2144,29 @@ export function createWebApp(
 		if (!existsSync(fullPath) || statSync(fullPath).isDirectory()) {
 			// Return a placeholder page for index.html so the iframe isn't blank
 			if (decoded === "index.html") {
-				return c.html(`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-          body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center;
-                 height: 100vh; margin: 0; color: #9ca3af; background: #fafbfc; }
-          @media (prefers-color-scheme: dark) { body { background: #111113; color: #71717a; } }
-          .placeholder { text-align: center; }
-          .placeholder .icon { font-size: 48px; opacity: 0.3; margin-bottom: 12px; }
-          .placeholder p { font-size: 15px; }
-        </style></head><body><div class="placeholder"><div class="icon">🎨</div>
-        <p>Canvas preview will appear here</p></div>
+				// No external resources (e.g. web fonts): this page renders inside the
+				// sandboxed, null-origin canvas iframe, where cross-origin loads can
+				// trip Safari's "Unsafe attempt to load URL" guard. System fonts only.
+				return c.html(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+        <style>
+          :root { --accent:#6a4bf0; --accent-bright:#7c5cff; --accent-press:#4f2fdf; --soft:rgba(106,75,240,.10); --bg:#f7f7f9; --fg:#82858e; --title:#14151a; }
+          @media (prefers-color-scheme: dark) { :root { --accent:#7458f5; --accent-bright:#a78bfa; --accent-press:#6446e8; --soft:rgba(116,88,245,.15); --bg:#08090b; --fg:#6b7079; --title:#f4f5f7; } }
+          * { box-sizing: border-box; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; display: flex; align-items: center; justify-content: center;
+                 height: 100vh; margin: 0; color: var(--fg); background: radial-gradient(70% 55% at 50% 38%, var(--soft), transparent 70%), var(--bg);
+                 -webkit-font-smoothing: antialiased; }
+          .placeholder { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px; }
+          .app-icon { width: 56px; height: 56px; display: grid; place-items: center; border-radius: 28%;
+                 background: linear-gradient(150deg, var(--accent-bright), var(--accent) 55%, var(--accent-press)); color: #fff;
+                 box-shadow: 0 8px 24px -6px rgba(116,88,245,.45), inset 0 1px 0 rgba(255,255,255,.25); position: relative; overflow: hidden; }
+          .app-icon::after { content:""; position:absolute; inset:0; background: radial-gradient(120% 80% at 30% 10%, rgba(255,255,255,.35), transparent 50%); }
+          .app-icon svg path, .app-icon svg ellipse { fill: currentColor; }
+          .placeholder .title { font-size: 18px; font-weight: 600; letter-spacing: -.02em; color: var(--title); }
+          .placeholder p { font-size: 13px; max-width: 260px; margin: 0; }
+        </style></head><body><div class="placeholder">
+        <div class="app-icon"><svg width="31" height="31" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="6.4" cy="9.2" rx="2.05" ry="2.6"/><ellipse cx="10.2" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="13.9" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="17.7" cy="9.2" rx="2.05" ry="2.6"/><path d="M12 11.4c-3 0-5.6 2.2-5.6 4.9 0 2.1 1.8 3 3.4 3 1 0 1.5-.4 2.2-.4s1.2.4 2.2.4c1.6 0 3.4-.9 3.4-3 0-2.7-2.6-4.9-5.6-4.9Z"/></svg></div>
+        <div class="title">Canvas</div>
+        <p>Your live preview will render here once Paw writes to the canvas.</p></div>
         </body></html>`);
 			}
 			return c.text("Not found", 404);
@@ -1871,11 +2197,20 @@ export function createWebApp(
 		if (ext === ".html" || ext === ".htm") {
 			let html = await file.text();
 			const errorOverlay = `<script>(function(){var d=document,o=null;function show(msg){if(o)o.remove();o=d.createElement("div");o.style.cssText="position:fixed;bottom:0;left:0;right:0;background:#fef2f2;border-top:2px solid #ef4444;color:#991b1b;font:13px/1.5 ui-monospace,monospace;padding:12px 16px;z-index:99999;max-height:40vh;overflow:auto";o.innerHTML='<div style="display:flex;justify-content:space-between;align-items:start"><pre style="margin:0;white-space:pre-wrap">'+msg.replace(/</g,"&lt;")+'</pre><button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:#991b1b;padding:0 4px">&times;</button></div>';d.body.appendChild(o)}window.onerror=function(m,f,l,c){show(m+"\\n  at "+(f||"?")+":"+(l||"?"));};window.onunhandledrejection=function(e){show("Unhandled rejection: "+(e.reason&&e.reason.message||e.reason||e))};})();</script>`;
+			// Canvas runtime: the preview iframe is sandboxed (allow-scripts,
+			// allow-forms) with a NULL origin for safety (AI-generated content
+			// must not reach the parent's origin/session). That blocks native
+			// in-page anchor navigation and native form submits as "unsafe URL
+			// loads". This shim makes them work without navigating: same-page
+			// anchors smooth-scroll, and forms posting to /api/forms/* submit
+			// via fetch (the public form receiver allows Origin: null + CORS).
+			const canvasRuntime = `<script>(function(){document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(!a)return;e.preventDefault();var id=a.getAttribute("href").slice(1);if(!id){window.scrollTo({top:0,behavior:"smooth"});return;}var el=document.getElementById(id)||document.querySelector('[name="'+id+'"]');if(el)el.scrollIntoView({behavior:"smooth"});},true);document.addEventListener("submit",function(e){var f=e.target;if(!f||f.tagName!=="FORM")return;var action=f.getAttribute("action")||"";if(action.indexOf("/api/forms/")!==0)return;e.preventDefault();var body={};new FormData(f).forEach(function(v,k){body[k]=v;});var btn=f.querySelector('button,[type=submit]');if(btn)btn.disabled=true;fetch(action,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json().catch(function(){return{ok:r.ok};});}).then(function(d){var ok=d&&d.ok;var m=document.createElement("div");m.textContent=ok?"\\u2713 Thanks! Your submission was received.":"Submission failed. Please try again.";m.style.cssText="margin-top:12px;padding:10px 14px;border-radius:8px;font:14px/1.4 system-ui,sans-serif;background:"+(ok?"#ecfdf5;color:#065f46":"#fef2f2;color:#991b1b");f.appendChild(m);if(ok)f.reset();if(btn)btn.disabled=false;}).catch(function(){if(btn)btn.disabled=false;});},true);})();</script>`;
+			const inject = errorOverlay + canvasRuntime;
 			// Inject before </body> if present, otherwise append
 			if (html.includes("</body>")) {
-				html = html.replace("</body>", errorOverlay + "</body>");
+				html = html.replace("</body>", inject + "</body>");
 			} else {
-				html += errorOverlay;
+				html += inject;
 			}
 			c.header("Content-Type", contentType);
 			c.header("Cache-Control", "no-cache");
@@ -2035,9 +2370,34 @@ export function createWebApp(
 			userId: userFilter ? Number.parseInt(userFilter, 10) : undefined,
 		});
 		const actions = authManager.audit.distinctActions(100);
-		return c.html(
-			AuditPage({ rows, actions, actionFilter, userFilter }),
-		);
+		return c.html(AuditPage({ rows, actions, actionFilter, userFilter }));
+	});
+
+	app.get("/submissions", (c) => {
+		const actionFilter = c.req.query("action") ?? undefined;
+		const actions = kernel.database
+			.prepare(
+				"SELECT id, name, type, config_json, submit_count, active, created_at FROM canvas_actions ORDER BY created_at DESC LIMIT 200",
+			)
+			.all() as CanvasAction[];
+		const submissions = (
+			actionFilter
+				? kernel.database
+						.prepare(
+							`SELECT s.id, s.action_id, a.name AS action_name, s.data_json, s.status, s.target_ref, s.created_at
+							 FROM canvas_submissions s LEFT JOIN canvas_actions a ON a.id = s.action_id
+							 WHERE s.action_id = ? ORDER BY s.created_at DESC LIMIT 300`,
+						)
+						.all(actionFilter)
+				: kernel.database
+						.prepare(
+							`SELECT s.id, s.action_id, a.name AS action_name, s.data_json, s.status, s.target_ref, s.created_at
+							 FROM canvas_submissions s LEFT JOIN canvas_actions a ON a.id = s.action_id
+							 ORDER BY s.created_at DESC LIMIT 300`,
+						)
+						.all()
+		) as CanvasSubmission[];
+		return c.html(SubmissionsPage({ actions, submissions, actionFilter }));
 	});
 
 	app.get("/prompts", (c) => {
@@ -2191,9 +2551,7 @@ export function createWebApp(
 		// High limit: the detail page shows full history (the old
 		// getSessionWithMessages had no limit; the default 50 would truncate).
 		const messages = getSessionMessages(kernel.database, id, 100_000);
-		return c.html(
-			SessionDetailPage({ session, messages }),
-		);
+		return c.html(SessionDetailPage({ session, messages }));
 	});
 
 	// --- Skills Page ---
@@ -2386,19 +2744,14 @@ export function createWebApp(
 			scope?: string;
 			category?: "fact" | "summary";
 		};
-		const body = await c.req
-			.json<ImportBody>()
-			.catch(() => ({}) as ImportBody);
+		const body = await c.req.json<ImportBody>().catch(() => ({}) as ImportBody);
 		const text = String(body.text ?? "");
 		if (!text.trim()) return c.json({ error: "text is required" }, 400);
 
 		// Hard size limit to protect the embedding pipeline + DB.
 		const MAX_IMPORT_BYTES = 2 * 1024 * 1024; // 2 MiB
 		if (text.length > MAX_IMPORT_BYTES) {
-			return c.json(
-				{ error: `text exceeds ${MAX_IMPORT_BYTES} bytes` },
-				413,
-			);
+			return c.json({ error: `text exceeds ${MAX_IMPORT_BYTES} bytes` }, 413);
 		}
 
 		const source = (body.source ?? "").trim() || "import";
@@ -2504,10 +2857,7 @@ export function createWebApp(
 			// the scheduler can verify the requester has rights to run it.
 			const toolDef = kernel.toolRegistryPublic.get(payload);
 			if (!toolDef) {
-				return c.json(
-					{ error: `Unknown tool: ${payload}` },
-					400,
-				);
+				return c.json({ error: `Unknown tool: ${payload}` }, 400);
 			}
 			action.plugin = toolDef.plugin;
 		} else if (actionType === "event") {
@@ -2524,10 +2874,7 @@ export function createWebApp(
 			}
 			action.event = payload;
 		} else {
-			return c.json(
-				{ error: `Unknown action type: ${actionType}` },
-				400,
-			);
+			return c.json({ error: `Unknown action type: ${actionType}` }, 400);
 		}
 
 		const id = kernel.cron.addJob({
@@ -3200,7 +3547,10 @@ export function createWebApp(
 			reason?: string;
 		}>();
 		if (!body.messageId || !body.sessionId || !body.rating) {
-			return c.json({ error: "messageId, sessionId, and rating required" }, 400);
+			return c.json(
+				{ error: "messageId, sessionId, and rating required" },
+				400,
+			);
 		}
 		const id = feedbackStore.recordRating(
 			body.messageId,

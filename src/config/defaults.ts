@@ -117,14 +117,15 @@ export const defaults: PawConfig = {
 		token: "",
 		timeout: 10_000,
 	},
-	agents: {
-		"icp-discovery": {
-			description:
-				"Discovers franchise brands matching an Ideal Customer Profile (ICP) by NAICS code. Finds brands, estimates locations and revenue, identifies HQ info and decision-maker contacts, then exports results to CSV.",
-			systemPrompt:
-				"You are an ICP discovery agent. Your job is to find franchise brands in a given industry (NAICS code), qualify them by location count and revenue, find their HQ details, and identify decision-maker contacts. Follow this exact tool order: discover_franchises → estimate_revenue (for each brand) → filter_icp → map_to_hq (for each qualified company) → enrich_contacts (for each company domain) → export_results. IMPORTANT: Do NOT call filter_icp until ALL estimate_revenue calls are complete. Be thorough and data-driven.",
-			skills: ["icp-discovery"],
-		},
+	hubspot: {
+		enabled: false,
+		token: "",
+		timeout: 10_000,
 	},
+	// No seeded agent presets — the agent list is controlled entirely by the
+	// user's config (~/.paw/config.json) and the Config UI. (Previously this
+	// seeded an "icp-discovery" preset, but deepMerge never removes keys so it
+	// could not be deleted from the UI; see src/config/loader.ts deepMerge.)
+	agents: {},
 	mcpServers: {},
 };

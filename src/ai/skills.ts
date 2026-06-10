@@ -84,7 +84,7 @@ export class SkillManager {
 			files:
 				"Read, write, and list files; run shell commands in the workspace.",
 			canvas:
-				"Write, read, and list files in the live canvas workspace for HTML/CSS/JS preview.",
+				"Build the live canvas workspace: write/read/list files, organize into folders (mkdir/move/delete), and wire page forms to real backends (canvas_action_create routes submissions to Strapi/HubSpot).",
 			slack: "Post messages and add reactions in Slack.",
 			"web-pilot":
 				"Browse the web: navigate, click, fill forms, take screenshots.",

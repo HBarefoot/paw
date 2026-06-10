@@ -122,7 +122,7 @@ h1 {
 </head>
 <body>
   <svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
-    <rect x="50" y="50" width="100" height="100" fill="#6366f1" rx="8" />
+    <rect x="50" y="50" width="100" height="100" fill="#7458f5" rx="8" />
     <circle cx="300" cy="200" r="60" fill="#f59e0b" />
     <polygon points="450,80 520,200 380,200" fill="#10b981" />
     <text x="300" y="350" text-anchor="middle" font-family="system-ui" font-size="18" fill="#6b7280">

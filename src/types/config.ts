@@ -144,6 +144,11 @@ export interface PawConfig {
 		token: string;
 		timeout: number;
 	};
+	hubspot: {
+		enabled: boolean;
+		token: string;
+		timeout: number;
+	};
 	mcpServers: Record<
 		string,
 		{
