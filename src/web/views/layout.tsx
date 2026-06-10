@@ -263,15 +263,22 @@ const cssDesignSystem = `
   html.sidebar-collapsed .sidebar-footer { text-align: center; padding: 12px 8px; }
   html.sidebar-collapsed .theme-toggle { flex-direction: column; }
 
-  /* Collapse toggle button (sidebar footer) */
-  .sidebar-collapse-btn {
+  /* Collapse toggle button (sidebar footer). Scoped under .sidebar-footer +
+     explicit :focus/:active so the base button rule (accent fill) never wins. */
+  .sidebar-footer .sidebar-collapse-btn,
+  .sidebar-footer .sidebar-collapse-btn:focus,
+  .sidebar-footer .sidebar-collapse-btn:focus-visible {
     width: 100%; background: transparent; border: 1px solid var(--border-primary);
     color: var(--text-secondary); justify-content: flex-start; gap: 10px;
     padding: 8px 12px; margin-bottom: 8px; font-size: 12px; border-radius: var(--radius-md);
+    box-shadow: none; transform: none;
   }
-  .sidebar-collapse-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .sidebar-footer .sidebar-collapse-btn:hover,
+  .sidebar-footer .sidebar-collapse-btn:active {
+    background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong);
+  }
   .sidebar-collapse-btn .nav-icon { display: inline-flex; transition: transform var(--transition); }
-  html.sidebar-collapsed .sidebar-collapse-btn { justify-content: center; }
+  html.sidebar-collapsed .sidebar-footer .sidebar-collapse-btn { justify-content: center; }
   html.sidebar-collapsed .sidebar-collapse-btn .nav-icon { transform: rotate(180deg); }
 
   .logo-icon {
