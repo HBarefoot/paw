@@ -7,3 +7,5 @@ data/
 .DS_Store
 test.txt
 paw_logo_blue_border_*.jpg
+# Bun project — the npm lockfile shouldn't be committed (use bun.lockb)
+package-lock.json
