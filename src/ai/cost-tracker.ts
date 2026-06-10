@@ -23,6 +23,17 @@ export interface UsageRecord {
 	estimatedCostUsd: number;
 }
 
+/**
+ * Rough fallback token estimator for providers that don't surface a
+ * `usage` object (OpenAI/Gemini/Ollama in this codebase). Counts
+ * ~4 chars per token, which is the rule of thumb for English text
+ * in modern transformer tokenizers. The estimate is intentionally
+ * crude; the goal is "non-zero" cost data, not precise billing.
+ */
+export function estimateTokens(text: string): number {
+	return Math.max(1, Math.ceil(text.length / 4));
+}
+
 export class CostTracker {
 	private db: Database;
 

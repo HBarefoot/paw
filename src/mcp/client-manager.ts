@@ -6,6 +6,7 @@ import type {
 	ToolResultImage,
 } from "../types/message.js";
 import type { Logger } from "../types/plugin.js";
+import { validateExternalUrl } from "../security/url-guard.js";
 
 interface MCPServerConfig {
 	command?: string;
@@ -30,24 +31,14 @@ const DEFAULT_ALLOWED_COMMANDS = new Set([
 	"kubectl",
 ]);
 
-// Private/internal IP ranges to block for SSRF prevention
-const PRIVATE_IP_PATTERNS = [
-	/^127\./,
-	/^10\./,
-	/^172\.(1[6-9]|2\d|3[0-1])\./,
-	/^192\.168\./,
-	/^169\.254\./,
-	/^0\./,
-	/^localhost$/i,
-	/^\[::1\]$/,
-	/^\[fc/i,
-	/^\[fd/i,
-	/^\[fe80:/i,
-];
-
-function isPrivateHost(hostname: string): boolean {
-	return PRIVATE_IP_PATTERNS.some((p) => p.test(hostname));
-}
+/**
+ * Fetch options applied to every MCP HTTP/SSE request. H-NEW-3 + M-NEW-1:
+ * `redirect: "error"` blocks SSRF pivots via 302 responses to internal
+ * hosts. The MCP transport is not allowed to follow redirects.
+ */
+const MCP_REQUEST_INIT: RequestInit = {
+	redirect: "error",
+};
 
 /**
  * Reject MCP tool/server identifiers that could break the qualified-name
@@ -135,16 +126,19 @@ export class MCPClientManager {
 
 	/**
 	 * Validate a URL is not targeting private/internal networks (SSRF prevention).
+	 * Delegates to the unified `url-guard` so CGNAT, ULA, embedded credentials,
+	 * and IPv4-mapped IPv6 are all blocked consistently.
 	 */
 	private validateUrl(urlStr: string): URL {
-		const url = new URL(urlStr);
-		if (isPrivateHost(url.hostname)) {
+		const result = validateExternalUrl(urlStr, {
+			allowedSchemes: ["http:", "https:"],
+		});
+		if (!result.ok || !result.url) {
 			throw new Error(
-				`MCP server URL "${url.hostname}" targets a private/internal network. ` +
-					`Only public URLs are allowed for SSE/HTTP transports.`,
+				`MCP server URL rejected: ${result.reason ?? "unknown reason"}`,
 			);
 		}
-		return url;
+		return result.url;
 	}
 
 	async connectServer(name: string, config: MCPServerConfig): Promise<void> {
@@ -207,7 +201,9 @@ export class MCPClientManager {
 				const { SSEClientTransport } = await import(
 					"@modelcontextprotocol/sdk/client/sse.js"
 				);
-				transport = new SSEClientTransport(url);
+				transport = new SSEClientTransport(url, {
+					requestInit: MCP_REQUEST_INIT,
+				});
 			} else if (transportType === "http") {
 				if (!config.url) {
 					throw new Error(
@@ -219,7 +215,9 @@ export class MCPClientManager {
 				const { StreamableHTTPClientTransport } = await import(
 					"@modelcontextprotocol/sdk/client/streamableHttp.js"
 				);
-				transport = new StreamableHTTPClientTransport(url);
+				transport = new StreamableHTTPClientTransport(url, {
+					requestInit: MCP_REQUEST_INIT,
+				});
 			} else {
 				throw new Error(`Unknown transport type: ${transportType}`);
 			}

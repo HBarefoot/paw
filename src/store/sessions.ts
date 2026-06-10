@@ -63,6 +63,37 @@ export function listRecentSessions(db: Database, limit = 50): SessionSummary[] {
 		.all(limit);
 }
 
+export function listRecentSessionsForUser(
+	db: Database,
+	userId: string,
+	limit = 50,
+): SessionSummary[] {
+	return db
+		.query<SessionSummary, [string, number]>(
+			`SELECT s.id, s.channel, s.user_id, s.title, s.created_at, s.updated_at,
+            (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) as message_count
+     FROM sessions s
+     WHERE s.user_id = ?
+     ORDER BY s.updated_at DESC
+     LIMIT ?`,
+		)
+		.all(userId, limit);
+}
+
+export function getSessionOwnedBy(
+	db: Database,
+	sessionId: string,
+	userId: string,
+): Session | null {
+	return (
+		db
+			.query<Session, [string, string]>(
+				"SELECT * FROM sessions WHERE id = ? AND user_id = ?",
+			)
+			.get(sessionId, userId) ?? null
+	);
+}
+
 export interface SessionWithMessages {
 	session: Session;
 	messages: Array<{
@@ -100,6 +131,22 @@ export function deleteSession(db: Database, id: string): boolean {
 	return result.changes > 0;
 }
 
+export function deleteSessionOwnedBy(
+	db: Database,
+	id: string,
+	userId: string,
+): boolean {
+	const result = db.run(
+		"DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE id = ? AND user_id = ?)",
+		[id, userId],
+	);
+	const sessionResult = db.run(
+		"DELETE FROM sessions WHERE id = ? AND user_id = ?",
+		[id, userId],
+	);
+	return result.changes > 0 || sessionResult.changes > 0;
+}
+
 export function updateSessionTitle(
 	db: Database,
 	id: string,
@@ -108,6 +155,19 @@ export function updateSessionTitle(
 	const result = db.run(
 		"UPDATE sessions SET title = ?, updated_at = datetime('now') WHERE id = ?",
 		[title, id],
+	);
+	return result.changes > 0;
+}
+
+export function updateSessionTitleOwnedBy(
+	db: Database,
+	id: string,
+	title: string,
+	userId: string,
+): boolean {
+	const result = db.run(
+		"UPDATE sessions SET title = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?",
+		[title, id, userId],
 	);
 	return result.changes > 0;
 }
@@ -199,4 +259,20 @@ export function forkSessionAtMessage(
 		newSessionId: opts.newSessionId,
 		copiedMessages: copies.length,
 	};
+}
+
+/**
+ * Owner-checked fork. Returns null when the source session is not owned by
+ * the given user. The new session inherits the same owner.
+ */
+export function forkSessionOwnedBy(
+	db: Database,
+	sourceSessionId: string,
+	anchorMessageId: string,
+	userId: string,
+	opts: { newSessionId: string; titleSuffix?: string },
+): { newSessionId: string; copiedMessages: number } | null {
+	const source = getSessionOwnedBy(db, sourceSessionId, userId);
+	if (!source) return null;
+	return forkSessionAtMessage(db, sourceSessionId, anchorMessageId, opts);
 }

@@ -28,7 +28,7 @@ import {
 import { FeedbackStore } from "../feedback/store.js";
 import { detectCorrection } from "../feedback/correction-detector.js";
 import { ProviderRouter } from "../ai/router.js";
-import { CostTracker } from "../ai/cost-tracker.js";
+import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
 import { ToolLog } from "../observability/tool-log.js";
 import { createProactiveTriggerTools } from "../cron/trigger-tools.js";
 import { CronScheduler } from "../cron/scheduler.js";
@@ -98,6 +98,33 @@ export class Kernel {
 			resolveProjectPath(config.store.dbPath),
 			config.store.customSqlitePath,
 		);
+
+		// H-NEW-4: register a built-in "kernel" manifest so the sandbox
+		// can enforce permissions on built-in tools. Previously the
+		// ToolRegistry skipped the check whenever tool.plugin === "kernel",
+		// which meant file_*, exec_command, memory_*, and friends were
+		// effectively un-sandboxed. The kernel manifest lists the full
+		// surface so existing usage keeps working, but new permissions
+		// require an explicit grant.
+		this.sandbox.registerManifest({
+			name: "kernel",
+			version: "0.1.0",
+			description: "Paw kernel built-in tools",
+			permissions: [
+				"file:read",
+				"file:write",
+				"exec",
+				"memory:read",
+				"memory:write",
+				"memory:forget",
+				"cron:create",
+				"agent:spawn",
+				"agent:delegate",
+				"skill:activate",
+				"canvas:read",
+				"canvas:write",
+			],
+		});
 
 		// Security
 		if (config.security.requireApproval) {
@@ -954,16 +981,22 @@ export class Kernel {
 				// two scoped recalls to halve the embedding CPU cost.
 				const sharedEmbedding =
 					(await this.memoryStore.embed(msg.content)) ?? undefined;
+				// Per-admin memory isolation (C-NEW-1): each admin only sees
+				// their own memories + global shared. `ownerUserId` is the new
+				// FK-style filter; `scope` remains for backward compat.
+				const recallOpts = {
+					limit: 3,
+					ownerUserId: msg.user.id,
+					embedding: sharedEmbedding,
+				};
 				const [userMemories, globalMemories] = await Promise.all([
 					this.memoryStore.recall(msg.content, {
-						limit: 3,
+						...recallOpts,
 						scope: msg.user.id,
-						embedding: sharedEmbedding,
 					}),
 					this.memoryStore.recall(msg.content, {
-						limit: 3,
+						...recallOpts,
 						scope: "global",
-						embedding: sharedEmbedding,
 					}),
 				]);
 
@@ -1060,16 +1093,51 @@ export class Kernel {
 			this.skillManager.activateSkill(msg.sessionId, "canvas");
 		}
 
+		// H-NEW-5: register an abort controller so /api/chat/cancel
+		// can tear down the in-flight HTTP request, not just the read
+		// loop. (Streaming path also does this — see below.)
+		const controller = new AbortController();
+		this.activeAbortControllers.set(msg.sessionId, controller);
+
 		try {
 			const response = await this.provider.chat(
 				messages,
 				systemPrompt,
 				msg.sessionId,
+				{ signal: controller.signal },
 			);
-			const replyText =
-				response.text ||
-				(msg.channel === "canvas" ? "Done — canvas updated." : "");
+			// B6.4: don't fabricate "Done — canvas updated." for an empty
+			// canvas reply — we can't confirm a canvas_write actually ran here,
+			// and asserting success on a no-op is exactly the hallucination we
+			// want to avoid. (The streaming canvas path already uses the raw
+			// reply text; this keeps both paths honest.)
+			const replyText = response.text || "";
 			appendMessage(this.db, msg.sessionId, "assistant", replyText);
+
+			// M-NEW-12: record cost in the non-stream path too. If the
+			// provider returned usage, use it; otherwise fall back to a
+			// rough char-based estimate so cost data is non-zero for
+			// non-Claude providers.
+			if (this.costTracker) {
+				const usageIn = response.usage?.inputTokens;
+				const usageOut = response.usage?.outputTokens;
+				const inputTokens =
+					usageIn ?? estimateTokens(systemPrompt + "\n" + msg.content);
+				const outputTokens = usageOut ?? estimateTokens(replyText);
+				const model = this.config.ai.model;
+				this.costTracker.recordUsage({
+					sessionId: msg.sessionId,
+					provider: this.provider.name ?? this.config.provider,
+					model,
+					inputTokens,
+					outputTokens,
+					estimatedCostUsd: CostTracker.estimateCost(
+						model,
+						inputTokens,
+						outputTokens,
+					),
+				});
+			}
 
 			await this.bus.emit("message:outbound", {
 				sessionId: msg.sessionId,
@@ -1087,7 +1155,10 @@ export class Kernel {
 			if (
 				this.memoryStore &&
 				this.config.memory.autoExtract &&
-				msg.channel !== "canvas"
+				msg.channel !== "canvas" &&
+				// H-NEW-9: per-user debounce — skip if the cooldown
+				// hasn't elapsed (1 call per 5s per userId).
+				this.shouldAutoExtract(msg.user.id)
 			) {
 				this.autoExtractMemories(msg, replyText).catch((err) => {
 					this.logger.warn("Auto-extract failed", { error: String(err) });
@@ -1133,6 +1204,12 @@ export class Kernel {
 				content: userMessage,
 				metadata: msg.metadata,
 			});
+		} finally {
+			// H-NEW-5: clean up the abort controller. Compare with the
+			// stored one so a newer concurrent call isn't clobbered.
+			if (this.activeAbortControllers.get(msg.sessionId) === controller) {
+				this.activeAbortControllers.delete(msg.sessionId);
+			}
 		}
 	}
 
@@ -1199,16 +1276,19 @@ export class Kernel {
 			try {
 				const sharedEmbedding =
 					(await this.memoryStore.embed(msg.content)) ?? undefined;
+				const recallOpts = {
+					limit: 3,
+					ownerUserId: msg.user.id,
+					embedding: sharedEmbedding,
+				};
 				const [userMemories, globalMemories] = await Promise.all([
 					this.memoryStore.recall(msg.content, {
-						limit: 3,
+						...recallOpts,
 						scope: msg.user.id,
-						embedding: sharedEmbedding,
 					}),
 					this.memoryStore.recall(msg.content, {
-						limit: 3,
+						...recallOpts,
 						scope: "global",
-						embedding: sharedEmbedding,
 					}),
 				]);
 
@@ -1338,6 +1418,7 @@ export class Kernel {
 					messages,
 					systemPrompt,
 					msg.sessionId,
+					{ signal: controller.signal },
 				)) {
 					if (controller.signal.aborted) {
 						cancelled = true;
@@ -1374,6 +1455,7 @@ export class Kernel {
 					messages,
 					systemPrompt,
 					msg.sessionId,
+					{ signal: controller.signal },
 				);
 				fullText = response.text;
 				yield { type: "text_delta", text: response.text };
@@ -1433,7 +1515,10 @@ export class Kernel {
 			if (
 				this.memoryStore &&
 				this.config.memory.autoExtract &&
-				msg.channel !== "canvas"
+				msg.channel !== "canvas" &&
+				// H-NEW-9: per-user debounce — skip if the cooldown
+				// hasn't elapsed (1 call per 5s per userId).
+				this.shouldAutoExtract(msg.user.id)
 			) {
 				this.autoExtractMemories(msg, replyText).catch((err) => {
 					this.logger.warn("Auto-extract failed", { error: String(err) });
@@ -1452,11 +1537,46 @@ export class Kernel {
 		}
 	}
 
+	// H-NEW-9: per-user debounce for auto-extract. Map: userId -> ms
+	// timestamp of the last accepted extract call.
+	private lastAutoExtractAt = new Map<string, number>();
+	private static readonly AUTO_EXTRACT_COOLDOWN_MS = 5_000;
+
+	/**
+	 * Returns true if the cooldown has elapsed for this user. The
+	 * check-and-update is intentionally not atomic — Bun is
+	 * single-threaded, so this is safe. If multiple extract calls
+	 * race, the worst case is one extra LLM call, not unbounded
+	 * growth.
+	 */
+	private shouldAutoExtract(userId: string): boolean {
+		const now = Date.now();
+		const last = this.lastAutoExtractAt.get(userId) ?? 0;
+		if (now - last < Kernel.AUTO_EXTRACT_COOLDOWN_MS) {
+			return false;
+		}
+		this.lastAutoExtractAt.set(userId, now);
+		// Periodic cleanup so the map doesn't grow with stale users.
+		if (this.lastAutoExtractAt.size > 1000) {
+			const cutoff = now - Kernel.AUTO_EXTRACT_COOLDOWN_MS * 100;
+			for (const [k, v] of this.lastAutoExtractAt) {
+				if (v < cutoff) this.lastAutoExtractAt.delete(k);
+			}
+		}
+		return true;
+	}
+
 	private async autoExtractMemories(
 		msg: InboundMessage,
 		response: string,
 	): Promise<void> {
 		if (!this.memoryStore) return;
+
+		// H-NEW-9: also bail on tiny messages to avoid wasted LLM
+		// roundtrips for acknowledgments.
+		if (msg.content.length < 12 || response.length < 12) {
+			return;
+		}
 
 		const recentMessages: ChatMessage[] = [
 			{ role: "user", content: msg.content },
@@ -1471,6 +1591,7 @@ export class Kernel {
 				{
 					scope: msg.user.id,
 					source: `session:${msg.sessionId}`,
+					ownerUserId: msg.user.id,
 				},
 			);
 			for (let i = 0; i < storedIds.length; i++) {
@@ -1658,6 +1779,10 @@ export class Kernel {
 			clearInterval(this.sessionCleanupInterval);
 			this.sessionCleanupInterval = null;
 		}
+		// Stop the rate-limiter's periodic eviction timer (H-NEW-12). The
+		// timer holds a strong reference to the limiter (and indirectly
+		// to the kernel) so without this the process can't exit cleanly.
+		this.rateLimiter?.destroy();
 		this.webAppCleanup?.();
 		this.webServer?.stop();
 		this.heartbeatChecker?.stop();
@@ -1744,6 +1869,11 @@ export class Kernel {
 
 	get tools(): ToolLog | null {
 		return this.toolLog;
+	}
+
+	/** Read-only access to the tool registry (H-NEW-2: cron tool validation). */
+	get toolRegistryPublic(): ToolRegistry {
+		return this.toolRegistry;
 	}
 
 	cancelSession(sessionId: string): boolean {

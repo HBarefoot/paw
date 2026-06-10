@@ -14,6 +14,15 @@ export class AccessController {
 	private allowedUsers: string[];
 	private blockedUsers: string[];
 	private pairingTtlMinutes: number;
+	// M-NEW-2: per-user rate limit on pairing-code attempts. Without
+	// this, an attacker can brute-force 6 digits (10^6 possibilities)
+	// in a few hours per user.
+	private pairingAttempts = new Map<
+		string,
+		{ count: number; lockedUntil: number }
+	>();
+	private static readonly PAIRING_MAX_ATTEMPTS = 5;
+	private static readonly PAIRING_LOCKOUT_MS = 15 * 60_000;
 
 	constructor(
 		db: Database,
@@ -77,26 +86,65 @@ export class AccessController {
 	}
 
 	verifyPairingCode(userId: string, code: string): boolean {
+		// M-NEW-2: per-user lockout after too many failed attempts.
+		const attempts = this.pairingAttempts.get(userId);
+		if (attempts && attempts.lockedUntil > Date.now()) {
+			this.logger.warn("Pairing code verification locked out", {
+				userId,
+				lockedUntilMs: attempts.lockedUntil - Date.now(),
+			});
+			return false;
+		}
+
 		const row = this.db
 			.prepare<{ code: string; expires_at: string }, [string]>(
 				"SELECT code, expires_at FROM pairing_codes WHERE user_id = ?",
 			)
 			.get(userId);
 
-		if (!row) return false;
+		if (!row) {
+			this.recordFailedAttempt(userId);
+			return false;
+		}
 
 		// Check expiry
 		if (new Date(row.expires_at) < new Date()) {
 			this.db.run("DELETE FROM pairing_codes WHERE user_id = ?", [userId]);
+			this.recordFailedAttempt(userId);
 			return false;
 		}
 
-		if (row.code !== code) return false;
+		if (row.code !== code) {
+			this.recordFailedAttempt(userId);
+			return false;
+		}
 
-		// Approve the user
+		// Approve the user. Reset the failure counter on success.
 		this.approveUser(userId, "pairing_code");
 		this.db.run("DELETE FROM pairing_codes WHERE user_id = ?", [userId]);
+		this.pairingAttempts.delete(userId);
 		return true;
+	}
+
+	private recordFailedAttempt(userId: string): void {
+		const existing = this.pairingAttempts.get(userId);
+		const count = (existing?.count ?? 0) + 1;
+		if (count >= AccessController.PAIRING_MAX_ATTEMPTS) {
+			this.pairingAttempts.set(userId, {
+				count,
+				lockedUntil: Date.now() + AccessController.PAIRING_LOCKOUT_MS,
+			});
+			this.logger.warn("Pairing code lockout triggered", {
+				userId,
+				attempts: count,
+				lockoutMs: AccessController.PAIRING_LOCKOUT_MS,
+			});
+		} else {
+			this.pairingAttempts.set(userId, {
+				count,
+				lockedUntil: 0,
+			});
+		}
 	}
 
 	approveUser(userId: string, approvedBy = "admin", channel = "all"): void {

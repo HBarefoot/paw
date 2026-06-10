@@ -5,6 +5,12 @@ export interface MemoryMetadata {
 	scope: string;
 	category: "fact" | "preference" | "decision" | "summary";
 	source?: string;
+	/**
+	 * Admin id (`web-{adminId}`) of the admin who owns this memory. When
+	 * set, only that admin sees it in recall/list. When null, the memory
+	 * is shared across all admins.
+	 */
+	ownerUserId?: string | null;
 }
 
 export interface MemoryResult {
@@ -27,6 +33,13 @@ export interface RecallOptions {
 	 * for the same query (e.g. user-scope + global-scope within one turn).
 	 */
 	embedding?: Float32Array;
+	/**
+	 * When set, recall returns only memories visible to this admin
+	 * (their own + global shared with `owner_user_id IS NULL`).
+	 * Undefined means no per-admin filter (used by internal callers
+	 * like auto-extract, which run with elevated privilege).
+	 */
+	ownerUserId?: string;
 }
 
 export interface MemoryStats {
@@ -78,13 +91,14 @@ export class MemoryStore {
 	): Promise<string> {
 		const id = crypto.randomUUID();
 		this.db.run(
-			"INSERT INTO memories (id, text, scope, category, source) VALUES (?, ?, ?, ?, ?)",
+			"INSERT INTO memories (id, text, scope, category, source, owner_user_id) VALUES (?, ?, ?, ?, ?, ?)",
 			[
 				id,
 				text,
 				metadata.scope || "global",
 				metadata.category,
 				metadata.source ?? null,
+				metadata.ownerUserId ?? null,
 			],
 		);
 
@@ -237,16 +251,27 @@ export class MemoryStore {
 						scope: string;
 						category: string;
 						source: string | null;
+						owner_user_id: string | null;
 						created_at: string;
 						confidence: number;
 						access_count: number;
 					},
 					string[]
 				>(
-					`SELECT id, text, scope, category, source, created_at, confidence, access_count FROM memories WHERE id IN (${placeholders})`,
+					`SELECT id, text, scope, category, source, owner_user_id, created_at, confidence, access_count FROM memories WHERE id IN (${placeholders})`,
 				)
 				.all(...ids);
 			for (const row of rows) {
+				// Per-admin scope filter (C-NEW-1): when the caller provided an
+				// ownerUserId, hide memories owned by a different admin. Global
+				// memories (owner_user_id IS NULL) remain visible.
+				if (
+					opts?.ownerUserId &&
+					row.owner_user_id !== null &&
+					row.owner_user_id !== opts.ownerUserId
+				) {
+					continue;
+				}
 				const rawScore = scoreMap.get(row.id)!;
 				results.push({
 					id: row.id,
@@ -319,6 +344,7 @@ export class MemoryStore {
 		scope: string;
 		category: string;
 		source: string | null;
+		owner_user_id: string | null;
 		created_at: string;
 		confidence: number;
 	} | null {
@@ -331,24 +357,59 @@ export class MemoryStore {
 						scope: string;
 						category: string;
 						source: string | null;
+						owner_user_id: string | null;
 						created_at: string;
 						confidence: number;
 					},
 					[string]
 				>(
-					`SELECT id, text, scope, category, source, created_at, confidence
+					`SELECT id, text, scope, category, source, owner_user_id, created_at, confidence
              FROM memories WHERE id = ?`,
 				)
 				.get(id) ?? null
 		);
 	}
 
-	list(opts?: { limit?: number; category?: string }): Array<{
+	/**
+	 * Fetch a memory only if it's visible to the given admin
+	 * (owner matches OR memory is shared/global).
+	 */
+	getByIdForOwner(
+		id: string,
+		ownerUserId: string,
+	): ReturnType<MemoryStore["getById"]> {
+		const row = this.db
+			.prepare<
+				{
+					id: string;
+					text: string;
+					scope: string;
+					category: string;
+					source: string | null;
+					owner_user_id: string | null;
+					created_at: string;
+					confidence: number;
+				},
+				[string, string]
+			>(
+				`SELECT id, text, scope, category, source, owner_user_id, created_at, confidence
+         FROM memories
+        WHERE id = ?
+          AND (owner_user_id IS NULL OR owner_user_id = ?)`,
+			)
+			.get(id, ownerUserId);
+		return row ?? null;
+	}
+
+	list(
+		opts?: { limit?: number; category?: string; ownerUserId?: string },
+	): Array<{
 		id: string;
 		text: string;
 		scope: string;
 		category: string;
 		source: string | null;
+		owner_user_id: string | null;
 		created_at: string;
 		confidence: number;
 		access_count: number;
@@ -361,32 +422,43 @@ export class MemoryStore {
 			scope: string;
 			category: string;
 			source: string | null;
+			owner_user_id: string | null;
 			created_at: string;
 			confidence: number;
 			access_count: number;
 			last_accessed_at: string | null;
 		};
+		const ownerFilter = opts?.ownerUserId
+			? " AND (owner_user_id IS NULL OR owner_user_id = ?)"
+			: "";
 		if (opts?.category) {
+			const bindings: (string | number)[] = opts.ownerUserId
+				? [opts.category, opts.ownerUserId, limit]
+				: [opts.category, limit];
 			return this.db
-				.prepare<Row, [string, number]>(
-					`SELECT id, text, scope, category, source, created_at,
+				.prepare<Row, (string | number)[]>(
+					`SELECT id, text, scope, category, source, owner_user_id, created_at,
                   confidence, access_count, last_accessed_at
              FROM memories
-            WHERE category = ?
+            WHERE category = ?${ownerFilter}
             ORDER BY created_at DESC
             LIMIT ?`,
 				)
-				.all(opts.category, limit);
+				.all(...bindings);
 		}
+		const bindings: (string | number)[] = opts?.ownerUserId
+			? [opts.ownerUserId, limit]
+			: [limit];
 		return this.db
-			.prepare<Row, [number]>(
-				`SELECT id, text, scope, category, source, created_at,
+			.prepare<Row, (string | number)[]>(
+				`SELECT id, text, scope, category, source, owner_user_id, created_at,
                 confidence, access_count, last_accessed_at
            FROM memories
+          WHERE 1=1${ownerFilter}
           ORDER BY created_at DESC
           LIMIT ?`,
 			)
-			.all(limit);
+			.all(...bindings);
 	}
 
 	getStats(): MemoryStats {

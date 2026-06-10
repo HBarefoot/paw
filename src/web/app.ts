@@ -18,6 +18,8 @@ import { logger as honoLogger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
 import { readConfigOverrides, saveConfigOverrides } from "../config/writer.js";
 import { isValidCron } from "../cron/parser.js";
+import { isAllowedCronEvent } from "../cron/scheduler.js";
+import type { StreamChunk } from "../ai/base-provider.js";
 import type { Kernel } from "../kernel/kernel.js";
 import { resolveProjectPath } from "../paths.js";
 import { RateLimiter } from "../security/rate-limiter.js";
@@ -25,10 +27,15 @@ import { buildOtpauthUri } from "../security/totp.js";
 import { WebAuthManager } from "../security/web-auth.js";
 import {
 	deleteSession,
+	deleteSessionOwnedBy,
 	forkSessionAtMessage,
+	forkSessionOwnedBy,
+	getSessionOwnedBy,
 	getSessionWithMessages,
 	listRecentSessions,
+	listRecentSessionsForUser,
 	updateSessionTitle,
+	updateSessionTitleOwnedBy,
 } from "../store/sessions.js";
 import type { PawConfig } from "../types/config.js";
 import { CANVAS_TEMPLATES } from "./canvas-templates.js";
@@ -45,7 +52,7 @@ import { LoginPage } from "./views/login-page.js";
 import { MCPPage } from "./views/mcp-page.js";
 import { MemoryPage } from "./views/memory-page.js";
 import { SearchPage, type SearchHit } from "./views/search-page.js";
-import { searchMessages } from "../store/messages.js";
+import { getSessionMessages, searchMessages } from "../store/messages.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
 import { ToolsPage, type ToolLogRow } from "./views/tools-page.js";
 import { PromptsPage } from "./views/prompts-page.js";
@@ -88,6 +95,19 @@ type SecretStatusRow = {
 	set: boolean;
 	fromEnv?: boolean;
 };
+
+/**
+ * Derive the per-request `userId` for ownership scoping of sessions,
+ * memories, and webhooks. The web UI has multiple admin accounts, so we
+ * can't use a single shared identifier — that would let any admin read
+ * or delete any other admin's data (C-NEW-1). Format: `web-{adminId}`.
+ * Returns `null` when no admin is on the request (bearer token, public
+ * route) so callers can decide whether to allow the request.
+ */
+function getRequestUserId(c: Context): string | null {
+	const admin = c.get("admin") as { id: number } | undefined;
+	return admin ? `web-${admin.id}` : null;
+}
 
 /**
  * Build the read-only list of API-key / token statuses shown in the
@@ -1189,6 +1209,14 @@ export function createWebApp(
 				: "The canvas is currently empty. Start by writing an index.html file.",
 			"Do NOT use file_write — only canvas_write works for the live preview.",
 			"Write complete, self-contained HTML files with inline CSS and JS when possible.",
+			// Reliability for weaker tool-callers: always emit the full
+			// document inline too. If the model forgets to call canvas_write,
+			// the server extracts this fenced block and writes it (see
+			// extractCanvasHtml in the /api/canvas/* handlers).
+			"REQUIRED OUTPUT FORMAT:",
+			"1. Call the canvas_write tool with the complete file content.",
+			"2. In your reply, ALSO include the complete, final HTML document inside a single ```html fenced code block (full <!DOCTYPE html> … </html>).",
+			"NEVER say a file was created or updated unless you actually called canvas_write or included the full ```html document. Do not describe a file you did not produce.",
 			"",
 			"User request: " + (body.message?.trim() || "(see attached files)"),
 			...(fileContentSections.length > 0
@@ -1198,6 +1226,103 @@ export function createWebApp(
 		].join("\n");
 
 		return { content: canvasInstruction, attachments };
+	}
+
+	// --- Canvas write reliability (B6) ---------------------------------------
+	// Weaker tool-callers (e.g. Ollama models) sometimes describe a canvas file
+	// without ever calling canvas_write. The canvas-mode prompt asks the model
+	// to ALSO emit the full document inline; if no canvas_write ran during the
+	// turn, we extract that HTML and write it ourselves so the preview updates.
+
+	/** Pull a complete HTML document from an assistant reply. */
+	function extractCanvasHtml(text: string): string | null {
+		if (!text) return null;
+		const fenced = text.match(/```(?:html)?\s*\n?([\s\S]*?)```/i);
+		if (fenced?.[1]) {
+			const inner = fenced[1].trim();
+			if (/<html[\s>]|<!doctype html/i.test(inner)) return inner;
+		}
+		const doc =
+			text.match(/<!doctype html[\s\S]*?<\/html>/i) ??
+			text.match(/<html[\s\S]*?<\/html>/i);
+		return doc ? doc[0].trim() : null;
+	}
+
+	/**
+	 * Decide the target filename for a canvas write from the user's request.
+	 * An explicit `*.html|css|js` wins; otherwise "call/name it X" → `X.html`;
+	 * default `index.html`.
+	 */
+	function parseCanvasFilename(message: string): string {
+		const m = message ?? "";
+		const explicit = m.match(/([\w.\-/]+\.(?:html|css|js))\b/i);
+		if (explicit) return explicit[1].replace(/^\/+/, "");
+		const named = m.match(
+			/\b(?:call(?:ed)?|name[d]?)\s+it\s+["']?([\w-]+)["']?/i,
+		);
+		if (named) return `${named[1].toLowerCase()}.html`;
+		return "index.html";
+	}
+
+	/**
+	 * Wrap kernel.handleInboundStream for canvas turns: pass chunks through
+	 * unchanged, but if the model produced HTML without calling canvas_write,
+	 * write the extracted document ourselves (the canvas fs.watch then emits a
+	 * file-changed event and the preview refreshes). The terminal `done` chunk
+	 * is held back so the fallback's tool step is emitted before it.
+	 */
+	async function* streamCanvasWithFallback(
+		msg: Parameters<typeof kernel.handleInboundStream>[0],
+		targetFile: string,
+	): AsyncGenerator<StreamChunk> {
+		let fullText = "";
+		let canvasWriteRan = false;
+		let pendingDone: StreamChunk | null = null;
+
+		for await (const chunk of kernel.handleInboundStream(msg)) {
+			if (chunk.type === "done") {
+				pendingDone = chunk;
+				continue;
+			}
+			if (chunk.type === "text_delta" && chunk.text) fullText += chunk.text;
+			if (
+				(chunk.type === "tool_start" || chunk.type === "tool_end") &&
+				chunk.toolName === "canvas_write"
+			) {
+				canvasWriteRan = true;
+			}
+			yield chunk;
+		}
+
+		if (!canvasWriteRan) {
+			const html = extractCanvasHtml(fullText);
+			if (html) {
+				try {
+					await kernel.toolRegistryPublic.execute("canvas_write", {
+						path: targetFile,
+						content: html,
+					});
+					yield {
+						type: "tool_end",
+						toolName: "canvas_write",
+						toolId: "canvas-fallback",
+						toolInput: { path: targetFile },
+						toolSummary: `Writing canvas (auto): ${targetFile}`,
+						toolResult: JSON.stringify({
+							written: true,
+							path: targetFile,
+							fallback: true,
+						}),
+						roundtrip: 0,
+					};
+				} catch {
+					// Best-effort: if the write fails the preview just won't
+					// update — no worse than before the fallback existed.
+				}
+			}
+		}
+
+		yield pendingDone ?? { type: "done" };
 	}
 
 	app.post("/api/canvas/chat", async (c) => {
@@ -1220,22 +1345,29 @@ export function createWebApp(
 
 		const { content, attachments } = await buildCanvasMessage(body);
 
+		const admin = c.get("admin") as
+			| { id: number; username: string }
+			| undefined;
+		const userId = admin ? `web-${admin.id}` : "web-anonymous";
+		const userName = admin?.username ?? "Web User";
+
 		const msg = {
 			id: crypto.randomUUID(),
 			sessionId,
 			channel: "canvas" as const,
 			content,
 			attachments: attachments.length > 0 ? attachments : undefined,
-			user: { id: "canvas-user", name: "Canvas User" },
+			user: { id: userId, name: userName },
 			timestamp: new Date().toISOString(),
 			metadata: { canvas: true },
 		};
 
 		// Consume stream in background, push each chunk as a canvas event
+		const targetFile = parseCanvasFilename(body.message ?? "");
 		canvasStreamingSessions.add(sessionId);
 		(async () => {
 			try {
-				for await (const chunk of kernel.handleInboundStream(msg)) {
+				for await (const chunk of streamCanvasWithFallback(msg, targetFile)) {
 					pushCanvasEvent(sessionId, "chunk", chunk);
 				}
 			} catch (err) {
@@ -1275,20 +1407,27 @@ export function createWebApp(
 
 			const { content, attachments } = await buildCanvasMessage(body);
 
+			const admin = c.get("admin") as
+				| { id: number; username: string }
+				| undefined;
+			const userId = admin ? `web-${admin.id}` : "web-anonymous";
+			const userName = admin?.username ?? "Web User";
+
 			const msg = {
 				id: crypto.randomUUID(),
 				sessionId,
 				channel: "canvas" as const,
 				content,
 				attachments: attachments.length > 0 ? attachments : undefined,
-				user: { id: "canvas-user", name: "Canvas User" },
+				user: { id: userId, name: userName },
 				timestamp: new Date().toISOString(),
 				metadata: { canvas: true },
 			};
 
+			const targetFile = parseCanvasFilename(body.message ?? "");
 			return streamSSE(c, async (stream) => {
 				try {
-					for await (const chunk of kernel.handleInboundStream(msg)) {
+					for await (const chunk of streamCanvasWithFallback(msg, targetFile)) {
 						await stream.writeSSE({
 							data: JSON.stringify(chunk),
 						});
@@ -1810,11 +1949,11 @@ export function createWebApp(
 	});
 
 	// --- Memory Page ---
-
 	app.get("/memory", async (c) => {
 		const q = c.req.query("q") ?? "";
 		const category = c.req.query("category") ?? "";
 		const stats = kernel.memory?.getStats() ?? null;
+		const ownerUserId = getRequestUserId(c);
 
 		let memories: Array<{
 			id: string;
@@ -1832,7 +1971,7 @@ export function createWebApp(
 			if (q) {
 				const results = await kernel.memory.recall(q, {
 					limit: 50,
-					...(category ? {} : {}),
+					ownerUserId: ownerUserId ?? undefined,
 				});
 				memories = results.map((r) => ({
 					id: r.id,
@@ -1844,6 +1983,7 @@ export function createWebApp(
 					confidence: r.confidence,
 					access_count: r.access_count,
 				}));
+
 				// Filter by category client-side if search was used
 				if (category) {
 					memories = memories.filter((m) => m.category === category);
@@ -1852,6 +1992,7 @@ export function createWebApp(
 				memories = kernel.memory.list({
 					limit: 50,
 					category: category || undefined,
+					ownerUserId: ownerUserId ?? undefined,
 				});
 			}
 		}
@@ -1863,9 +2004,13 @@ export function createWebApp(
 
 	app.get("/search", (c) => {
 		const q = c.req.query("q") ?? "";
+		const admin = c.get("admin") as
+			| { id: number; username: string }
+			| undefined;
+		const userId = admin ? `web-${admin.id}` : "web-anonymous";
 		const hits: SearchHit[] = q
 			? searchMessages(kernel.database, q, {
-					userId: "web-user",
+					userId,
 					limit: 50,
 				}).map((h) => ({
 					id: h.id,
@@ -2014,9 +2159,13 @@ export function createWebApp(
 		const q = c.req.query("q") ?? "";
 		const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
 		const sessionId = c.req.query("session") ?? undefined;
+		const admin = c.get("admin") as
+			| { id: number; username: string }
+			| undefined;
+		const userId = admin ? `web-${admin.id}` : "web-anonymous";
 		const hits = q
 			? searchMessages(kernel.database, q, {
-					userId: "web-user",
+					userId,
 					limit: Number.isFinite(limit) ? limit : 50,
 					sessionId,
 				})
@@ -2027,18 +2176,23 @@ export function createWebApp(
 	// --- Sessions Page ---
 
 	app.get("/sessions", (c) => {
-		const sessions = listRecentSessions(kernel.database, 50);
+		const userId = getRequestUserId(c);
+		if (!userId) return c.text("Unauthorized", 401);
+		const sessions = listRecentSessionsForUser(kernel.database, userId, 50);
 		return c.html(SessionsListPage({ sessions }));
 	});
 
 	app.get("/sessions/:id", (c) => {
 		const id = c.req.param("id");
-		const data = getSessionWithMessages(kernel.database, id);
-		if (!data) {
-			return c.text("Session not found", 404);
-		}
+		const userId = getRequestUserId(c);
+		if (!userId) return c.text("Unauthorized", 401);
+		const session = getSessionOwnedBy(kernel.database, id, userId);
+		if (!session) return c.text("Session not found", 404);
+		// High limit: the detail page shows full history (the old
+		// getSessionWithMessages had no limit; the default 50 would truncate).
+		const messages = getSessionMessages(kernel.database, id, 100_000);
 		return c.html(
-			SessionDetailPage({ session: data.session, messages: data.messages }),
+			SessionDetailPage({ session, messages }),
 		);
 	});
 
@@ -2128,11 +2282,13 @@ export function createWebApp(
 		const scope = c.req.query("scope");
 		const category = c.req.query("category");
 		const limit = Number.parseInt(c.req.query("limit") ?? "20", 10);
+		const ownerUserId = getRequestUserId(c) ?? undefined;
 
 		if (!q) {
 			const memories = kernel.memory.list({
 				limit,
 				category: category || undefined,
+				ownerUserId,
 			});
 			return c.json({ memories });
 		}
@@ -2140,6 +2296,7 @@ export function createWebApp(
 		const results = await kernel.memory.recall(q, {
 			limit,
 			scope: scope || undefined,
+			ownerUserId,
 		});
 		return c.json({ memories: results });
 	});
@@ -2152,7 +2309,9 @@ export function createWebApp(
 		if (!/^[A-Za-z0-9-]+$/.test(id)) {
 			return c.json({ error: "Invalid memory id" }, 400);
 		}
-		const mem = kernel.memory.getById(id);
+		const ownerUserId = getRequestUserId(c);
+		if (!ownerUserId) return c.json({ error: "Unauthorized" }, 401);
+		const mem = kernel.memory.getByIdForOwner(id, ownerUserId);
 		if (!mem) return c.json({ error: "Not found" }, 404);
 		return c.json({ memory: mem });
 	});
@@ -2162,6 +2321,11 @@ export function createWebApp(
 			return c.json({ error: "Memory system disabled" }, 400);
 		}
 		const id = c.req.param("id");
+		const ownerUserId = getRequestUserId(c);
+		if (!ownerUserId) return c.json({ error: "Unauthorized" }, 401);
+		// Only delete if the memory is visible to this admin (C-NEW-1, M-NEW-15).
+		const mem = kernel.memory.getByIdForOwner(id, ownerUserId);
+		if (!mem) return c.json({ error: "Not found" }, 404);
 		const deleted = kernel.memory.forget(id);
 		return c.json({ deleted });
 	});
@@ -2196,10 +2360,13 @@ export function createWebApp(
 			return c.json({ error: "Text is required" }, 400);
 		}
 
+		const ownerUserId = getRequestUserId(c) ?? null;
+
 		const id = await kernel.memory.store(text.trim(), {
 			scope,
 			category: category as "fact" | "preference" | "decision" | "summary",
 			source: "web-ui",
+			ownerUserId,
 		});
 
 		// Redirect back to memory page for form submissions
@@ -2238,6 +2405,7 @@ export function createWebApp(
 		const scope = body.scope || "global";
 		const category: "fact" | "summary" =
 			body.category === "summary" ? "summary" : "fact";
+		const ownerUserId = getRequestUserId(c) ?? null;
 
 		const { chunkText } = await import("../memory/chunker.js");
 		const { chunks, totalChars } = chunkText(text);
@@ -2248,7 +2416,12 @@ export function createWebApp(
 		let stored = 0;
 		for (const chunk of chunks) {
 			try {
-				await kernel.memory.store(chunk, { scope, category, source });
+				await kernel.memory.store(chunk, {
+					scope,
+					category,
+					source,
+					ownerUserId,
+				});
 				stored++;
 			} catch {
 				// swallow and continue so partial success still reports
@@ -2323,9 +2496,39 @@ export function createWebApp(
 		}
 
 		const action: Record<string, unknown> = { type: actionType };
-		if (actionType === "prompt") action.prompt = payload;
-		else if (actionType === "tool") action.tool = payload;
-		else if (actionType === "event") action.event = payload;
+		if (actionType === "prompt") {
+			action.prompt = payload;
+		} else if (actionType === "tool") {
+			action.tool = payload;
+			// H-NEW-2: cron tool actions must include the tool's plugin so
+			// the scheduler can verify the requester has rights to run it.
+			const toolDef = kernel.toolRegistryPublic.get(payload);
+			if (!toolDef) {
+				return c.json(
+					{ error: `Unknown tool: ${payload}` },
+					400,
+				);
+			}
+			action.plugin = toolDef.plugin;
+		} else if (actionType === "event") {
+			// H-NEW-1: validate against the static allowlist at the API
+			// boundary. The scheduler also enforces this at execution time
+			// (defense in depth).
+			if (!isAllowedCronEvent(payload)) {
+				return c.json(
+					{
+						error: `Event "${payload}" is not in the cron event allowlist`,
+					},
+					400,
+				);
+			}
+			action.event = payload;
+		} else {
+			return c.json(
+				{ error: `Unknown action type: ${actionType}` },
+				400,
+			);
+		}
 
 		const id = kernel.cron.addJob({
 			name: name.trim(),
@@ -2400,13 +2603,19 @@ export function createWebApp(
 				attachments.push(...fileAttachments);
 			}
 
+			const admin = c.get("admin") as
+				| { id: number; username: string }
+				| undefined;
+			const userId = admin ? `web-${admin.id}` : "web-anonymous";
+			const userName = admin?.username ?? "Web User";
+
 			const msg = {
 				id: crypto.randomUUID(),
 				sessionId,
 				channel: "web" as const,
 				content: body.message.trim(),
 				attachments: attachments.length > 0 ? attachments : undefined,
-				user: { id: "web-user", name: "Web User" },
+				user: { id: userId, name: userName },
 				timestamp: new Date().toISOString(),
 			};
 
@@ -2476,6 +2685,12 @@ export function createWebApp(
 					`data:${img.mimeType};base64,${img.data}`,
 			);
 
+			const admin = c.get("admin") as
+				| { id: number; username: string }
+				| undefined;
+			const userId = admin ? `web-${admin.id}` : "web-anonymous";
+			const userName = admin?.username ?? "Web User";
+
 			// Create a promise that resolves when the outbound message arrives
 			const responsePromise = new Promise<{
 				content: string;
@@ -2523,7 +2738,7 @@ export function createWebApp(
 					channel: "web",
 					content: body.message.trim(),
 					attachments: attachments.length > 0 ? attachments : undefined,
-					user: { id: "web-user", name: "Web User" },
+					user: { id: userId, name: userName },
 					timestamp: new Date().toISOString(),
 				})
 				.catch((err) => {
@@ -2877,36 +3092,58 @@ export function createWebApp(
 	});
 
 	app.get("/api/sessions", (c) => {
+		const userId = getRequestUserId(c);
+		if (!userId) return c.json({ error: "Unauthorized" }, 401);
 		const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
-		const sessions = listRecentSessions(kernel.database, limit);
+		const sessions = listRecentSessionsForUser(
+			kernel.database,
+			userId,
+			Number.isFinite(limit) ? limit : 50,
+		);
 		return c.json({ sessions });
 	});
 
 	app.delete("/api/sessions/:id", (c) => {
 		const id = c.req.param("id");
-		const deleted = deleteSession(kernel.database, id);
+		const userId = getRequestUserId(c);
+		if (!userId) return c.json({ error: "Unauthorized" }, 401);
+		const deleted = deleteSessionOwnedBy(kernel.database, id, userId);
 		if (!deleted) return c.json({ error: "Session not found" }, 404);
 		return c.json({ deleted: true });
 	});
 
 	app.put("/api/sessions/:id/title", async (c) => {
 		const id = c.req.param("id");
+		const userId = getRequestUserId(c);
+		if (!userId) return c.json({ error: "Unauthorized" }, 401);
 		const body = await c.req.json<{ title: string }>();
 		if (!body.title?.trim()) return c.json({ error: "Title is required" }, 400);
-		const updated = updateSessionTitle(kernel.database, id, body.title.trim());
+		const updated = updateSessionTitleOwnedBy(
+			kernel.database,
+			id,
+			body.title.trim(),
+			userId,
+		);
 		if (!updated) return c.json({ error: "Session not found" }, 404);
 		return c.json({ updated: true });
 	});
 
 	app.get("/api/sessions/:id/messages", (c) => {
 		const id = c.req.param("id");
-		const data = getSessionWithMessages(kernel.database, id);
-		if (!data) return c.json({ error: "Session not found" }, 404);
-		return c.json({ session: data.session, messages: data.messages });
+		const userId = getRequestUserId(c);
+		if (!userId) return c.json({ error: "Unauthorized" }, 401);
+		const session = getSessionOwnedBy(kernel.database, id, userId);
+		if (!session) return c.json({ error: "Session not found" }, 404);
+		// High limit: return full history (parity with the old
+		// getSessionWithMessages, which had no LIMIT).
+		const messages = getSessionMessages(kernel.database, id, 100_000);
+		return c.json({ session, messages });
 	});
 
 	app.post("/api/sessions/:id/fork", async (c) => {
 		const id = c.req.param("id");
+		const userId = getRequestUserId(c);
+		if (!userId) return c.json({ error: "Unauthorized" }, 401);
 		const body = await c.req
 			.json<{ messageId?: string }>()
 			.catch(() => ({}) as { messageId?: string });
@@ -2915,7 +3152,7 @@ export function createWebApp(
 			return c.json({ error: "messageId is required" }, 400);
 		}
 		const newId = `web-${Date.now()}-fork`;
-		const result = forkSessionAtMessage(kernel.database, id, messageId, {
+		const result = forkSessionOwnedBy(kernel.database, id, messageId, userId, {
 			newSessionId: newId,
 		});
 		if (!result) {
@@ -2926,6 +3163,11 @@ export function createWebApp(
 
 	app.get("/api/sessions/:id/export", (c) => {
 		const id = c.req.param("id");
+		const userId = getRequestUserId(c);
+		if (!userId) return c.json({ error: "Unauthorized" }, 401);
+		const session = getSessionOwnedBy(kernel.database, id, userId);
+		if (!session) return c.json({ error: "Session not found" }, 404);
+
 		const rawFormat = (c.req.query("format") ?? "md").toLowerCase();
 		const format: ExportFormat =
 			rawFormat === "html" || rawFormat === "json"

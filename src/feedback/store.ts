@@ -1,27 +1,17 @@
 import type { Database } from "bun:sqlite";
 import type { MemoryStore } from "../memory/store.js";
+import { sanitizePromptText } from "../ai/system-prompt.js";
 
 /** Maximum length of an individual feedback line injected into the prompt. */
 const MAX_FEEDBACK_LENGTH = 500;
 
-// Strip C0/C1 control characters (NUL..US, DEL, and C1 range) so a
-// malicious feedback entry cannot smuggle terminal escapes or prompt-
-// injection markers into the system prompt.
-const CONTROL_CHAR_RE = new RegExp(
-	"[\\u0000-\\u001F\\u007F-\\u009F]+",
-	"g",
-);
-
 /**
  * Sanitize feedback text for safe inclusion in the system prompt.
- * Collapses control chars + whitespace to single spaces and truncates.
+ * Delegated to the shared helper so memory and feedback go through
+ * the same pipeline.
  */
 function sanitizeFeedbackText(text: string): string {
-	return text
-		.replace(CONTROL_CHAR_RE, " ")
-		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, MAX_FEEDBACK_LENGTH);
+	return sanitizePromptText(text).slice(0, MAX_FEEDBACK_LENGTH);
 }
 
 export interface FeedbackRecord {

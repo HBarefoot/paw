@@ -28,7 +28,15 @@ export class SkillManager {
 
 		for (const tool of registry.allTools()) {
 			const skillName = this.deriveSkillName(tool);
-			const isAlwaysOn = skillName === "memory" || skillName === "core";
+			// "canvas" is always-active so the agent can use the live
+			// canvas natively in any channel (not just the canvas channel)
+			// without an activate_skill roundtrip. Canvas tools are only
+			// registered when config.web.canvas.enabled, so this adds
+			// nothing when the canvas is off.
+			const isAlwaysOn =
+				skillName === "memory" ||
+				skillName === "core" ||
+				skillName === "canvas";
 
 			if (!groups.has(skillName)) {
 				groups.set(skillName, {
@@ -55,6 +63,11 @@ export class SkillManager {
 	}
 
 	private deriveSkillName(tool: ToolDefinition): string {
+		// Canvas tools carry plugin: "kernel" (so the sandbox uses the
+		// kernel manifest's canvas:read/write grants), but they must group
+		// under their own always-active "canvas" skill rather than falling
+		// into "files". Match by name so this holds regardless of plugin.
+		if (tool.name.startsWith("canvas_")) return "canvas";
 		if (tool.plugin === "kernel") {
 			if (tool.name.startsWith("memory_")) return "memory";
 			if (tool.name === "spawn_agent" || tool.name === "activate_skill")
@@ -70,6 +83,8 @@ export class SkillManager {
 			memory: "Store, recall, and forget information across conversations.",
 			files:
 				"Read, write, and list files; run shell commands in the workspace.",
+			canvas:
+				"Write, read, and list files in the live canvas workspace for HTML/CSS/JS preview.",
 			slack: "Post messages and add reactions in Slack.",
 			"web-pilot":
 				"Browse the web: navigate, click, fill forms, take screenshots.",

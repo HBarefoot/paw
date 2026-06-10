@@ -76,6 +76,7 @@ function runMigrations(db: Database): void {
       scope TEXT NOT NULL DEFAULT 'global',
       category TEXT NOT NULL CHECK(category IN ('fact','preference','decision','summary')),
       source TEXT,
+      owner_user_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -83,6 +84,9 @@ function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope);
     CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
     CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+    -- NOTE: idx_memories_owner is created *after* the ALTER TABLE migration
+    -- below, so that pre-existing databases (which didn't have the column
+    -- when the table was originally created) get the column added first.
 
     CREATE TABLE IF NOT EXISTS cron_jobs (
       id TEXT PRIMARY KEY,
@@ -200,6 +204,20 @@ function runMigrations(db: Database): void {
 	} catch {
 		// Column already exists
 	}
+
+	// Per-admin memory ownership (C-NEW-1). NULL means "shared/global"
+	// — visible to all admins. Set to `web-{adminId}` for per-admin scoping.
+	try {
+		db.exec("ALTER TABLE memories ADD COLUMN owner_user_id TEXT");
+	} catch {
+		// Column already exists
+	}
+	// Index must be created *after* the column exists on pre-existing DBs
+	// (the original CREATE INDEX would fail on a DB that predates the
+	// ALTER TABLE migration because the column wouldn't exist yet).
+	db.exec(
+		"CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(owner_user_id);",
+	);
 
 	// Memory relationship links
 	db.exec(`
@@ -395,6 +413,42 @@ function runMigrations(db: Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_webhook_logs_webhook ON webhook_logs(webhook_id, created_at DESC);
   `);
+
+	// Backfill: re-parent canvas sessions to the per-admin user_id.
+	// Before per-admin scoping was added (REVIEW-2026-06-09.md C-NEW-1),
+	// canvas sessions were stored with user_id="canvas-user". Now they
+	// should belong to the admin who opened the browser. Since this is
+	// a single-admin deployment (and even in a multi-admin one, the
+	// canvas session was opened by one specific admin in their browser),
+	// we reassign all canvas-user sessions to the first admin's id.
+	// For multi-admin setups, an admin can re-create canvas sessions
+	// in their own browser; the old ones become orphaned and are
+	// filtered out of /sessions.
+	try {
+		const firstAdmin = db
+			.query<{ id: number }, []>("SELECT id FROM web_admins ORDER BY id ASC LIMIT 1")
+			.get();
+		if (firstAdmin) {
+			db.run(
+				"UPDATE sessions SET user_id = ? WHERE user_id = ? AND channel = ?",
+				[`web-${firstAdmin.id}`, "canvas-user", "canvas"],
+			);
+			// Same rationale for the old shared web chat namespace: before
+			// per-admin scoping, every web/canvas chat was stored with
+			// user_id="web-user". Re-parent those to the first admin so the
+			// existing chat history doesn't disappear from /sessions after
+			// the scoping change. Single-admin assumption (matches the
+			// deployment); for multi-admin, old web-user sessions can only
+			// be attributed to the first admin — documented limitation.
+			db.run("UPDATE sessions SET user_id = ? WHERE user_id = ?", [
+				`web-${firstAdmin.id}`,
+				"web-user",
+			]);
+		}
+	} catch {
+		// web_admins table may not exist yet on a brand-new install;
+		// the migration is a no-op in that case.
+	}
 }
 
 export function closeDb(): void {

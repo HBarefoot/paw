@@ -5,6 +5,9 @@ import {
 	writeFileSync,
 	chmodSync,
 	renameSync,
+	openSync,
+	closeSync,
+	fsyncSync,
 } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -12,6 +15,7 @@ import { homedir } from "node:os";
 const PAW_DIR = join(homedir(), ".paw");
 const LEGACY_DIR = join(homedir(), ".clawme");
 const CREDENTIALS_PATH = join(PAW_DIR, "credentials.json");
+const CREDENTIALS_TMP_PATH = join(PAW_DIR, "credentials.json.tmp");
 const CLAUDE_CREDENTIALS_PATH = join(homedir(), ".claude", ".credentials.json");
 
 /** Migrate ~/.clawme → ~/.paw on first run after rename. */
@@ -84,16 +88,25 @@ export function loadCredentials(): StoredCredentials {
 
 export function saveCredentials(creds: StoredCredentials): void {
 	ensureDir();
-	writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2) + "\n", {
-		mode: 0o600,
-	});
+	// Atomic write: write to a tmp file, fsync, then rename. This way a
+	// crash mid-write never leaves a partially-written credentials file
+	// with plaintext API keys (H-NEW-13).
+	const payload = JSON.stringify(creds, null, 2) + "\n";
+	const fd = openSync(CREDENTIALS_TMP_PATH, "w", 0o600);
+	try {
+		writeFileSync(fd, payload);
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+	renameSync(CREDENTIALS_TMP_PATH, CREDENTIALS_PATH);
 	chmodSync(CREDENTIALS_PATH, 0o600);
 }
 
 export function clearCredentials(service?: "anthropic" | "slack"): void {
 	if (!service) {
 		if (existsSync(CREDENTIALS_PATH)) {
-			writeFileSync(CREDENTIALS_PATH, "{}\n", { mode: 0o600 });
+			saveCredentials({});
 		}
 		return;
 	}

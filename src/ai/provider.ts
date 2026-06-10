@@ -84,9 +84,11 @@ export class ClaudeProvider implements AIProvider {
 		messages: ChatMessage[],
 		systemPrompt?: string,
 		sessionId?: string,
+		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
 		const collectedImages: ToolResultImage[] = [];
+		const signal = opts?.signal;
 		const conversation: MessageParam[] = messages.map((m) => {
 			if (m.role === "user" && m.attachments && m.attachments.length > 0) {
 				const contentParts: ContentBlockParam[] = [];
@@ -143,6 +145,7 @@ export class ClaudeProvider implements AIProvider {
 						})
 						.finalMessage(),
 				this.logger,
+				{ signal },
 			);
 
 			const toolUseBlocks = response.content.filter(
@@ -289,8 +292,11 @@ export class ClaudeProvider implements AIProvider {
 		messages: ChatMessage[],
 		systemPrompt?: string,
 		sessionId?: string,
+		opts?: { signal?: AbortSignal },
 	): AsyncGenerator<StreamChunk> {
 		let roundtrips = 0;
+		const signal = opts?.signal;
+		const collectedImages: ToolResultImage[] = [];
 		const conversation: MessageParam[] = this.buildConversation(messages);
 
 		while (roundtrips < this.maxToolRoundtrips) {
@@ -312,6 +318,23 @@ export class ClaudeProvider implements AIProvider {
 					? { tools: tools as Anthropic.Messages.Tool[] }
 					: {}),
 			});
+			// H-NEW-5: Anthropic SDK's MessageStream exposes its own
+			// AbortController. Wire the caller's cancel signal so a
+			// "Stop" click tears down the in-flight HTTP request.
+			// NB: `signal` is an AbortSignal (no `.abort()` of its own —
+			// that lives on AbortController), so we only listen for its
+			// abort and forward it to the stream's controller.
+			if (signal) {
+				if (signal.aborted) {
+					stream.controller.abort();
+				} else {
+					signal.addEventListener(
+						"abort",
+						() => stream.controller.abort(),
+						{ once: true },
+					);
+				}
+			}
 
 			for await (const event of stream) {
 				if (event.type === "content_block_delta") {

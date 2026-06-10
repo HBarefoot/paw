@@ -1465,29 +1465,53 @@ export function getChatScript(): string {
     var savedWidth = localStorage.getItem("paw-canvas-width");
     if (savedWidth) canvasPanel.style.setProperty("--canvas-width", savedWidth);
 
-    canvasDividerEl.addEventListener("mousedown", function(e) {
+    // Pointer Events + setPointerCapture so the divider keeps receiving
+    // move events even when the cursor passes over the canvas preview
+    // <iframe> (a plain document mousemove listener stops firing the moment
+    // the pointer enters the iframe, which made the divider stick/jump).
+    canvasDividerEl.addEventListener("pointerdown", function(e) {
       e.preventDefault();
+      canvasDividerEl.setPointerCapture(e.pointerId);
       canvasDividerEl.classList.add("dragging");
+      document.body.style.userSelect = "none";
+      // Belt-and-braces: disable iframe hit-testing during the drag so it
+      // can't swallow the pointer stream even if capture is unavailable.
+      var iframes = canvasPanel.querySelectorAll("iframe");
+      for (var i = 0; i < iframes.length; i++) iframes[i].style.pointerEvents = "none";
+
       var container = document.getElementById("chat-with-canvas");
       var containerRect = container.getBoundingClientRect();
 
-      function onMouseMove(e) {
+      // Keep this in sync with the canvas-panel min-width in layout.tsx
+      // so the % we set never collides with the CSS floor (which would
+      // make the divider drift away from the cursor near the narrow end).
+      var MIN_CANVAS_PX = 320;
+      function onMove(e) {
         var x = e.clientX - containerRect.left;
-        var pct = ((containerRect.width - x) / containerRect.width) * 100;
-        pct = Math.max(20, Math.min(80, pct));
+        var canvasPx = containerRect.width - x;
+        canvasPx = Math.max(
+          MIN_CANVAS_PX,
+          Math.min(containerRect.width * 0.8, canvasPx),
+        );
+        var pct = (canvasPx / containerRect.width) * 100;
         canvasPanel.style.setProperty("--canvas-width", pct + "%");
       }
 
-      function onMouseUp() {
+      function onUp(e) {
         canvasDividerEl.classList.remove("dragging");
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.userSelect = "";
+        for (var i = 0; i < iframes.length; i++) iframes[i].style.pointerEvents = "";
+        try { canvasDividerEl.releasePointerCapture(e.pointerId); } catch (_) {}
+        canvasDividerEl.removeEventListener("pointermove", onMove);
+        canvasDividerEl.removeEventListener("pointerup", onUp);
+        canvasDividerEl.removeEventListener("pointercancel", onUp);
         var current = canvasPanel.style.getPropertyValue("--canvas-width");
         if (current) localStorage.setItem("paw-canvas-width", current);
       }
 
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
+      canvasDividerEl.addEventListener("pointermove", onMove);
+      canvasDividerEl.addEventListener("pointerup", onUp);
+      canvasDividerEl.addEventListener("pointercancel", onUp);
     });
   }
 
@@ -1745,7 +1769,15 @@ export function getChatScript(): string {
         return navigator.clipboard.writeText(text);
       })
       .then(function() {
-        pawModal.alert("Copied", "Source code for <strong>" + esc(canvasCurrentFileName) + "</strong> copied to clipboard.");
+        // DOM body (not an HTML string) so the bold filename renders and
+        // stays XSS-safe under pawModal's string-escaping.
+        var wrap = document.createElement("div");
+        wrap.appendChild(document.createTextNode("Source code for "));
+        var strong = document.createElement("strong");
+        strong.textContent = canvasCurrentFileName;
+        wrap.appendChild(strong);
+        wrap.appendChild(document.createTextNode(" copied to clipboard."));
+        pawModal.alert("Copied", wrap);
       })
       .catch(function(err) {
         pawModal.alert("Error", "Failed to copy: " + err.message);
@@ -1776,7 +1808,22 @@ export function getChatScript(): string {
       .then(function(data) {
         if (data.error) { pawModal.alert("Share Error", data.error); return; }
         var url = location.origin + data.url;
-        pawModal.alert("Canvas Shared", "Share this link (valid for 24 hours):<br><br><input type=\\"text\\" value=\\"" + url + "\\" onclick=\\"this.select()\\" readonly style=\\"width:100%;margin-top:4px\\">");
+        // Build the body as DOM nodes — pawModal escapes string bodies for
+        // XSS safety, so an HTML string would render as literal text. A Node
+        // is appended as-is and keeps the input both safe and interactive.
+        var wrap = document.createElement("div");
+        var label = document.createElement("div");
+        label.textContent = "Share this link (valid for 24 hours):";
+        var input = document.createElement("input");
+        input.type = "text";
+        input.value = url;
+        input.readOnly = true;
+        input.style.width = "100%";
+        input.style.marginTop = "8px";
+        input.onclick = function() { this.select(); };
+        wrap.appendChild(label);
+        wrap.appendChild(input);
+        pawModal.alert("Canvas Shared", wrap);
       })
       .catch(function(err) {
         pawModal.alert("Share Error", "Failed to share: " + err.message);

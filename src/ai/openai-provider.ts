@@ -50,6 +50,11 @@ interface OpenAIResponse {
 		};
 		finish_reason: string;
 	}>;
+	usage?: {
+		prompt_tokens: number;
+		completion_tokens: number;
+		total_tokens: number;
+	};
 }
 
 export class OpenAIProvider implements AIProvider {
@@ -114,9 +119,11 @@ export class OpenAIProvider implements AIProvider {
 		messages: ChatMessage[],
 		systemPrompt?: string,
 		sessionId?: string,
+		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
 		const collectedImages: ToolResultImage[] = [];
+		const signal = opts?.signal;
 
 		const conversation: OpenAIMessage[] = [
 			{ role: "system", content: systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
@@ -172,6 +179,10 @@ export class OpenAIProvider implements AIProvider {
 						Authorization: `Bearer ${this.apiKey}`,
 					},
 					body: JSON.stringify(body),
+					// H-NEW-5: forward the caller's abort signal so
+					// cancelSession() actually tears down the in-flight
+					// HTTP request, not just the SSE read loop.
+					signal,
 				});
 
 				if (!res.ok) {
@@ -195,6 +206,14 @@ export class OpenAIProvider implements AIProvider {
 				return {
 					text: choice.message.content ?? "",
 					images: collectedImages.length > 0 ? collectedImages : undefined,
+					// M-NEW-12: surface OpenAI usage so the kernel can
+					// record real cost instead of estimating.
+					usage: data.usage
+						? {
+								inputTokens: data.usage.prompt_tokens,
+								outputTokens: data.usage.completion_tokens,
+							}
+						: undefined,
 				};
 			}
 
@@ -211,8 +230,19 @@ export class OpenAIProvider implements AIProvider {
 				let args: Record<string, unknown>;
 				try {
 					args = JSON.parse(call.function.arguments);
-				} catch {
-					args = {};
+				} catch (err) {
+					// H-NEW-7: surface the JSON parse error to the model
+					// instead of silently coercing to `{}` and re-asking
+					// forever. We feed the error back as a tool result so
+					// the model sees the malformed call and can self-correct.
+					const msg =
+						err instanceof Error ? err.message : String(err);
+					conversation.push({
+						role: "tool",
+						content: `Tool "${call.function.name}" arguments are not valid JSON: ${msg}. Fix the arguments and call again.`,
+						tool_call_id: call.id,
+					});
+					continue;
 				}
 
 				if (
@@ -249,9 +279,15 @@ export class OpenAIProvider implements AIProvider {
 				);
 				for (const r of results) {
 					if (r.images) collectedImages.push(...r.images);
+					// M-NEW-8: surface `is_error` to the model. OpenAI's
+					// message format doesn't have a per-tool error flag,
+					// so we prefix the content with a clear marker.
+					const content = r.is_error
+						? `[Tool error] ${r.content}\n(Fix and call again.)`
+						: r.content;
 					conversation.push({
 						role: "tool",
-						content: r.content,
+						content,
 						tool_call_id: r.id,
 					});
 				}

@@ -134,9 +134,11 @@ export class OllamaProvider implements AIProvider {
 		messages: ChatMessage[],
 		systemPrompt?: string,
 		sessionId?: string,
+		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
 		const collectedImages: ToolResultImage[] = [];
+		const signal = opts?.signal;
 
 		const actualSystemPrompt = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
 		const conversation: OllamaMessage[] = [
@@ -196,7 +198,11 @@ export class OllamaProvider implements AIProvider {
 					method: "POST",
 					headers: this.headers,
 					body: JSON.stringify(body),
-					signal: AbortSignal.timeout(this.requestTimeoutMs),
+					// H-NEW-5: combine the caller's signal with the
+					// per-request timeout so cancel + hard timeout both work.
+					signal: signal
+						? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
+						: AbortSignal.timeout(this.requestTimeoutMs),
 				});
 
 				if (!res.ok) {
@@ -260,9 +266,13 @@ export class OllamaProvider implements AIProvider {
 				);
 				for (const r of results) {
 					if (r.images) collectedImages.push(...r.images);
+					// M-NEW-8: surface is_error to the model.
+					const raw = r.is_error
+						? `[Tool error] ${r.content}\n(Fix and call again.)`
+						: r.content;
 					conversation.push({
 						role: "tool",
-						content: truncateToolResult(r.content),
+						content: truncateToolResult(raw),
 					});
 				}
 			}
@@ -288,8 +298,11 @@ export class OllamaProvider implements AIProvider {
 		messages: ChatMessage[],
 		systemPrompt?: string,
 		sessionId?: string,
+		opts?: { signal?: AbortSignal },
 	): AsyncGenerator<StreamChunk> {
 		let roundtrips = 0;
+		const signal = opts?.signal;
+		const collectedImages: ToolResultImage[] = [];
 
 		const actualSystemPrompt = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
 		const conversation: OllamaMessage[] = [
@@ -346,14 +359,19 @@ export class OllamaProvider implements AIProvider {
 			let lastStreamErr: string | undefined;
 			let fetchOk = false;
 			for (let attempt = 0; attempt <= MAX_STREAM_RETRIES; attempt++) {
+				if (signal?.aborted) throw new Error("Aborted");
 				try {
 					res = await fetch(`${this.baseUrl}/api/chat`, {
 						method: "POST",
 						headers: this.headers,
 						body: JSON.stringify(body),
-						signal: AbortSignal.timeout(this.requestTimeoutMs),
+						// H-NEW-5: combine signal with per-request timeout.
+						signal: signal
+							? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
+							: AbortSignal.timeout(this.requestTimeoutMs),
 					});
 				} catch (err) {
+					if (signal?.aborted) throw err;
 					lastStreamErr = err instanceof Error ? err.message : String(err);
 					if (attempt < MAX_STREAM_RETRIES) {
 						const delayMs = Math.min(1000 * Math.pow(2, attempt), 15_000);
@@ -400,14 +418,21 @@ export class OllamaProvider implements AIProvider {
 
 			try {
 				while (true) {
+					// H-NEW-5: race the read against both the caller's
+					// cancel signal and the per-request timeout.
 					const readResult = await Promise.race([
 						reader.read(),
-						new Promise<never>((_, reject) =>
+						new Promise<never>((_, reject) => {
+							if (signal) {
+								const onAbort = () => reject(new Error("Aborted"));
+								if (signal.aborted) onAbort();
+								else signal.addEventListener("abort", onAbort, { once: true });
+							}
 							setTimeout(
 								() => reject(new Error("Ollama stream read timed out")),
 								this.requestTimeoutMs,
-							),
-						),
+							);
+						}),
 					]);
 					const { done, value } = readResult;
 					if (done) break;
@@ -425,7 +450,13 @@ export class OllamaProvider implements AIProvider {
 								yield { type: "text_delta", text: chunk.message.content };
 							}
 							if (chunk.message?.tool_calls) {
-								toolCalls = chunk.message.tool_calls;
+								// Accumulate across NDJSON chunks — some Ollama
+								// models stream tool calls in a separate/late
+								// chunk, and overwriting would drop earlier ones.
+								toolCalls = [
+									...(toolCalls ?? []),
+									...chunk.message.tool_calls,
+								];
 							}
 						} catch {
 							// Skip malformed lines
@@ -442,7 +473,10 @@ export class OllamaProvider implements AIProvider {
 							yield { type: "text_delta", text: chunk.message.content };
 						}
 						if (chunk.message?.tool_calls) {
-							toolCalls = chunk.message.tool_calls;
+							toolCalls = [
+								...(toolCalls ?? []),
+								...chunk.message.tool_calls,
+							];
 						}
 					} catch {
 						// Skip
@@ -457,6 +491,14 @@ export class OllamaProvider implements AIProvider {
 				};
 				yield { type: "done" };
 				streamError = true;
+				// H-NEW-5: cancel the reader so the connection is released
+				// immediately on abort/timeout, not when the GC eventually
+				// finalizes the body stream.
+				try {
+					reader.cancel();
+				} catch {
+					// already closed — fine
+				}
 			}
 
 			if (streamError) return;
@@ -538,9 +580,13 @@ export class OllamaProvider implements AIProvider {
 				}
 				for (const r of next.value) {
 					if (r.images) collectedImages.push(...r.images);
+					// M-NEW-8: surface is_error to the model.
+					const raw = r.is_error
+						? `[Tool error] ${r.content}\n(Fix and call again.)`
+						: r.content;
 					conversation.push({
 						role: "tool",
-						content: truncateToolResult(r.content),
+						content: truncateToolResult(raw),
 					});
 				}
 			}

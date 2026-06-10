@@ -59,8 +59,12 @@ export class ToolRegistry {
 			return { content: `Unknown tool: ${name}`, is_error: true };
 		}
 
-		// Sandbox permission check
-		if (this.sandbox && this.enforcePermissions && tool.plugin !== "kernel") {
+		// Sandbox permission check (H-NEW-4). Previously the check was
+		// bypassed for built-in tools (plugin === "kernel"), which meant
+		// file_*, exec_command, and memory_* were effectively
+		// un-sandboxed. Now the kernel manifest lists all built-in
+		// permissions, so this check fires for every tool.
+		if (this.sandbox && this.enforcePermissions) {
 			const permitted = this.sandbox.checkPermission(
 				tool.plugin,
 				this.inferPermission(tool),
@@ -105,12 +109,29 @@ export class ToolRegistry {
 	}
 
 	private inferPermission(tool: ToolDefinition): string {
-		// Infer required permission from tool name prefix
+		// Infer required permission from tool name. The kernel manifest
+		// must list every permission this returns, or the check will
+		// refuse the call.
 		if (tool.name.startsWith("mcp__")) return tool.plugin; // mcp:<server>
 		if (tool.name.startsWith("browser_")) return "browser";
 		if (tool.name.startsWith("slack_")) return "net:*.slack.com";
-		if (tool.name.startsWith("file_")) return "file:read";
+		if (tool.name.startsWith("file_read") || tool.name.startsWith("file_list"))
+			return "file:read";
+		if (tool.name.startsWith("file_write") || tool.name === "file_write")
+			return "file:write";
 		if (tool.name === "exec_command") return "exec";
+		if (tool.name === "memory_recall") return "memory:read";
+		if (tool.name === "memory_store" || tool.name === "import_document")
+			return "memory:write";
+		if (tool.name === "memory_forget") return "memory:forget";
+		if (tool.name.startsWith("canvas_read") || tool.name === "canvas_list")
+			return "canvas:read";
+		if (tool.name === "canvas_write") return "canvas:write";
+		if (tool.name === "create_proactive_trigger" || tool.name === "remove_proactive_trigger")
+			return "cron:create";
+		if (tool.name === "spawn_agent") return "agent:spawn";
+		if (tool.name === "delegate_task") return "agent:delegate";
+		if (tool.name === "activate_skill") return "skill:activate";
 		return tool.plugin;
 	}
 

@@ -40,7 +40,7 @@ export function createCanvasTools(config: CanvasToolsConfig): ToolDefinition[] {
 		name: "canvas_write",
 		description:
 			"Write a file to the canvas workspace. Creates parent directories automatically. Use this to create HTML, CSS, and JS files for the live preview.",
-		plugin: "canvas",
+		plugin: "kernel",
 		input_schema: {
 			type: "object",
 			properties: {
@@ -96,7 +96,7 @@ export function createCanvasTools(config: CanvasToolsConfig): ToolDefinition[] {
 	const canvasRead: ToolDefinition = {
 		name: "canvas_read",
 		description: "Read a file from the canvas workspace.",
-		plugin: "canvas",
+		plugin: "kernel",
 		input_schema: {
 			type: "object",
 			properties: {
@@ -136,7 +136,7 @@ export function createCanvasTools(config: CanvasToolsConfig): ToolDefinition[] {
 	const canvasList: ToolDefinition = {
 		name: "canvas_list",
 		description: "List files in the canvas workspace with sizes.",
-		plugin: "canvas",
+		plugin: "kernel",
 		input_schema: {
 			type: "object",
 			properties: {

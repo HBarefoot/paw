@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Security & Action Plan
+
+**See `REVIEW-2026-06-09.md` for the current security review and phased action plan.** It contains the active Critical/High/Medium findings and the Phase 0–5 implementation roadmap with status checkboxes. Update its `## Changelog` section when phases close. Sibling reports: `AUDIT-REPORT.md` (Feb 2026), `OPTIMIZATION-REPORT.md` (Feb 2026).
+
 ## What is Paw
 
 Paw is a personal AI assistant framework built with Bun. It supports multiple AI providers (Claude, OpenAI, Ollama, Gemini), a plugin system, MCP servers, memory with vector search, cron scheduling, and a web UI. The entry point is `bin/paw.ts`.

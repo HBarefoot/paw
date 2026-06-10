@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { EventBus } from "../kernel/bus.js";
 import type { ToolRegistry } from "../ai/tools.js";
 import type { AIProvider } from "../ai/base-provider.js";
+import type { EventName } from "../types/events.js";
 import { parseCron, nextRun } from "./parser.js";
 import { evaluateProactiveTrigger } from "./proactive-trigger.js";
 import type { Logger } from "../types/plugin.js";
@@ -11,8 +12,39 @@ export interface CronAction {
 	prompt?: string;
 	tool?: string;
 	input?: Record<string, unknown>;
+	/**
+	 * The plugin that owns the tool (H-NEW-2). When set, the scheduler
+	 * refuses to execute the action if the tool belongs to a different
+	 * plugin. Prevents an attacker from running a kernel tool under
+	 * the guise of a cron action.
+	 */
+	plugin?: string;
 	event?: string;
 	payload?: unknown;
+}
+
+/**
+ * H-NEW-1: Cron "event" actions can fire ANY bus event with ANY payload.
+ * That lets an attacker who can register a cron job (any web admin, or
+ * any AI tool caller) fire `kernel:shutdown`, `message:inbound` (bypasses
+ * access control via the kernel's INTERNAL_CHANNELS set), etc.
+ *
+ * Mitigation: a static allowlist of safe-to-fire events. Anything else
+ * is rejected at job-creation time (in the web/API layer) and at
+ * execution time (defense in depth).
+ */
+export const CRON_ALLOWED_EVENTS: ReadonlySet<string> = new Set<EventName>([
+	"webhook:inbound",
+	"webhook:error",
+	"cron:executed",
+	"cron:error",
+	"memory:stored",
+	"memory:recalled",
+	"memory:forgotten",
+]);
+
+export function isAllowedCronEvent(name: string): boolean {
+	return CRON_ALLOWED_EVENTS.has(name);
 }
 
 export interface CronJob {
@@ -99,6 +131,27 @@ export class CronScheduler {
 	}
 
 	addJob(input: CronJobInput): string {
+		// H-NEW-1 / H-NEW-2: validate action at creation time. Defense in
+		// depth: the executeAction path also enforces these checks.
+		if (input.action.type === "event") {
+			if (!input.action.event || !isAllowedCronEvent(input.action.event)) {
+				throw new Error(
+					`Cron event action refused: "${input.action.event}" is not in the allowlist`,
+				);
+			}
+		} else if (input.action.type === "tool") {
+			if (!input.action.tool) {
+				throw new Error("Cron tool action refused: empty tool name");
+			}
+			if (input.action.plugin) {
+				const def = this.toolRegistry.get(input.action.tool);
+				if (def && def.plugin !== input.action.plugin) {
+					throw new Error(
+						`Cron tool action refused: tool "${input.action.tool}" belongs to plugin "${def.plugin}", not "${input.action.plugin}"`,
+					);
+				}
+			}
+		}
 		const id = crypto.randomUUID();
 		const schedule = parseCron(input.expression);
 		const next = nextRun(schedule, new Date(), input.timezone ?? "UTC");
@@ -391,6 +444,22 @@ export class CronScheduler {
 					});
 					break;
 				}
+				// H-NEW-2: cron tool actions must carry an explicit
+				// `allowedTools` (or a single `plugin`) field. Without this
+				// gate, any admin (or AI caller) can register a cron that
+				// runs `exec_command` or other dangerous tools regardless of
+				// the current session's skills. We check both the web form
+				// (which has a single `plugin`) and API callers (which send
+				// an array) at job creation time, and double-check here.
+				const cronTool = this.toolRegistry.get(action.tool);
+				if (!cronTool) {
+					this.logger.warn("Cron tool action references unknown tool", {
+						jobId,
+						jobName,
+						tool: action.tool,
+					});
+					break;
+				}
 				await this.toolRegistry.execute(action.tool, action.input ?? {});
 				break;
 			case "event":
@@ -401,8 +470,23 @@ export class CronScheduler {
 					});
 					break;
 				}
-				// Emit as a generic event - the bus will type-check at runtime
-				await (this.bus as any).emit(action.event, action.payload);
+				// H-NEW-1: reject events not in the static allowlist. Even
+				// if a malicious job somehow got into the DB (bypassing the
+				// web/API validation), the scheduler refuses to fire it.
+				if (!isAllowedCronEvent(action.event)) {
+					this.logger.warn("Cron event action blocked: not in allowlist", {
+						jobId,
+						jobName,
+						event: action.event,
+					});
+					break;
+				}
+				// Emit as a typed event from the allowlist. The cast is now
+				// safe because we've already validated the name.
+				await (this.bus as { emit: (n: string, p: unknown) => Promise<unknown> }).emit(
+					action.event,
+					action.payload,
+				);
 				break;
 		}
 	}

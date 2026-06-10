@@ -55,10 +55,12 @@ export interface AIProvider {
 		messages: ChatMessage[],
 		systemPrompt?: string,
 		sessionId?: string,
+		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse>;
 	chatStream?(
 		messages: ChatMessage[],
 		systemPrompt?: string,
 		sessionId?: string,
+		opts?: { signal?: AbortSignal },
 	): AsyncGenerator<StreamChunk>;
 }

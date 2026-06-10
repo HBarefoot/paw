@@ -1,6 +1,9 @@
 import type { AIProvider, ChatMessage } from "../ai/base-provider.js";
 import type { MemoryStore } from "./store.js";
 
+/** H-NEW-9: per-line cap on extracted memory length. */
+const MAX_MEMORY_LINE_LENGTH = 500;
+
 const EXTRACT_PROMPT = `You are a memory extraction system. Analyze the conversation below and extract key facts, preferences, or decisions that should be remembered for future conversations.
 
 Rules:
@@ -36,10 +39,18 @@ export async function extractMemories(
 			.map((l) => l.trim())
 			.filter((l) => l.length > 0 && l.toUpperCase() !== "NONE");
 
-		// Clean up lines - remove leading bullets/dashes/numbers
+		// Clean up lines - remove leading bullets/dashes/numbers, cap
+		// length, drop fragments. M-NEW-23: also reject "none of the
+		// above" / "none of the above is worth" type variants that the
+		// original `!== "NONE"` check missed.
 		return lines
 			.map((l) => l.replace(/^[\-\*\d.)\]]+\s*/, "").trim())
-			.filter((l) => l.length > 5); // Skip very short fragments
+			.filter(
+				(l) =>
+					l.length > 5 &&
+					!/\bnone\s+of\s+the\s+above\b/i.test(l) &&
+					l.length <= MAX_MEMORY_LINE_LENGTH,
+			);
 	} catch {
 		return [];
 	}
@@ -54,10 +65,11 @@ export async function extractMemories(
 export async function storeExtractedMemories(
 	memoryStore: MemoryStore,
 	memories: string[],
-	opts?: { scope?: string; source?: string },
+	opts?: { scope?: string; source?: string; ownerUserId?: string },
 ): Promise<string[]> {
 	const scope = opts?.scope ?? "global";
 	const source = opts?.source ?? "auto-extract";
+	const ownerUserId = opts?.ownerUserId ?? null;
 	const storedIds: string[] = [];
 
 	for (const text of memories) {
@@ -76,7 +88,7 @@ export async function storeExtractedMemories(
 
 			const id = await memoryStore.store(
 				text,
-				{ scope, category: "fact", source },
+				{ scope, category: "fact", source, ownerUserId },
 				{ supersedes },
 			);
 			storedIds.push(id);

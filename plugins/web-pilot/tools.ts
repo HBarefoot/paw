@@ -127,7 +127,7 @@ export function createWebPilotTools(
 		{
 			name: "browser_evaluate",
 			description:
-				"Execute JavaScript in the browser page context and return the result",
+				"Execute JavaScript in the browser page context and return the result. Requires allow_javascript: true to be set; without it the call is rejected as a safety measure against arbitrary code execution in a page that may have authenticated state.",
 			input_schema: {
 				type: "object",
 				properties: {
@@ -135,14 +135,35 @@ export function createWebPilotTools(
 						type: "string",
 						description: "JavaScript expression to evaluate",
 					},
+					allow_javascript: {
+						type: "boolean",
+						description:
+							"Must be set to true to confirm the caller understands the page will run this expression in its full JS context.",
+					},
 					session_id: { type: "string", description: "Session ID (optional)" },
 				},
-				required: ["expression"],
+				required: ["expression", "allow_javascript"],
 			},
 			plugin: "web-pilot",
 			handler: async (input) => {
+				// H-NEW-10: refuse unless the caller explicitly opts in.
+				if (input.allow_javascript !== true) {
+					return {
+						content:
+							"browser_evaluate requires allow_javascript: true. " +
+							"Refusing to run arbitrary JavaScript in a page that may have authenticated state.",
+						is_error: true,
+					};
+				}
+				const expression = String(input.expression ?? "");
+				if (expression.length === 0 || expression.length > 10_000) {
+					return {
+						content: "Expression must be 1..10000 characters",
+						is_error: true,
+					};
+				}
 				const page = await getPage(input.session_id as string | undefined);
-				const result = await page.evaluate(input.expression as string);
+				const result = await page.evaluate(expression);
 				return { content: JSON.stringify(result, null, 2) };
 			},
 		},

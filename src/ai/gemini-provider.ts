@@ -94,9 +94,11 @@ export class GeminiProvider implements AIProvider {
 		messages: ChatMessage[],
 		systemPrompt?: string,
 		sessionId?: string,
+		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
 		const collectedImages: ToolResultImage[] = [];
+		const signal = opts?.signal;
 
 		const contents: GeminiContent[] = messages.map((m) => {
 			const parts: GeminiPart[] = [];
@@ -153,6 +155,8 @@ export class GeminiProvider implements AIProvider {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(body),
+					// H-NEW-5: forward the caller's abort signal.
+					signal,
 				});
 
 				if (!res.ok) {
@@ -192,7 +196,12 @@ export class GeminiProvider implements AIProvider {
 			const responseParts: GeminiPart[] = [];
 			const regularCalls: ToolCallRequest[] = [];
 
-			for (const call of functionCalls) {
+			// H-NEW-6: synthesize a unique id per parallel call. The
+			// previous code used `call.functionCall.name` as the id,
+			// which collides for two parallel calls to the same tool
+			// and breaks the activity-timeline correlation.
+			functionCalls.forEach((call, i) => {
+				const callId = `gemini-${roundtrips}-${call.functionCall.name}-${i}`;
 				if (
 					call.functionCall.name === "activate_skill" &&
 					this.skillManager &&
@@ -213,7 +222,7 @@ export class GeminiProvider implements AIProvider {
 								},
 							},
 						});
-						continue;
+						return;
 					}
 				}
 
@@ -221,8 +230,12 @@ export class GeminiProvider implements AIProvider {
 				if (call.functionCall.name === "spawn_agent" && sessionId) {
 					toolArgs.__sessionId = sessionId;
 				}
-				regularCalls.push({ id: call.functionCall.name, name: call.functionCall.name, input: toolArgs });
-			}
+				regularCalls.push({
+					id: callId,
+					name: call.functionCall.name,
+					input: toolArgs,
+				});
+			});
 
 			// Phase 2: Execute remaining tools in parallel
 			if (regularCalls.length > 0) {
@@ -231,10 +244,14 @@ export class GeminiProvider implements AIProvider {
 				);
 				for (const r of results) {
 					if (r.images) collectedImages.push(...r.images);
+					// M-NEW-8: surface is_error to the model.
+					const content = r.is_error
+						? `[Tool error] ${r.content}\n(Fix and call again.)`
+						: r.content;
 					responseParts.push({
 						functionResponse: {
 							name: r.name,
-							response: { content: r.content },
+							response: { content },
 						},
 					});
 				}

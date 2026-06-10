@@ -115,11 +115,15 @@ describe("canvas tools", () => {
 		expect(result.content).toBe("(empty canvas)");
 	});
 
-	// --- all tools have plugin: "canvas" ---
+	// --- all tools carry plugin: "kernel" ---
+	// Canvas tools belong to the kernel manifest (which grants
+	// canvas:read/write) so the sandbox permission check passes. They are
+	// grouped into a dedicated always-active "canvas" skill by name, not
+	// by plugin (see SkillManager.deriveSkillName).
 
-	test("all tools have plugin set to canvas", () => {
+	test("all tools have plugin set to kernel", () => {
 		for (const tool of tools) {
-			expect(tool.plugin).toBe("canvas");
+			expect(tool.plugin).toBe("kernel");
 		}
 	});
 });

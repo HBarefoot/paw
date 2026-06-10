@@ -1253,7 +1253,8 @@ const cssDesignSystem = `
     display: none;
     flex-direction: column;
     width: var(--canvas-width, 50%);
-    min-width: 380px;
+    /* Keep in sync with MIN_CANVAS_PX in chat.tsx's divider drag handler. */
+    min-width: 320px;
     border-left: none;
     background: var(--bg-card);
   }
@@ -1400,6 +1401,19 @@ window.pawModal = {
   _close: function() {
     if (this._overlay) { this._overlay.remove(); this._overlay = null; }
   },
+  // HTML-escape a string so it can be safely embedded into an attribute
+  // or used as text content. C-NEW-2: callers pass model-derived text
+  // (memory text, webhook names, error JSON) and a prior version used
+  // innerHTML concatenation, which is a stored-XSS primitive.
+  _escape: function(s) {
+    if (s === null || s === undefined) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  },
   _show: function(title, body, actions) {
     this._close();
     var overlay = document.createElement("div");
@@ -1407,9 +1421,43 @@ window.pawModal = {
     overlay.onclick = function(e) { if (e.target === overlay) pawModal._close(); };
     var modal = document.createElement("div");
     modal.className = "paw-modal";
-    modal.innerHTML = '<div class="paw-modal-title">' + title + '</div>'
-      + '<div class="paw-modal-body">' + body + '</div>'
-      + '<div class="paw-modal-actions">' + actions + '</div>';
+    var titleEl = document.createElement("div");
+    titleEl.className = "paw-modal-title";
+    titleEl.textContent = title == null ? "" : String(title);
+    modal.appendChild(titleEl);
+    var bodyEl = document.createElement("div");
+    bodyEl.className = "paw-modal-body";
+    if (body instanceof Node) {
+      bodyEl.appendChild(body);
+    } else {
+      bodyEl.textContent = body == null ? "" : String(body);
+    }
+    modal.appendChild(bodyEl);
+    var actionsEl = document.createElement("div");
+    actionsEl.className = "paw-modal-actions";
+    if (Array.isArray(actions)) {
+      for (var i = 0; i < actions.length; i++) {
+        var a = actions[i];
+        var btn = document.createElement("button");
+        btn.className = a.cls || "btn-confirm";
+        if (a.danger) btn.className += " danger";
+        btn.textContent = a.label;
+        if (typeof a.onclick === "function") {
+          btn.onclick = a.onclick;
+        }
+        actionsEl.appendChild(btn);
+      }
+    } else if (actions instanceof Node) {
+      actionsEl.appendChild(actions);
+    } else {
+      // Backwards-compat: callers may still pass an HTML string for
+      // static, server-rendered actions. The modal code that ships
+      // server-side uses DOM construction; the string path is only
+      // hit by hand-rolled client code and is rendered into a
+      // dedicated <div> with no interpolation of user data.
+      actionsEl.innerHTML = actions == null ? "" : String(actions);
+    }
+    modal.appendChild(actionsEl);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
     this._overlay = overlay;
@@ -1419,37 +1467,39 @@ window.pawModal = {
   },
   alert: function(title, message) {
     return new Promise(function(resolve) {
-      var modal = pawModal._show(title, message,
-        '<button class="btn-confirm" onclick="pawModal._close()">OK</button>'
-      );
-      modal.querySelector(".btn-confirm").onclick = function() { pawModal._close(); resolve(); };
+      var modal = pawModal._show(title, message, [
+        { label: "OK", cls: "btn-confirm", onclick: function() { pawModal._close(); resolve(); } }
+      ]);
     });
   },
   confirm: function(title, message, opts) {
     opts = opts || {};
     var confirmLabel = opts.confirmLabel || "Confirm";
-    var danger = opts.danger ? " danger" : "";
     return new Promise(function(resolve) {
-      pawModal._show(title, message,
-        '<button class="btn-cancel">Cancel</button><button class="btn-confirm' + danger + '">' + confirmLabel + '</button>'
-      );
-      pawModal._overlay.querySelector(".btn-cancel").onclick = function() { pawModal._close(); resolve(false); };
-      pawModal._overlay.querySelector(".btn-confirm").onclick = function() { pawModal._close(); resolve(true); };
+      pawModal._show(title, message, [
+        { label: "Cancel", cls: "btn-cancel", onclick: function() { pawModal._close(); resolve(false); } },
+        { label: confirmLabel, cls: "btn-confirm", danger: !!opts.danger, onclick: function() { pawModal._close(); resolve(true); } }
+      ]);
     });
   },
   prompt: function(title, message, defaultVal) {
     return new Promise(function(resolve) {
-      var inputId = "paw-modal-input-" + Date.now();
-      var body = message + '<input type="text" id="' + inputId + '" value="' + (defaultVal || "").replace(/"/g, "&quot;") + '">';
-      pawModal._show(title, body,
-        '<button class="btn-cancel">Cancel</button><button class="btn-confirm">Save</button>'
-      );
-      var input = document.getElementById(inputId);
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "paw-modal-input";
+      input.value = defaultVal == null ? "" : String(defaultVal);
+      var wrapper = document.createElement("div");
+      var msgEl = document.createElement("div");
+      msgEl.textContent = message == null ? "" : String(message);
+      wrapper.appendChild(msgEl);
+      wrapper.appendChild(input);
+      pawModal._show(title, wrapper, [
+        { label: "Cancel", cls: "btn-cancel", onclick: function() { pawModal._close(); resolve(null); } },
+        { label: "Save", cls: "btn-confirm", onclick: function() { pawModal._close(); resolve(input.value); } }
+      ]);
       input.focus();
       input.select();
       input.onkeydown = function(e) { if (e.key === "Enter") { pawModal._close(); resolve(input.value); } };
-      pawModal._overlay.querySelector(".btn-cancel").onclick = function() { pawModal._close(); resolve(null); };
-      pawModal._overlay.querySelector(".btn-confirm").onclick = function() { pawModal._close(); resolve(input.value); };
     });
   }
 };
