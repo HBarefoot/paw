@@ -100,10 +100,29 @@ export class Kernel {
 		this.bus = new EventBus();
 		this.toolRegistry = new ToolRegistry();
 		this.sandbox = new Sandbox(createLogger("sandbox"));
-		this.db = getDb(
-			resolveProjectPath(config.store.dbPath),
-			config.store.customSqlitePath,
-		);
+		const resolvedDbPath = resolveProjectPath(config.store.dbPath);
+		this.db = getDb(resolvedDbPath, config.store.customSqlitePath);
+		// Persistence diagnostic: show exactly where the DB lives (expect
+		// /data/paw.db on Railway) and whether prior rows survived a redeploy.
+		try {
+			const sessions = (
+				this.db.query("SELECT COUNT(*) AS n FROM sessions").get() as {
+					n: number;
+				}
+			).n;
+			const messages = (
+				this.db.query("SELECT COUNT(*) AS n FROM messages").get() as {
+					n: number;
+				}
+			).n;
+			this.logger.info("Database ready", {
+				path: resolvedDbPath,
+				sessions,
+				messages,
+			});
+		} catch {
+			this.logger.info("Database ready", { path: resolvedDbPath });
+		}
 
 		// H-NEW-4: register a built-in "kernel" manifest so the sandbox
 		// can enforce permissions on built-in tools. Previously the

@@ -56,6 +56,16 @@ export function saveConfigOverrides(overrides: Record<string, unknown>): void {
 	const existing = readConfigOverrides();
 	const merged = deepMergeOverrides(existing, overrides);
 
+	// Never persist the DB path: it's a deployment/infra concern driven by
+	// PAW_DB_PATH + defaults. Baking it into config.json (e.g. the default
+	// "./data/paw.db") would shadow PAW_DB_PATH and send the DB off-volume on
+	// Railway, wiping sessions each redeploy. Strip it (and an emptied store).
+	if (merged.store && typeof merged.store === "object") {
+		const store = merged.store as Record<string, unknown>;
+		delete store.dbPath;
+		if (Object.keys(store).length === 0) delete merged.store;
+	}
+
 	mkdirSync(CONFIG_DIR, { recursive: true });
 	writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
 	try {
