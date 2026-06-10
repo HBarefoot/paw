@@ -1,5 +1,6 @@
 import { resolveProjectPath } from "../paths.js";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { EventBus } from "./bus.js";
 import { Sandbox } from "./sandbox.js";
 import { discoverPlugins } from "./plugin-loader.js";
@@ -101,6 +102,26 @@ export class Kernel {
 		this.toolRegistry = new ToolRegistry();
 		this.sandbox = new Sandbox(createLogger("sandbox"));
 		const resolvedDbPath = resolveProjectPath(config.store.dbPath);
+		// Probe BEFORE opening (getDb creates the file): did the DB survive the
+		// last deploy? Emitted as a plain-text banner so it shows even in log
+		// views that strip structured attributes.
+		let dbExisted = "NO — created fresh";
+		try {
+			if (existsSync(resolvedDbPath)) {
+				dbExisted = `yes, ${Math.round(statSync(resolvedDbPath).size / 1024)}kb`;
+			}
+		} catch {
+			/* ignore */
+		}
+		const resolvedCanvasRoot = resolveProjectPath(config.web.canvas.root);
+		this.logger.info(
+			`Storage: DB=${resolvedDbPath} (existed=${dbExisted}) | config=${process.env.PAW_CONFIG_DIR ?? "~/.paw"} | canvas=${resolvedCanvasRoot} | brand=${dirname(resolvedCanvasRoot)}/brand`,
+		);
+		if (!resolvedDbPath.startsWith("/data")) {
+			this.logger.warn(
+				`⚠️ DB path is not under /data — data will NOT persist across Railway deploys (path=${resolvedDbPath}, PAW_DB_PATH=${process.env.PAW_DB_PATH ?? "unset"})`,
+			);
+		}
 		this.db = getDb(resolvedDbPath, config.store.customSqlitePath);
 		// Persistence diagnostic: show exactly where the DB lives (expect
 		// /data/paw.db on Railway) and whether prior rows survived a redeploy.
