@@ -255,7 +255,7 @@ const cssDesignSystem = `
   html.sidebar-collapsed .main-area { margin-left: var(--sidebar-collapsed); }
   html.sidebar-collapsed .nav-label,
   html.sidebar-collapsed .nav-group-chevron,
-  html.sidebar-collapsed .sidebar-footer span { display: none; }
+  html.sidebar-collapsed .sidebar-footer > span { display: none; }
   html.sidebar-collapsed .nav-item { justify-content: center; padding: 12px; }
   html.sidebar-collapsed .nav-item.nav-sub { padding-left: 12px; justify-content: center; }
   html.sidebar-collapsed .nav-group-header { justify-content: center; }
