@@ -1214,7 +1214,20 @@ export function createWebApp(
 			// (added in kernel.runAgentTurnStream); strip it so the skill lookup
 			// resolves (e.g. "[copy-writer-mate] browser_navigate" → "web-pilot").
 			const cleanName = chunk.toolName.replace(/^\[[^\]]+\]\s*/, "");
-			chunk.skillKey = kernel.skills.skillNameForTool(cleanName);
+			// activate_skill itself belongs to the "core" skill, but it's more
+			// intuitive to light the *target* skill's pill (activating "strapi"
+			// → the strapi pill). Parse it from the summary ("Activating skill: X").
+			if (cleanName === "activate_skill" && chunk.toolSummary) {
+				const target = chunk.toolSummary
+					.match(/Activating skill:\s*(.+)$/)?.[1]
+					?.trim();
+				if (target && kernel.skills.getSkill(target)) {
+					chunk.skillKey = target;
+				}
+			}
+			if (!chunk.skillKey) {
+				chunk.skillKey = kernel.skills.skillNameForTool(cleanName);
+			}
 		}
 		return chunk;
 	}
@@ -2495,6 +2508,8 @@ export function createWebApp(
             if(idleTimer) clearTimeout(idleTimer);
             idleTimer=setTimeout(function(){
               if(activeCount>0) return;
+              // Defensive: a missed tool_end can strand a pill .active — sweep any leftovers.
+              document.querySelectorAll(".node.active").forEach(function(n){ n.classList.remove("active"); });
               busy=false; document.body.classList.remove("busy"); if(face) face.classList.remove("working"); setPupils(0,0);
               // keep the feed visible but dimmed so the run can be read, then clear after a long idle
               if(feed && feed.children.length){ feed.classList.add("idle"); clearTimer=setTimeout(function(){ if(!busy && feed) feed.innerHTML=""; }, FEED_CLEAR_MS); }
@@ -2502,6 +2517,19 @@ export function createWebApp(
           }
           window.addEventListener("message", function(e){
             var m=e.data; if(!m || m.type!=="paw:tool") return;
+            if(m.phase==="done"){
+              // Authoritative turn-end reset: the parent says the turn is over, so
+              // clear every pill (even ones whose tool_end never arrived) and let the
+              // face wind down via the normal calm grace. Without this, an unpaired
+              // tool_start leaves a pill stuck .active and activeCount stuck > 0.
+              activeCount=0;
+              document.querySelectorAll(".node.active").forEach(function(n){
+                n.classList.remove("active"); n.classList.add("done");
+                setTimeout(function(){ n.classList.remove("done","errored"); }, GLOW_MS);
+              });
+              calmCheck();
+              return;
+            }
             var wasIdle = feed && feed.classList.contains("idle");
             keepAlive();
             if(m.phase==="work") return; // heartbeat only
