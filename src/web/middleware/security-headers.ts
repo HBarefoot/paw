@@ -26,6 +26,26 @@ export function createSecurityHeaders(tlsEnabled = false): MiddlewareHandler {
 			return next();
 		}
 
+		// Public brand assets are embedded BY canvas pages, which render in a
+		// sandboxed null-origin iframe. The default `Cross-Origin-Resource-Policy:
+		// same-origin` blocks those loads (ERR_BLOCKED_BY_RESPONSE.NotSameOrigin),
+		// so brand colors/logo never applied. Serve them cross-origin.
+		if (
+			path === "/api/brand/tokens.css" ||
+			path === "/api/brand/theme.css" ||
+			path.startsWith("/api/brand/asset/")
+		) {
+			const handler = secureHeaders({
+				crossOriginResourcePolicy: "cross-origin",
+				xContentTypeOptions: "nosniff",
+				referrerPolicy: "strict-origin-when-cross-origin",
+				...(tlsEnabled
+					? { strictTransportSecurity: "max-age=31536000; includeSubDomains" }
+					: {}),
+			});
+			return handler(c, next);
+		}
+
 		// Canvas page itself needs to embed the preview iframe (SAMEORIGIN)
 		// and connect to the SSE stream.
 		if (path === "/canvas" || path.startsWith("/api/canvas/")) {
@@ -57,7 +77,11 @@ export function createSecurityHeaders(tlsEnabled = false): MiddlewareHandler {
 		const handler = secureHeaders({
 			contentSecurityPolicy: {
 				defaultSrc: ["'self'"],
-				scriptSrc: ["'self'", "'unsafe-inline'", "https://static.cloudflareinsights.com"],
+				scriptSrc: [
+					"'self'",
+					"'unsafe-inline'",
+					"https://static.cloudflareinsights.com",
+				],
 				styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
 				imgSrc: ["'self'", "data:"],
 				fontSrc: ["'self'", "https://fonts.gstatic.com"],

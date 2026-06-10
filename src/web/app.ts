@@ -2494,9 +2494,10 @@ export function createWebApp(
               calmCheck();
             }
           });
-          // live-ish: re-render so new skills/services surface. Same-URL reload
-          // (sandbox-safe); waits until not busy + visible.
-          (function reloadTick(){ setTimeout(function(){ try{ if(!busy && document.visibilityState!=="hidden"){ location.reload(); return; } }catch(e){} reloadTick(); }, busy?8000:45000); })();
+          // Note: no in-iframe self-reload — a null-origin sandboxed iframe can't
+          // navigate/reload itself ("Unsafe attempt to load URL"). Capability
+          // counts refresh when the parent reopens/reloads the canvas; live
+          // reactions arrive via postMessage above.
         })();</script>
         </body></html>`);
 			}

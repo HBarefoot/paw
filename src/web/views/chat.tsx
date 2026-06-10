@@ -1956,7 +1956,11 @@ export function getChatScript(): string {
           } else if (evt.event === "file-changed") {
             hadFileChange = true;
             var changed = evt.data && evt.data.path ? evt.data.path : "";
-            if (changed === canvasCurrentFileName || canvasCurrentFileName === "index.html") {
+            // Only refresh the viewed file when IT changes. The index.html
+            // portrait must stay stable while the agent works (it reacts live
+            // via postMessage); reloading it on every file change wiped those
+            // reactions. index.html still refreshes if index.html itself changes.
+            if (changed === canvasCurrentFileName) {
               debouncedCanvasRefresh();
             }
           }
@@ -2674,7 +2678,11 @@ export function getChatScript(): string {
             hadFileChange = true;
             var changed = evt.data && evt.data.path ? evt.data.path : "";
             if (changed) changedPaths.push(changed);
-            if (changed === canvasCurrentFileName || canvasCurrentFileName === "index.html") {
+            // Only refresh the viewed file when IT changes. The index.html
+            // portrait must stay stable while the agent works (it reacts live
+            // via postMessage); reloading it on every file change wiped those
+            // reactions. index.html still refreshes if index.html itself changes.
+            if (changed === canvasCurrentFileName) {
               debouncedCanvasRefresh();
             }
           }
