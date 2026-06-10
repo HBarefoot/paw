@@ -339,6 +339,11 @@ export function getChatScript(): string {
 
         if (skipMessageLoad) return;
 
+        // In canvas mode the message pane is owned by the canvas conversation
+        // (loaded via applyCanvasMode → loadMessagesForSession(canvasSessionId)).
+        // Don't let the chat-session loader clobber it on initial load.
+        if (canvasMode) return;
+
         // If we have a valid session selected, load its messages
         if (foundSession && !sessionId.startsWith("canvas-")) {
           loadMessagesForSession(sessionId);
@@ -500,7 +505,7 @@ export function getChatScript(): string {
   }
 
   function updateStreamContent(mdDiv, text) {
-    mdDiv.innerHTML = renderMarkdown(text);
+    mdDiv.innerHTML = renderMarkdown(text, true);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   }
 
@@ -824,6 +829,13 @@ export function getChatScript(): string {
           var icon = running[r].querySelector(".activity-icon");
           if (icon) icon.innerHTML = '<span style="color:var(--success,#16a34a);font-weight:600">\\u2713</span>';
         }
+        // Re-render once with the finalized text (live=false) so a completed
+        // code block becomes an interactive "Show all N lines" instead of
+        // staying stuck on the streaming "writing…" placeholder when the model
+        // never emits a closing fence.
+        if (fullText) {
+          streamBubble.mdDiv.innerHTML = renderMarkdown(fullText, false);
+        }
         // Only show fallback text if no text AND no activity content (errors/tools)
         var hasActivity = streamBubble.activityDiv.children.length > 0;
         if (!fullText && !hasActivity) {
@@ -1117,7 +1129,7 @@ export function getChatScript(): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
-  function renderMarkdown(src) {
+  function renderMarkdown(src, live) {
     var text = src.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");
 
     var codeBlocks = [];
@@ -1154,10 +1166,13 @@ export function getChatScript(): string {
     text = text.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, function(m, code) {
       return makeCodeBlock(code, false);
     });
-    // A remaining (leftmost) fence is still streaming (no closing marker yet) —
-    // render everything from it to end-of-text as an in-progress collapsed block.
+    // A remaining (leftmost) fence has no closing marker. During a LIVE stream
+    // that means the block is still being written ("writing…"). For a finalized
+    // render (page reload / DB load / completion re-render) it's just an
+    // unclosed fence — render it as a normal interactive collapsible block so it
+    // never sticks on the non-interactive streaming placeholder.
     text = text.replace(/\`\`\`([\\s\\S]*)$/, function(m, code) {
-      return makeCodeBlock(code, true);
+      return makeCodeBlock(code, !!live);
     });
 
     var lines = text.split("\\n");
@@ -1367,6 +1382,10 @@ export function getChatScript(): string {
   localStorage.setItem(CANVAS_SESSION_KEY, canvasSessionId);
   var canvasLastEventId = 0;
   var canvasPolling = false;
+  // First poll after page load: the event buffer may still hold the previous
+  // (already-finished) turn's chunks. Replaying them rebuilds a stale streaming
+  // bubble that can stick on "writing…". We skip the finished backlog on poll #1.
+  var canvasFirstPoll = true;
   var canvasCurrentFileName = "index.html";
   var canvasThinkingEl = null;
   var attachBtn = document.getElementById("attach-btn");
@@ -1642,6 +1661,11 @@ export function getChatScript(): string {
       canvasPanel.classList.add("open");
       canvasToggleBtn.classList.add("active");
       insertDivider();
+      // The canvas conversation lives under canvasSessionId (separate from the
+      // chat sessionId). Load its persisted messages so a page reload shows the
+      // finalized history (correctly-rendered code blocks) instead of relying on
+      // the ephemeral event-buffer replay, which can stick on "writing…".
+      loadMessagesForSession(canvasSessionId);
       startCanvasPolling();
       refreshCanvasFiles();
       loadExplorer();
@@ -2619,6 +2643,23 @@ export function getChatScript(): string {
       .then(function(data) {
         if (!data) return;
         var events = data.events || [];
+        if (canvasFirstPoll) {
+          canvasFirstPoll = false;
+          // Drop everything up to and including the last done event, so a turn
+          // that already finished before this page load is NOT replayed into a
+          // stale streaming bubble (its finalized form loads from the DB instead).
+          // Anything after the last done is a genuinely in-progress turn and
+          // still replays so the live stream resumes.
+          var lastDoneIdx = -1;
+          for (var di = 0; di < events.length; di++) {
+            var de = events[di];
+            if (de.event === "chunk" && de.data && de.data.type === "done") lastDoneIdx = di;
+          }
+          if (lastDoneIdx >= 0) {
+            canvasLastEventId = events[lastDoneIdx].id;
+            events = events.slice(lastDoneIdx + 1);
+          }
+        }
         var hadFileChange = false;
         var changedPaths = [];
         for (var i = 0; i < events.length; i++) {
@@ -2665,6 +2706,12 @@ export function getChatScript(): string {
                   running[r].className = "activity-step done";
                   var icon = running[r].querySelector(".activity-icon");
                   if (icon) icon.innerHTML = '<span style="color:var(--success,#16a34a);font-weight:600">\\u2713</span>';
+                }
+                // Re-render with the finalized text (live=false) so a completed
+                // code block becomes an interactive "Show all N lines" instead
+                // of staying stuck on the streaming "writing…" placeholder.
+                if (canvasStreamFullText) {
+                  canvasStreamBubble.mdDiv.innerHTML = renderMarkdown(canvasStreamFullText, false);
                 }
                 var hasActivity = canvasStreamBubble.activityDiv.children.length > 0;
                 if (!canvasStreamFullText && !hasActivity) {
