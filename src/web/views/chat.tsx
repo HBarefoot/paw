@@ -811,6 +811,7 @@ export function getChatScript(): string {
 
       function finalize(doneMessageId) {
         // Clean up: hide thinking indicator, stop timers
+        notifyPortraitDone();
         hideThinking(streamBubble);
         for (var t = 0; t < streamBubble._timers.length; t++) {
           clearInterval(streamBubble._timers[t]);
@@ -866,6 +867,7 @@ export function getChatScript(): string {
       return pump();
     })
     .catch(function(err) {
+      notifyPortraitDone();
       if (err.name === "AbortError") {
         // User cancelled — show what we have so far
         if (!fullText) {
@@ -1395,6 +1397,19 @@ export function getChatScript(): string {
           isError: !!chunk.toolIsError,
           toolId: chunk.toolId,
         }, "*");
+      }
+    } catch (e) {}
+  }
+
+  // Tell the portrait the turn is over so it can authoritatively reset its
+  // pills + face — without this, an unpaired tool_start (sub-agent, abort,
+  // error, or skillKey mismatch) leaves a pill stuck "active" forever.
+  function notifyPortraitDone() {
+    try {
+      for (var i = 0; i < canvasTabs.length; i++) {
+        var t = canvasTabs[i];
+        if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        t.iframeEl.contentWindow.postMessage({ type: "paw:tool", phase: "done" }, "*");
       }
     } catch (e) {}
   }
