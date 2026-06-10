@@ -170,6 +170,16 @@ export class SkillManager {
 		return this.skills.get(name);
 	}
 
+	/** The skill/group key a tool belongs to (e.g. "web-pilot", "mcp:n8n",
+	 * "canvas", "memory") — used to light up the matching portrait pill when the
+	 * agent runs the tool. Returns undefined if the tool isn't in any skill. */
+	skillNameForTool(toolName: string): string | undefined {
+		for (const [name, skill] of this.skills) {
+			if (skill.toolNames.includes(toolName)) return name;
+		}
+		return undefined;
+	}
+
 	setAlwaysActive(name: string, value: boolean): void {
 		const skill = this.skills.get(name);
 		if (skill) skill.alwaysActive = value;
