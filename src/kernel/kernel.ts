@@ -15,6 +15,7 @@ import type {
 	StreamChunk,
 } from "../ai/base-provider.js";
 import type { ToolDefinition } from "../types/message.js";
+import { compileBrandBrief, getActiveBrand } from "../store/brands.js";
 import { getDb, closeDb } from "../store/db.js";
 import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
 import { appendMessage, getSessionMessages } from "../store/messages.js";
@@ -654,6 +655,7 @@ export class Kernel {
 			memoryContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
 			agentDepth,
+			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
 
 		const messages: ChatMessage[] = [{ role: "user", content: task }];
@@ -799,6 +801,7 @@ export class Kernel {
 			memoryContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
 			agentDepth,
+			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
 
 		const messages: ChatMessage[] = [{ role: "user", content: task }];
@@ -1116,6 +1119,7 @@ export class Kernel {
 			memoryContext,
 			feedbackContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
+			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
 
 		this.logger.info("System prompt built", {
@@ -1402,6 +1406,7 @@ export class Kernel {
 			memoryContext,
 			feedbackContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
+			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
 
 		if (msg.channel === "canvas") {

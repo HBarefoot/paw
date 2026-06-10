@@ -16,6 +16,9 @@ const PUBLIC_PREFIXES = [
 	"/api/canvas/files",
 	"/api/canvas/preview/",
 	"/canvas/share/",
+	// Brand tokens + logo assets are embedded by (public) canvas pages.
+	"/api/brand/tokens.css",
+	"/api/brand/asset/",
 ];
 
 function isPublicRoute(path: string): boolean {

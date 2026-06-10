@@ -493,6 +493,23 @@ function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_canvas_submissions_action ON canvas_submissions(action_id, created_at DESC);
   `);
 
+	// Brand kit: a library of brand profiles. One is `active` at a time and its
+	// compiled brief is injected into the system prompt + canvas generation so
+	// agent output stays on-brand. data_json holds colors/fonts/voice/guidelines/
+	// tagline + logo filenames (binaries live under <data>/brand/<id>/).
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS brands (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      data_json TEXT NOT NULL DEFAULT '{}',
+      active INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_brands_active ON brands(active);
+  `);
+
 	// Backfill: re-parent canvas sessions to the per-admin user_id.
 	// Before per-admin scoping was added (REVIEW-2026-06-09.md C-NEW-1),
 	// canvas sessions were stored with user_id="canvas-user". Now they
