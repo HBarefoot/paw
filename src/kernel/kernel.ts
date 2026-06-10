@@ -42,6 +42,7 @@ import { SkillManager } from "../ai/skills.js";
 import { createFileTools } from "../tools/file-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
+import { createActionTools } from "../tools/action-tools.js";
 import { readConfigOverrides } from "../config/writer.js";
 import { createLogger, setLogLevel } from "../observability/logger.js";
 import { AgentRegistry } from "../agents/registry.js";
@@ -79,8 +80,12 @@ export class Kernel {
 	private webAppCleanup: (() => void) | null = null;
 	private sessionCleanupInterval: ReturnType<typeof setInterval> | null = null;
 	private mcpClientManager: MCPClientManager;
-	private strapiClient: import("../integrations/strapi/client.js").StrapiClient | null =
-		null;
+	private strapiClient:
+		| import("../integrations/strapi/client.js").StrapiClient
+		| null = null;
+	hubspotClient:
+		| import("../integrations/hubspot/client.js").HubSpotClient
+		| null = null;
 	private skillManager: SkillManager;
 	private agentRegistry: AgentRegistry;
 	private agentDepths = new Map<string, number>();
@@ -158,7 +163,14 @@ export class Kernel {
 
 		if (config.provider === "ollama") {
 			this.provider = new OllamaProvider(
-				{ ...config.ollama, maxToolRoundtrips: maxRoundtrips },
+				{
+					...config.ollama,
+					maxToolRoundtrips: maxRoundtrips,
+					// Bound Ollama generation length (it has no server-side cap
+					// unless we send num_predict). Prevents a looping model from
+					// streaming until OOM.
+					maxTokens: config.ai.maxTokens,
+				},
 				this.toolRegistry,
 				aiLogger,
 				this.skillManager,
@@ -263,6 +275,10 @@ export class Kernel {
 			});
 			this.toolRegistry.register(
 				createCanvasTools({ canvasRoot, database: this.database }),
+			);
+			// Canvas action tools: let the agent wire forms to real backends.
+			this.toolRegistry.register(
+				createActionTools({ database: this.database }),
 			);
 			this.logger.info("Canvas tools registered", { canvasRoot });
 		}
@@ -388,6 +404,27 @@ export class Kernel {
 			}
 		}
 
+		// Initialize HubSpot CRM integration (routing target for canvas actions)
+		if (this.config.hubspot?.enabled && this.config.hubspot.token) {
+			try {
+				const { HubSpotClient } = await import(
+					"../integrations/hubspot/client.js"
+				);
+				this.hubspotClient = new HubSpotClient(this.config.hubspot);
+				this.sandbox.registerManifest({
+					name: "hubspot",
+					version: "1.0.0",
+					description: "HubSpot CRM integration",
+					permissions: ["net:api.hubapi.com"],
+				});
+				this.logger.info("HubSpot integration initialized");
+			} catch (err) {
+				this.logger.warn("HubSpot init failed — degrading gracefully", {
+					error: String(err),
+				});
+			}
+		}
+
 		// Build skill catalog from all registered tools
 		this.skillManager.buildFromRegistry(this.toolRegistry);
 		try {
@@ -413,10 +450,7 @@ export class Kernel {
 		const agentEntries = Object.entries(this.config.agents ?? {});
 		if (agentEntries.length > 0) {
 			this.agentRegistry.loadFromConfig(
-				this.config.agents as Record<
-					string,
-					Omit<AgentDefinition, "name">
-				>,
+				this.config.agents as Record<string, Omit<AgentDefinition, "name">>,
 			);
 		}
 		// Also load from config overrides (so web UI / file edits are picked up)
@@ -542,8 +576,7 @@ export class Kernel {
 		const agentName = agent.name;
 
 		const agentSessionId = `agent-${agentName}-${Date.now()}`;
-		const agentDepth =
-			(this.agentDepths.get(parentSessionId) ?? 0) + 1;
+		const agentDepth = (this.agentDepths.get(parentSessionId) ?? 0) + 1;
 		this.agentDepths.set(agentSessionId, agentDepth);
 
 		await this.bus.emit("agent:delegated", {
@@ -585,10 +618,7 @@ export class Kernel {
 				});
 				if (memories.length > 0) {
 					memoryContext = memories
-						.map(
-							(m) =>
-								`- id=${m.id} [${m.metadata.category}] ${m.text}`,
-						)
+						.map((m) => `- id=${m.id} [${m.metadata.category}] ${m.text}`)
 						.join("\n");
 				}
 			} catch (err) {
@@ -693,8 +723,7 @@ export class Kernel {
 		const agentName = agent.name;
 
 		const agentSessionId = `agent-${agentName}-${Date.now()}`;
-		const agentDepth =
-			(this.agentDepths.get(parentSessionId) ?? 0) + 1;
+		const agentDepth = (this.agentDepths.get(parentSessionId) ?? 0) + 1;
 		this.agentDepths.set(agentSessionId, agentDepth);
 		const prefix = `[${agentName}] `;
 
@@ -734,10 +763,7 @@ export class Kernel {
 				});
 				if (memories.length > 0) {
 					memoryContext = memories
-						.map(
-							(m) =>
-								`- id=${m.id} [${m.metadata.category}] ${m.text}`,
-						)
+						.map((m) => `- id=${m.id} [${m.metadata.category}] ${m.text}`)
 						.join("\n");
 				}
 			} catch (err) {
@@ -779,10 +805,7 @@ export class Kernel {
 					if (chunk.type === "done") continue;
 
 					// Prefix tool-related chunks with agent name
-					if (
-						chunk.type === "tool_start" ||
-						chunk.type === "tool_end"
-					) {
+					if (chunk.type === "tool_start" || chunk.type === "tool_end") {
 						yield {
 							...chunk,
 							toolName: chunk.toolName
@@ -1010,10 +1033,7 @@ export class Kernel {
 
 				if (unique.length > 0) {
 					memoryContext = unique
-						.map(
-							(m) =>
-								`- id=${m.id} [${m.metadata.category}] ${m.text}`,
-						)
+						.map((m) => `- id=${m.id} [${m.metadata.category}] ${m.text}`)
 						.join("\n");
 					await this.bus.emit("memory:recalled", {
 						query: msg.content,
@@ -1032,11 +1052,8 @@ export class Kernel {
 		if (this.feedbackStore && messages.length >= 2) {
 			const correction = detectCorrection(messages);
 			if (correction) {
-				const assistantMessages = history.filter(
-					(m) => m.role === "assistant",
-				);
-				const lastAssistant =
-					assistantMessages[assistantMessages.length - 1];
+				const assistantMessages = history.filter((m) => m.role === "assistant");
+				const lastAssistant = assistantMessages[assistantMessages.length - 1];
 				if (lastAssistant) {
 					this.feedbackStore.recordCorrection(
 						msg.sessionId,
@@ -1302,10 +1319,7 @@ export class Kernel {
 
 				if (unique.length > 0) {
 					memoryContext = unique
-						.map(
-							(m) =>
-								`- id=${m.id} [${m.metadata.category}] ${m.text}`,
-						)
+						.map((m) => `- id=${m.id} [${m.metadata.category}] ${m.text}`)
 						.join("\n");
 					await this.bus.emit("memory:recalled", {
 						query: msg.content,
@@ -1321,11 +1335,8 @@ export class Kernel {
 		if (this.feedbackStore && messages.length >= 2) {
 			const correction = detectCorrection(messages);
 			if (correction) {
-				const assistantMessages = history.filter(
-					(m) => m.role === "assistant",
-				);
-				const lastAssistant =
-					assistantMessages[assistantMessages.length - 1];
+				const assistantMessages = history.filter((m) => m.role === "assistant");
+				const lastAssistant = assistantMessages[assistantMessages.length - 1];
 				if (lastAssistant) {
 					this.feedbackStore.recordCorrection(
 						msg.sessionId,
@@ -1483,10 +1494,7 @@ export class Kernel {
 			);
 
 			// Persist usage for the session if anything was recorded.
-			if (
-				this.costTracker &&
-				(inputTokensTotal > 0 || outputTokensTotal > 0)
-			) {
+			if (this.costTracker && (inputTokensTotal > 0 || outputTokensTotal > 0)) {
 				try {
 					const resolvedProvider =
 						lastProvider ?? this.provider.name ?? this.config.provider;
@@ -1625,14 +1633,20 @@ export class Kernel {
 			ownKeys(_target) {
 				const overrides = readConfigOverrides();
 				const live = (overrides[pluginName] as Record<string, unknown>) ?? {};
-				return [...new Set([...Reflect.ownKeys(_target), ...Reflect.ownKeys(live)])];
+				return [
+					...new Set([...Reflect.ownKeys(_target), ...Reflect.ownKeys(live)]),
+				];
 			},
 			getOwnPropertyDescriptor(_target, prop) {
 				const overrides = readConfigOverrides();
 				const live = (overrides[pluginName] as Record<string, unknown>) ?? {};
 				const merged = { ..._target, ...live };
 				if (prop in merged) {
-					return { configurable: true, enumerable: true, value: (merged as any)[prop] };
+					return {
+						configurable: true,
+						enumerable: true,
+						value: (merged as any)[prop],
+					};
 				}
 				return undefined;
 			},
@@ -1756,10 +1770,13 @@ export class Kernel {
 		if (agent.provider) {
 			const specific = this.allProviders.get(agent.provider);
 			if (specific) return specific;
-			this.logger.warn("Agent requested provider not available, using default", {
-				agent: agent.name,
-				requestedProvider: agent.provider,
-			});
+			this.logger.warn(
+				"Agent requested provider not available, using default",
+				{
+					agent: agent.name,
+					requestedProvider: agent.provider,
+				},
+			);
 		}
 
 		// Use router if available
@@ -1874,6 +1891,11 @@ export class Kernel {
 	/** Read-only access to the tool registry (H-NEW-2: cron tool validation). */
 	get toolRegistryPublic(): ToolRegistry {
 		return this.toolRegistry;
+	}
+
+	/** Strapi client for routing canvas action submissions (null if disabled). */
+	get strapi(): import("../integrations/strapi/client.js").StrapiClient | null {
+		return this.strapiClient;
 	}
 
 	cancelSession(sessionId: string): boolean {

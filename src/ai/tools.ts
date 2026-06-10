@@ -126,8 +126,18 @@ export class ToolRegistry {
 		if (tool.name === "memory_forget") return "memory:forget";
 		if (tool.name.startsWith("canvas_read") || tool.name === "canvas_list")
 			return "canvas:read";
-		if (tool.name === "canvas_write") return "canvas:write";
-		if (tool.name === "create_proactive_trigger" || tool.name === "remove_proactive_trigger")
+		if (
+			tool.name === "canvas_write" ||
+			tool.name === "canvas_mkdir" ||
+			tool.name === "canvas_delete" ||
+			tool.name === "canvas_move"
+		)
+			return "canvas:write";
+		if (tool.name.startsWith("canvas_action")) return "canvas:write";
+		if (
+			tool.name === "create_proactive_trigger" ||
+			tool.name === "remove_proactive_trigger"
+		)
 			return "cron:create";
 		if (tool.name === "spawn_agent") return "agent:spawn";
 		if (tool.name === "delegate_task") return "agent:delegate";
@@ -151,9 +161,7 @@ export class ToolRegistry {
 		}));
 	}
 
-	toAnthropicToolsFiltered(
-		allowedNames: Set<string>,
-	): Array<{
+	toAnthropicToolsFiltered(allowedNames: Set<string>): Array<{
 		name: string;
 		description: string;
 		input_schema: Record<string, unknown>;

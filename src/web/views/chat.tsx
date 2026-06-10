@@ -1,6 +1,6 @@
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
-import { Layout } from "./layout.js";
+import { Layout, pawMark } from "./layout.js";
 
 interface ChatPageProps {
 	sessionId: string;
@@ -15,6 +15,9 @@ const shareIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none
 const exportIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
 const templateIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`;
 const historyIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+const explorerIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/></svg>`;
+const newFileIconSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg>`;
+const newFolderIconSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>`;
 
 export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 	return (
@@ -53,12 +56,15 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 					data-session-id={sessionId}
 				>
 					<div class="chat-messages" id="messages">
-						<div class="chat-welcome">
-							<div class="welcome-icon">💬</div>
-							<p>Send a message to start chatting with Paw</p>
-						</div>
+						{raw(`<div class="chat-welcome">
+							<div class="app-icon welcome-icon" style="width:56px;height:56px">${pawMark(31)}</div>
+							<div class="welcome-title">Welcome to Paw</div>
+							<p>Your autonomous agent workspace. Send a message to begin.</p>
+						</div>`)}
 						<div id="typing" class="msg-wrapper" style="display: none">
-							<div class="avatar bot-avatar"><img src="/paw-logo.jpg" alt="Paw" /></div>
+							<div class="avatar bot-avatar">
+								<img src="/paw-logo.jpg" alt="Paw" />
+							</div>
 							<div class="typing-indicator">
 								<span></span>
 								<span></span>
@@ -89,14 +95,34 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 				</div>
 				{raw(`<div class="canvas-panel" id="canvas-panel">
           <div class="canvas-toolbar">
+            <button onclick="toggleExplorer()" title="Toggle workspace explorer" id="explorer-toggle-btn">${explorerIconSvg}</button>
             <span class="current-file" id="current-file">index.html</span>
             <button onclick="canvasTemplateMenu(this)" title="Templates" id="canvas-template-btn">${templateIconSvg}</button>
             <button onclick="canvasExportMenu(this)" title="Export / Share" id="canvas-export-btn">${exportIconSvg}</button>
             <button onclick="canvasRefresh()" title="Refresh preview">${refreshIconSvg}</button>
             <button onclick="canvasClear()" title="Clear canvas" style="color:var(--error)">${trashIconSvg}</button>
           </div>
-          <div class="canvas-tabs" id="canvas-tabs"></div>
-          <div class="canvas-tab-content" id="canvas-tab-content"></div>
+          <div class="canvas-body">
+            <aside class="canvas-explorer" id="canvas-explorer">
+              <div class="explorer-head">
+                <span class="explorer-title">Workspace</span>
+                <div class="explorer-actions">
+                  <button onclick="canvasNewFile('')" title="New file">${newFileIconSvg}</button>
+                  <button onclick="canvasNewFolder('')" title="New folder">${newFolderIconSvg}</button>
+                  <button onclick="loadExplorer()" title="Refresh">${refreshIconSvg}</button>
+                </div>
+              </div>
+              <div class="explorer-search">
+                <input id="explorer-search-input" placeholder="Search files…" autocomplete="off" />
+                <label class="explorer-search-toggle" title="Search inside file contents"><input type="checkbox" id="explorer-search-content" /> in files</label>
+              </div>
+              <div class="explorer-tree" id="explorer-tree"></div>
+            </aside>
+            <div class="canvas-main">
+              <div class="canvas-tabs" id="canvas-tabs"></div>
+              <div class="canvas-tab-content" id="canvas-tab-content"></div>
+            </div>
+          </div>
           <div class="canvas-status" id="canvas-status">
             <span class="dot" id="status-dot"></span>
             <span id="status-text">Idle</span>
@@ -343,7 +369,7 @@ export function getChatScript(): string {
     if (!welcome) {
       var w = document.createElement("div");
       w.className = "chat-welcome";
-      w.innerHTML = '<div class="welcome-icon">\\uD83D\\uDCAC</div><p>Send a message to start chatting with Paw</p>';
+      w.innerHTML = '<div class="app-icon welcome-icon" style="width:56px;height:56px">${pawMark(31)}</div><div class="welcome-title">Welcome to Paw</div><p>Your autonomous agent workspace. Send a message to begin.</p>';
       messagesDiv.insertBefore(w, typingDiv);
     }
   }
@@ -1267,13 +1293,21 @@ export function getChatScript(): string {
   var _canvasFileListTimer = null;
 
   function debouncedCanvasRefresh() {
+    // Don't reload the preview while the server is unreachable: the iframe is
+    // showing the browser's error page, and reloading it throws a cross-origin
+    // "Unsafe attempt to load URL" from that error page. Reconnect handles it.
+    if (typeof canvasConsecutiveFailures !== "undefined" && canvasConsecutiveFailures > 0) return;
     if (_canvasRefreshTimer) clearTimeout(_canvasRefreshTimer);
     _canvasRefreshTimer = setTimeout(function() { canvasRefresh(); _canvasRefreshTimer = null; }, 300);
   }
 
   function debouncedRefreshFiles() {
     if (_canvasFileListTimer) clearTimeout(_canvasFileListTimer);
-    _canvasFileListTimer = setTimeout(function() { refreshCanvasFiles(); _canvasFileListTimer = null; }, 300);
+    _canvasFileListTimer = setTimeout(function() {
+      refreshCanvasFiles();
+      if (typeof window.loadExplorer === "function") window.loadExplorer();
+      _canvasFileListTimer = null;
+    }, 300);
   }
 
   var canvasMode = localStorage.getItem("paw-canvas-mode") === "true";
@@ -1305,7 +1339,10 @@ export function getChatScript(): string {
     iframe.src = "/api/canvas/preview/" + encodeURIComponent(path);
     iframe.className = "hidden";
     iframe.style.background = "#fff";
-    iframe.sandbox = "allow-scripts";
+    // allow-forms lets agent-wired canvas pages submit to /api/forms/:id.
+    // We deliberately keep NO allow-same-origin: form posts carry Origin: null
+    // + no cookies, which the public form receiver accepts.
+    iframe.sandbox = "allow-scripts allow-forms";
     canvasTabContent.appendChild(iframe);
     var tab = { id: id, path: path, iframeEl: iframe };
     canvasTabs.push(tab);
@@ -1526,6 +1563,7 @@ export function getChatScript(): string {
       insertDivider();
       startCanvasPolling();
       refreshCanvasFiles();
+      loadExplorer();
     } else {
       canvasPanel.classList.remove("open");
       canvasToggleBtn.classList.remove("active");
@@ -1533,6 +1571,262 @@ export function getChatScript(): string {
       stopCanvasPolling();
     }
   }
+
+  // ===== Workspace explorer (folder tree + search + file ops) =====
+  var explorerEntries = [];
+  var explorerExpanded = (function() {
+    try { return new Set(JSON.parse(localStorage.getItem("paw-explorer-expanded") || "[]")); }
+    catch (_) { return new Set(); }
+  })();
+  function saveExplorerExpanded() {
+    try { localStorage.setItem("paw-explorer-expanded", JSON.stringify(Array.from(explorerExpanded))); } catch (_) {}
+  }
+  var FOLDER_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/></svg>';
+  var FILE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+  var TWISTY_SVG = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
+
+  window.loadExplorer = function() {
+    var tree = document.getElementById("explorer-tree");
+    if (!tree) return;
+    fetch("/api/canvas/tree", { credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        explorerEntries = (data && data.entries) || [];
+        renderExplorer();
+      })
+      .catch(function() {});
+  };
+
+  function buildTree(entries) {
+    var root = { name: "", path: "", type: "dir", children: {} };
+    for (var i = 0; i < entries.length; i++) {
+      var parts = entries[i].path.split("/");
+      var node = root;
+      var acc = "";
+      for (var j = 0; j < parts.length; j++) {
+        acc = acc ? acc + "/" + parts[j] : parts[j];
+        var isLeaf = j === parts.length - 1;
+        if (!node.children[parts[j]]) {
+          node.children[parts[j]] = {
+            name: parts[j], path: acc,
+            type: isLeaf ? entries[i].type : "dir", children: {}
+          };
+        }
+        node = node.children[parts[j]];
+      }
+    }
+    return root;
+  }
+
+  function sortedChildren(node) {
+    var arr = Object.keys(node.children).map(function(k) { return node.children[k]; });
+    arr.sort(function(a, b) {
+      if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return arr;
+  }
+
+  function renderNode(node, depth, out) {
+    var kids = sortedChildren(node);
+    for (var i = 0; i < kids.length; i++) {
+      var n = kids[i];
+      var pad = 6 + depth * 12;
+      if (n.type === "dir") {
+        var open = explorerExpanded.has(n.path);
+        out.push('<div class="tree-row tree-folder" data-path="' + esc(n.path) + '" data-type="dir" draggable="true" style="padding-left:' + pad + 'px">'
+          + '<span class="tree-twisty' + (open ? " open" : "") + '">' + TWISTY_SVG + '</span>'
+          + '<span class="tree-icon">' + FOLDER_SVG + '</span>'
+          + '<span class="tree-name">' + esc(n.name) + '</span></div>');
+        if (open) renderNode(n, depth + 1, out);
+      } else {
+        var active = n.path === canvasCurrentFileName ? " active" : "";
+        out.push('<div class="tree-row tree-file' + active + '" data-path="' + esc(n.path) + '" data-type="file" draggable="true" style="padding-left:' + (pad + 12) + 'px">'
+          + '<span class="tree-icon">' + FILE_SVG + '</span>'
+          + '<span class="tree-name">' + esc(n.name) + '</span></div>');
+      }
+    }
+  }
+
+  function renderExplorer() {
+    var tree = document.getElementById("explorer-tree");
+    if (!tree) return;
+    var searchInput = document.getElementById("explorer-search-input");
+    var q = searchInput ? searchInput.value.trim().toLowerCase() : "";
+    if (q && document.getElementById("explorer-search-content") && document.getElementById("explorer-search-content").checked) {
+      return; // content search renders async via runContentSearch()
+    }
+    var entries = explorerEntries;
+    if (q) entries = entries.filter(function(e) { return e.path.toLowerCase().indexOf(q) !== -1; });
+    if (!entries.length) {
+      tree.innerHTML = '<div class="tree-empty">' + (q ? "No matches" : "Empty workspace") + '</div>';
+      return;
+    }
+    var rootTree = buildTree(entries);
+    // When filtering, auto-expand all so matches are visible.
+    if (q) {
+      for (var i = 0; i < entries.length; i++) {
+        var parts = entries[i].path.split("/"); var acc = "";
+        for (var j = 0; j < parts.length - 1; j++) { acc = acc ? acc + "/" + parts[j] : parts[j]; explorerExpanded.add(acc); }
+      }
+    }
+    var out = [];
+    renderNode(rootTree, 0, out);
+    tree.innerHTML = out.join("");
+    bindTreeRows();
+  }
+
+  function bindTreeRows() {
+    var tree = document.getElementById("explorer-tree");
+    if (!tree) return;
+    var rows = tree.querySelectorAll(".tree-row");
+    for (var i = 0; i < rows.length; i++) {
+      (function(row) {
+        var path = row.getAttribute("data-path");
+        var type = row.getAttribute("data-type");
+        row.addEventListener("click", function(e) {
+          if (e.target.closest(".tree-twisty") || type === "dir") {
+            if (type === "dir") {
+              if (explorerExpanded.has(path)) explorerExpanded.delete(path); else explorerExpanded.add(path);
+              saveExplorerExpanded(); renderExplorer();
+            }
+            return;
+          }
+          findOrCreateTab(path);
+          var all = tree.querySelectorAll(".tree-row");
+          for (var k = 0; k < all.length; k++) all[k].classList.toggle("active", all[k].getAttribute("data-path") === path);
+        });
+        row.addEventListener("contextmenu", function(e) { e.preventDefault(); openTreeContextMenu(e, path, type); });
+        // Drag to move into a folder
+        row.addEventListener("dragstart", function(e) { e.dataTransfer.setData("text/plain", path); e.dataTransfer.effectAllowed = "move"; });
+        if (type === "dir") {
+          row.addEventListener("dragover", function(e) { e.preventDefault(); row.classList.add("drop-target"); });
+          row.addEventListener("dragleave", function() { row.classList.remove("drop-target"); });
+          row.addEventListener("drop", function(e) {
+            e.preventDefault(); row.classList.remove("drop-target");
+            var from = e.dataTransfer.getData("text/plain");
+            if (!from || from === path) return;
+            var base = from.split("/").pop();
+            var to = path + "/" + base;
+            if (from === to || to.indexOf(from + "/") === 0) return; // no-op / can't move into self
+            canvasMovePath(from, to);
+          });
+        }
+      })(rows[i]);
+    }
+  }
+
+  function onExplorerSearchInput() {
+    var contentChk = document.getElementById("explorer-search-content");
+    var input = document.getElementById("explorer-search-input");
+    if (contentChk && contentChk.checked && input && input.value.trim()) { runContentSearch(input.value.trim()); }
+    else { renderExplorer(); }
+  }
+
+  function runContentSearch(q) {
+    var tree = document.getElementById("explorer-tree");
+    if (!tree) return;
+    fetch("/api/canvas/search?content=1&q=" + encodeURIComponent(q), { credentials: "same-origin" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var results = (data && data.results) || [];
+        if (!results.length) { tree.innerHTML = '<div class="tree-empty">No matches</div>'; return; }
+        var out = [];
+        for (var i = 0; i < results.length; i++) {
+          var r = results[i];
+          out.push('<div class="tree-row tree-file tree-search-hit" data-path="' + esc(r.path) + '" data-type="file" style="padding-left:10px">'
+            + '<span class="tree-icon">' + FILE_SVG + '</span>'
+            + '<span class="tree-name">' + esc(r.path) + (r.line ? ':' + r.line : '') + '</span>'
+            + (r.snippet ? '<span class="tree-snippet">' + esc(r.snippet) + '</span>' : '') + '</div>');
+        }
+        tree.innerHTML = out.join("");
+        bindTreeRows();
+      })
+      .catch(function() {});
+  }
+
+  function openTreeContextMenu(e, path, type) {
+    var existing = document.getElementById("tree-ctx-menu");
+    if (existing) existing.remove();
+    var menu = document.createElement("div");
+    menu.id = "tree-ctx-menu"; menu.className = "ctx-menu";
+    menu.style.top = e.clientY + "px"; menu.style.left = e.clientX + "px";
+    var folderBase = type === "dir" ? path : (path.indexOf("/") !== -1 ? path.split("/").slice(0, -1).join("/") : "");
+    menu.innerHTML =
+        '<div class="ctx-menu-item" data-act="new-file">New file</div>'
+      + '<div class="ctx-menu-item" data-act="new-folder">New folder</div>'
+      + '<div class="ctx-menu-sep"></div>'
+      + '<div class="ctx-menu-item" data-act="rename">Rename</div>'
+      + '<div class="ctx-menu-item danger" data-act="delete">Delete</div>';
+    document.body.appendChild(menu);
+    menu.querySelectorAll(".ctx-menu-item").forEach(function(item) {
+      item.addEventListener("click", function() {
+        var act = item.getAttribute("data-act"); menu.remove();
+        if (act === "new-file") canvasNewFile(folderBase);
+        else if (act === "new-folder") canvasNewFolder(folderBase);
+        else if (act === "rename") canvasRenamePath(path);
+        else if (act === "delete") canvasDeletePath(path, type);
+      });
+    });
+    setTimeout(function() {
+      function close(ev) { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener("click", close); } }
+      document.addEventListener("click", close);
+    }, 0);
+  }
+
+  window.canvasNewFile = async function(folder) {
+    var name = await pawModal.prompt("New file", "File name" + (folder ? " in " + folder : ""), "");
+    if (!name) return;
+    var path = folder ? folder + "/" + name : name;
+    fetch("/api/canvas/new-file", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: path }) })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { if (d.error) { pawModal.alert("Error", d.error); return; } if (folder) explorerExpanded.add(folder); loadExplorer(); findOrCreateTab(path); });
+  };
+
+  window.canvasNewFolder = async function(folder) {
+    var name = await pawModal.prompt("New folder", "Folder name" + (folder ? " in " + folder : ""), "");
+    if (!name) return;
+    var path = folder ? folder + "/" + name : name;
+    fetch("/api/canvas/mkdir", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: path }) })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { if (d.error) { pawModal.alert("Error", d.error); return; } explorerExpanded.add(path); saveExplorerExpanded(); loadExplorer(); });
+  };
+
+  window.canvasRenamePath = async function(path) {
+    var next = await pawModal.prompt("Rename / move", "New path (use / to move into a folder)", path);
+    if (!next || next === path) return;
+    canvasMovePath(path, next);
+  };
+
+  function canvasMovePath(from, to) {
+    fetch("/api/canvas/rename", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from: from, to: to }) })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { if (d.error) { pawModal.alert("Error", d.error); return; } loadExplorer(); refreshCanvasFiles(); });
+  }
+
+  window.canvasDeletePath = async function(path, type) {
+    var ok = await pawModal.confirm("Delete", "Delete " + (type === "dir" ? "folder" : "file") + " \\"" + path + "\\"" + (type === "dir" ? " and everything in it?" : "?"), { confirmLabel: "Delete", danger: true });
+    if (!ok) return;
+    fetch("/api/canvas/delete", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: path }) })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { if (d.error) { pawModal.alert("Error", d.error); return; } loadExplorer(); refreshCanvasFiles(); });
+  };
+
+  window.toggleExplorer = function() {
+    var ex = document.getElementById("canvas-explorer");
+    if (!ex) return;
+    ex.classList.toggle("collapsed");
+    try { localStorage.setItem("paw-explorer-collapsed", ex.classList.contains("collapsed") ? "1" : "0"); } catch (_) {}
+  };
+
+  (function initExplorer() {
+    var input = document.getElementById("explorer-search-input");
+    if (input) input.addEventListener("input", onExplorerSearchInput);
+    var chk = document.getElementById("explorer-search-content");
+    if (chk) chk.addEventListener("change", onExplorerSearchInput);
+    var ex = document.getElementById("canvas-explorer");
+    try { if (ex && localStorage.getItem("paw-explorer-collapsed") === "1") ex.classList.add("collapsed"); } catch (_) {}
+  })();
 
   window.toggleCanvasMode = function() {
     canvasMode = !canvasMode;
@@ -1544,7 +1838,11 @@ export function getChatScript(): string {
   var canvasPollInterval = 10000; // idle: 10s
   var CANVAS_POLL_FAST = 2000;   // active: 2s (stays under 60 req/min API rate limit)
   var CANVAS_POLL_IDLE = 10000;  // idle: 10s
+  var CANVAS_POLL_MAX = 60000;   // backoff ceiling when the server is unreachable
   var canvasPollTimer = null;
+  // Consecutive failed polls — drives exponential backoff so a stopped/crashed
+  // server doesn't get hammered (and flood the console with ERR_CONNECTION_REFUSED).
+  var canvasConsecutiveFailures = 0;
 
   function startCanvasPolling() {
     if (canvasPolling) return;
@@ -1602,10 +1900,21 @@ export function getChatScript(): string {
           }
         }
         if (hadFileChange) debouncedRefreshFiles();
+        // Recovered: reset backoff, restore normal cadence, and reload the
+        // preview once (it may be stuck on the browser's error page).
+        if (canvasConsecutiveFailures > 0) {
+          canvasConsecutiveFailures = 0;
+          canvasPollInterval = canvasWaitingForResponse ? CANVAS_POLL_FAST : CANVAS_POLL_IDLE;
+          debouncedCanvasRefresh();
+        }
         if (canvasStatusDot) { canvasStatusDot.className = "dot connected"; }
         if (canvasStatusText) { canvasStatusText.textContent = canvasWaitingForResponse ? "Working..." : "Connected"; }
       })
       .catch(function() {
+        // Server unreachable (down/restarting): back off exponentially up to
+        // CANVAS_POLL_MAX instead of retrying every 2-10s forever.
+        canvasConsecutiveFailures++;
+        canvasPollInterval = Math.min(CANVAS_POLL_MAX, 2000 * Math.pow(2, canvasConsecutiveFailures));
         if (canvasStatusDot) { canvasStatusDot.className = "dot"; }
         if (canvasStatusText) { canvasStatusText.textContent = "Reconnecting..."; }
       })
@@ -1677,13 +1986,18 @@ export function getChatScript(): string {
   };
 
   window.canvasRefresh = function() {
-    // Refresh the active tab's iframe
+    // Refresh the active tab's iframe with a cache-busting query so the
+    // preview re-fetches. We intentionally avoid the old "about:blank then
+    // restore src" round-trip: in Safari, navigating a sandboxed (null-origin)
+    // iframe through about:blank throws "Unsafe attempt to load URL ... Domains,
+    // protocols and ports must match." A direct src reassignment with a unique
+    // query is a clean parent-initiated navigation. The preview route ignores
+    // the query string (it resolves files by path).
     for (var i = 0; i < canvasTabs.length; i++) {
       if (canvasTabs[i].path === canvasCurrentFileName) {
         var iframe = canvasTabs[i].iframeEl;
-        var src = iframe.src;
-        iframe.src = "about:blank";
-        setTimeout(function() { iframe.src = src; }, 50);
+        var base = "/api/canvas/preview/" + encodeURIComponent(canvasTabs[i].path);
+        iframe.src = base + "?_r=" + Date.now();
         break;
       }
     }
@@ -1717,7 +2031,7 @@ export function getChatScript(): string {
     var menu = document.createElement("div");
     menu.id = "canvas-export-picker";
     menu.style.cssText = "position:fixed;z-index:9000;min-width:200px;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);padding:4px 0;"
-      + "top:" + rect.bottom + 4 + "px;right:" + (window.innerWidth - rect.right) + "px;";
+      + "top:" + (rect.bottom + 4) + "px;right:" + (window.innerWidth - rect.right) + "px;";
 
     menu.innerHTML = ''
       + '<div class="canvas-export-item" data-action="copy-source" style="padding:8px 14px;font-size:13px;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;gap:8px">'
@@ -1979,7 +2293,7 @@ export function getChatScript(): string {
         picker.id = "canvas-template-picker";
         var rect = anchorEl.getBoundingClientRect();
         picker.style.cssText = "position:fixed;z-index:9000;min-width:220px;max-height:300px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);padding:4px 0;"
-          + "top:" + rect.bottom + 4 + "px;right:" + (window.innerWidth - rect.right) + "px;";
+          + "top:" + (rect.bottom + 4) + "px;right:" + (window.innerWidth - rect.right) + "px;";
 
         var html = '<div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px">Templates</div>';
         for (var i = 0; i < templates.length; i++) {

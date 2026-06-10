@@ -23,6 +23,8 @@ export interface OllamaProviderConfig {
 	maxToolRoundtrips: number;
 	requestTimeoutMs?: number;
 	apiKey?: string;
+	/** Max tokens to generate per response (Ollama `options.num_predict`). */
+	maxTokens?: number;
 }
 
 interface OllamaMessage {
@@ -69,6 +71,39 @@ function truncateToolResult(content: string): string {
 	);
 }
 
+/** Absolute ceiling on a single model response. Ollama has no server-side
+ *  max-tokens unless we send `num_predict`, and a degenerate/looping model can
+ *  stream the same text until the request times out — accumulating megabytes in
+ *  memory and (with many roundtrips) OOM-ing the process. This ceiling is far
+ *  above any legitimate response (full canvas HTML is tens of KB), so it never
+ *  truncates real output; it only stops runaway generation. */
+const MAX_RESPONSE_CHARS = 300_000;
+/** Generous floor for `num_predict` so we never truncate legit long output
+ *  (e.g. a full inline HTML canvas page) even if the user configured a small
+ *  maxTokens for chat. The char ceiling above is the real OOM safety net. */
+const MIN_NUM_PREDICT = 8_192;
+
+/** Detect a degenerate repetition loop: the same short tail repeated many times
+ *  back-to-back. Returns true once the response is clearly stuck repeating. */
+function isRepeatingTail(s: string): boolean {
+	const n = s.length;
+	if (n < 2_400) return false;
+	// Check a few unit sizes; if the last `unit` chars equal the `unit` before
+	// them for ~20 consecutive windows, it's a loop.
+	for (const unit of [40, 80, 120]) {
+		if (n < unit * 20) continue;
+		let reps = 0;
+		const last = s.slice(n - unit);
+		for (let k = 2; k <= 20; k++) {
+			const seg = s.slice(n - unit * k, n - unit * (k - 1));
+			if (seg === last) reps++;
+			else break;
+		}
+		if (reps >= 19) return true;
+	}
+	return false;
+}
+
 export class OllamaProvider implements AIProvider {
 	readonly name = "ollama";
 	private baseUrl: string;
@@ -76,6 +111,7 @@ export class OllamaProvider implements AIProvider {
 	private maxToolRoundtrips: number;
 	private requestTimeoutMs: number;
 	private apiKey: string | undefined;
+	private numPredict: number;
 	readonly toolRegistry: ToolRegistry;
 	private skillManager: SkillManager | null;
 	private logger: Logger;
@@ -91,6 +127,8 @@ export class OllamaProvider implements AIProvider {
 		this.maxToolRoundtrips = config.maxToolRoundtrips;
 		this.requestTimeoutMs = config.requestTimeoutMs ?? 300_000;
 		this.apiKey = config.apiKey;
+		// Generous cap so legitimate long output (canvas HTML) is never cut off.
+		this.numPredict = Math.max(config.maxTokens ?? 0, MIN_NUM_PREDICT);
 		this.toolRegistry = toolRegistry;
 		this.skillManager = skillManager ?? null;
 		this.logger = logger;
@@ -187,6 +225,7 @@ export class OllamaProvider implements AIProvider {
 				model: this.model,
 				messages: conversation,
 				stream: false,
+				options: { num_predict: this.numPredict },
 			};
 
 			if (tools.length > 0) {
@@ -201,7 +240,10 @@ export class OllamaProvider implements AIProvider {
 					// H-NEW-5: combine the caller's signal with the
 					// per-request timeout so cancel + hard timeout both work.
 					signal: signal
-						? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
+						? AbortSignal.any([
+								signal,
+								AbortSignal.timeout(this.requestTimeoutMs),
+							])
 						: AbortSignal.timeout(this.requestTimeoutMs),
 				});
 
@@ -256,13 +298,20 @@ export class OllamaProvider implements AIProvider {
 				if (call.function.name === "spawn_agent" && sessionId) {
 					toolArgs.__sessionId = sessionId;
 				}
-				regularCalls.push({ id: call.function.name, name: call.function.name, input: toolArgs });
+				regularCalls.push({
+					id: call.function.name,
+					name: call.function.name,
+					input: toolArgs,
+				});
 			}
 
 			// Phase 2: Execute remaining tools in parallel
 			if (regularCalls.length > 0) {
 				const results = await executeToolsParallel(
-					regularCalls, this.toolRegistry, this.logger, 300_000,
+					regularCalls,
+					this.toolRegistry,
+					this.logger,
+					300_000,
 				);
 				for (const r of results) {
 					if (r.images) collectedImages.push(...r.images);
@@ -348,6 +397,7 @@ export class OllamaProvider implements AIProvider {
 				model: this.model,
 				messages: conversation,
 				stream: true,
+				options: { num_predict: this.numPredict },
 			};
 
 			if (tools.length > 0) {
@@ -367,7 +417,10 @@ export class OllamaProvider implements AIProvider {
 						body: JSON.stringify(body),
 						// H-NEW-5: combine signal with per-request timeout.
 						signal: signal
-							? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
+							? AbortSignal.any([
+									signal,
+									AbortSignal.timeout(this.requestTimeoutMs),
+								])
 							: AbortSignal.timeout(this.requestTimeoutMs),
 					});
 				} catch (err) {
@@ -375,11 +428,18 @@ export class OllamaProvider implements AIProvider {
 					lastStreamErr = err instanceof Error ? err.message : String(err);
 					if (attempt < MAX_STREAM_RETRIES) {
 						const delayMs = Math.min(1000 * Math.pow(2, attempt), 15_000);
-						this.logger.warn("Stream fetch failed, retrying", { attempt: attempt + 1, delayMs, error: lastStreamErr });
+						this.logger.warn("Stream fetch failed, retrying", {
+							attempt: attempt + 1,
+							delayMs,
+							error: lastStreamErr,
+						});
 						await new Promise((r) => setTimeout(r, delayMs));
 						continue;
 					}
-					yield { type: "error", error: `Unable to connect to Ollama at ${this.baseUrl}. ${lastStreamErr}` };
+					yield {
+						type: "error",
+						error: `Unable to connect to Ollama at ${this.baseUrl}. ${lastStreamErr}`,
+					};
 					yield { type: "done" };
 					return;
 				}
@@ -390,7 +450,12 @@ export class OllamaProvider implements AIProvider {
 					const isRetryable = [429, 500, 502, 503, 529].includes(status);
 					if (isRetryable && attempt < MAX_STREAM_RETRIES) {
 						const delayMs = Math.min(1000 * Math.pow(2, attempt), 15_000);
-						this.logger.warn("Stream request failed, retrying", { attempt: attempt + 1, delayMs, status, error: text });
+						this.logger.warn("Stream request failed, retrying", {
+							attempt: attempt + 1,
+							delayMs,
+							status,
+							error: text,
+						});
 						await new Promise((r) => setTimeout(r, delayMs));
 						continue;
 					}
@@ -403,7 +468,10 @@ export class OllamaProvider implements AIProvider {
 				break;
 			}
 			if (!fetchOk) {
-				yield { type: "error", error: `Ollama stream failed after ${MAX_STREAM_RETRIES} retries: ${lastStreamErr}` };
+				yield {
+					type: "error",
+					error: `Ollama stream failed after ${MAX_STREAM_RETRIES} retries: ${lastStreamErr}`,
+				};
 				yield { type: "done" };
 				return;
 			}
@@ -415,6 +483,10 @@ export class OllamaProvider implements AIProvider {
 			let fullContent = "";
 			let toolCalls: OllamaToolCall[] | undefined;
 			let streamError = false;
+			// Guard against a runaway/looping model that streams forever (Ollama
+			// has no hard server-side stop): bail out of the read loop once the
+			// response is absurdly large or stuck repeating, before it OOMs us.
+			let runawayCut = false;
 
 			try {
 				while (true) {
@@ -448,24 +520,45 @@ export class OllamaProvider implements AIProvider {
 							if (chunk.message?.content) {
 								fullContent += chunk.message.content;
 								yield { type: "text_delta", text: chunk.message.content };
+								if (
+									fullContent.length > MAX_RESPONSE_CHARS ||
+									isRepeatingTail(fullContent)
+								) {
+									runawayCut = true;
+									break;
+								}
 							}
 							if (chunk.message?.tool_calls) {
 								// Accumulate across NDJSON chunks — some Ollama
 								// models stream tool calls in a separate/late
 								// chunk, and overwriting would drop earlier ones.
-								toolCalls = [
-									...(toolCalls ?? []),
-									...chunk.message.tool_calls,
-								];
+								toolCalls = [...(toolCalls ?? []), ...chunk.message.tool_calls];
 							}
 						} catch {
 							// Skip malformed lines
 						}
 					}
+					if (runawayCut) break;
+				}
+
+				if (runawayCut) {
+					this.logger.warn("Ollama response cut off (runaway/oversized)", {
+						chars: fullContent.length,
+						model: this.model,
+					});
+					try {
+						await reader.cancel();
+					} catch {
+						/* best-effort */
+					}
+					yield {
+						type: "text_delta",
+						text: "\n\n[Response stopped — the model was generating an unusually long or repeating output.]",
+					};
 				}
 
 				// Process remaining buffer
-				if (buffer.trim()) {
+				if (!runawayCut && buffer.trim()) {
 					try {
 						const chunk = JSON.parse(buffer) as OllamaResponse;
 						if (chunk.message?.content) {
@@ -473,10 +566,7 @@ export class OllamaProvider implements AIProvider {
 							yield { type: "text_delta", text: chunk.message.content };
 						}
 						if (chunk.message?.tool_calls) {
-							toolCalls = [
-								...(toolCalls ?? []),
-								...chunk.message.tool_calls,
-							];
+							toolCalls = [...(toolCalls ?? []), ...chunk.message.tool_calls];
 						}
 					} catch {
 						// Skip
@@ -565,13 +655,20 @@ export class OllamaProvider implements AIProvider {
 					}
 				}
 
-				streamRegularCalls.push({ id: toolId, name: call.function.name, input: toolInput });
+				streamRegularCalls.push({
+					id: toolId,
+					name: call.function.name,
+					input: toolInput,
+				});
 			}
 
 			// Phase 2: Execute remaining tools in parallel with streaming
 			if (streamRegularCalls.length > 0) {
 				const gen = executeToolsParallelStreaming(
-					streamRegularCalls, this.toolRegistry, this.logger, roundtrips,
+					streamRegularCalls,
+					this.toolRegistry,
+					this.logger,
+					roundtrips,
 				);
 				let next = await gen.next();
 				while (!next.done) {
@@ -609,7 +706,9 @@ export class OllamaProvider implements AIProvider {
 
 	async healthCheck(): Promise<{ ok: boolean; details?: string }> {
 		try {
-			const res = await fetch(`${this.baseUrl}/api/tags`, { headers: this.headers });
+			const res = await fetch(`${this.baseUrl}/api/tags`, {
+				headers: this.headers,
+			});
 			if (!res.ok) return { ok: false, details: `HTTP ${res.status}` };
 			const data = (await res.json()) as { models?: Array<{ name: string }> };
 			const models = data.models?.map((m) => m.name) ?? [];

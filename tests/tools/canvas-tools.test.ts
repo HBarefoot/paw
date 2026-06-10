@@ -115,6 +115,76 @@ describe("canvas tools", () => {
 		expect(result.content).toBe("(empty canvas)");
 	});
 
+	// --- canvas_mkdir / canvas_delete / canvas_move ---
+
+	test("canvas_mkdir creates a folder", async () => {
+		const result = await getTool("canvas_mkdir").handler({
+			path: "sales-campaign",
+		});
+		expect(result.is_error).toBeUndefined();
+		expect(existsSync(join(CANVAS_ROOT, "sales-campaign"))).toBe(true);
+	});
+
+	test("canvas_mkdir rejects path traversal", async () => {
+		const result = await getTool("canvas_mkdir").handler({
+			path: "../escape",
+		});
+		expect(result.is_error).toBe(true);
+	});
+
+	test("canvas_delete removes a file", async () => {
+		writeFileSync(join(CANVAS_ROOT, "gone.txt"), "bye");
+		const result = await getTool("canvas_delete").handler({ path: "gone.txt" });
+		expect(result.is_error).toBeUndefined();
+		expect(existsSync(join(CANVAS_ROOT, "gone.txt"))).toBe(false);
+	});
+
+	test("canvas_delete removes a folder recursively", async () => {
+		mkdirSync(join(CANVAS_ROOT, "blog/posts"), { recursive: true });
+		writeFileSync(join(CANVAS_ROOT, "blog/posts/p1.html"), "x");
+		const result = await getTool("canvas_delete").handler({ path: "blog" });
+		expect(result.is_error).toBeUndefined();
+		expect(existsSync(join(CANVAS_ROOT, "blog"))).toBe(false);
+	});
+
+	test("canvas_delete refuses to delete the canvas root", async () => {
+		for (const p of ["", ".", "/", "./"]) {
+			const result = await getTool("canvas_delete").handler({ path: p });
+			expect(result.is_error).toBe(true);
+		}
+		expect(existsSync(CANVAS_ROOT)).toBe(true);
+	});
+
+	test("canvas_delete rejects path traversal", async () => {
+		const result = await getTool("canvas_delete").handler({
+			path: "../../etc",
+		});
+		expect(result.is_error).toBe(true);
+	});
+
+	test("canvas_move renames/moves a file into a folder", async () => {
+		writeFileSync(join(CANVAS_ROOT, "index.html"), "<h1>hi</h1>");
+		const result = await getTool("canvas_move").handler({
+			from: "index.html",
+			to: "sales-campaign/index.html",
+		});
+		expect(result.is_error).toBeUndefined();
+		expect(existsSync(join(CANVAS_ROOT, "index.html"))).toBe(false);
+		expect(existsSync(join(CANVAS_ROOT, "sales-campaign/index.html"))).toBe(
+			true,
+		);
+	});
+
+	test("canvas_move refuses to overwrite an existing destination", async () => {
+		writeFileSync(join(CANVAS_ROOT, "a.txt"), "a");
+		writeFileSync(join(CANVAS_ROOT, "b.txt"), "b");
+		const result = await getTool("canvas_move").handler({
+			from: "a.txt",
+			to: "b.txt",
+		});
+		expect(result.is_error).toBe(true);
+	});
+
 	// --- all tools carry plugin: "kernel" ---
 	// Canvas tools belong to the kernel manifest (which grants
 	// canvas:read/write) so the sandbox permission check passes. They are

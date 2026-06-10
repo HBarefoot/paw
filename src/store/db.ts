@@ -23,6 +23,43 @@ function loadCustomSqlite(customPath?: string): void {
 	customSqliteLoaded = true;
 }
 
+/**
+ * Verify an FTS5 index and self-heal it if its on-disk shadow tables are
+ * corrupt (SQLITE_CORRUPT_VTAB). The index is derived data — fully
+ * rebuildable from the external content table — so a corrupt index must
+ * never wedge writes/deletes on the base table (whose triggers touch it).
+ *
+ * Escalation: integrity-check → rebuild → drop & recreate & rebuild.
+ * `recreateDDL` must be the exact CREATE VIRTUAL TABLE statement.
+ */
+function healFtsIndex(
+	database: Database,
+	ftsTable: string,
+	recreateDDL: string,
+): void {
+	try {
+		database.exec(
+			`INSERT INTO ${ftsTable}(${ftsTable}) VALUES('integrity-check');`,
+		);
+		return; // healthy
+	} catch {
+		// fall through to repair
+	}
+	try {
+		database.exec(`INSERT INTO ${ftsTable}(${ftsTable}) VALUES('rebuild');`);
+		return;
+	} catch {
+		// rebuild failed — pages are corrupt; drop the shadow tables and recreate
+	}
+	try {
+		database.exec(`DROP TABLE IF EXISTS ${ftsTable};`);
+		database.exec(recreateDDL);
+		database.exec(`INSERT INTO ${ftsTable}(${ftsTable}) VALUES('rebuild');`);
+	} catch {
+		// FTS unavailable/unrecoverable — search degrades to LIKE fallback
+	}
+}
+
 export function getDb(dbPath: string, customSqlitePath?: string): Database {
 	if (db) return db;
 
@@ -233,9 +270,10 @@ function runMigrations(db: Database): void {
   `);
 
 	// FTS5 for memory full-text search
-	db.exec(
-		`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='memories', content_rowid='rowid');`,
-	);
+	const memoriesFtsDDL = `CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='memories', content_rowid='rowid');`;
+	db.exec(memoriesFtsDDL);
+	// Self-heal a corrupt FTS index so memory deletes/updates can't 500.
+	healFtsIndex(db, "memories_fts", memoriesFtsDDL);
 
 	// Triggers to keep FTS in sync
 	db.exec(`
@@ -348,14 +386,15 @@ function runMigrations(db: Database): void {
 	// --- Full-text search over conversation messages ---
 	// External-content FTS5 table so we don't duplicate message content,
 	// plus triggers that keep it in sync on insert/update/delete.
-	try {
-		db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+	const messagesFtsDDL = `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
         content,
         content='messages',
         content_rowid='rowid',
         tokenize='porter unicode61 remove_diacritics 2'
-      );
+      );`;
+	try {
+		db.exec(`
+      ${messagesFtsDDL}
 
       CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
         INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
@@ -369,6 +408,11 @@ function runMigrations(db: Database): void {
       END;
     `);
 
+		// Self-heal a corrupt index first (an AFTER-DELETE trigger writes to
+		// messages_fts on every session/message delete — a corrupt page there
+		// throws SQLITE_CORRUPT_VTAB and 500s the delete).
+		healFtsIndex(db, "messages_fts", messagesFtsDDL);
+
 		// Backfill any existing messages that predate the trigger.
 		const ftsCount = db
 			.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM messages_fts")
@@ -377,9 +421,7 @@ function runMigrations(db: Database): void {
 			.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM messages")
 			.get();
 		if ((ftsCount?.n ?? 0) < (msgCount?.n ?? 0)) {
-			db.exec(
-				"INSERT INTO messages_fts(messages_fts) VALUES('rebuild');",
-			);
+			db.exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild');");
 		}
 	} catch {
 		// FTS5 not available — search endpoint will degrade to LIKE fallback.
@@ -414,6 +456,43 @@ function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_webhook_logs_webhook ON webhook_logs(webhook_id, created_at DESC);
   `);
 
+	// Canvas action bindings + submissions inbox.
+	// An "action" is the safe boundary between a public canvas form and a
+	// backend skill: the agent declares a named, typed, field-mapped
+	// destination once; the public /api/forms/:id endpoint only ever routes a
+	// submission to that pre-declared destination (never arbitrary skills).
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS canvas_actions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      type TEXT NOT NULL,                 -- 'strapi' | 'hubspot'
+      config_json TEXT NOT NULL DEFAULT '{}',
+      field_map_json TEXT NOT NULL DEFAULT '{}',
+      redirect_url TEXT,
+      honeypot_field TEXT,
+      secret TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      submit_count INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS canvas_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action_id TEXT NOT NULL REFERENCES canvas_actions(id) ON DELETE CASCADE,
+      data_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'received',  -- received | routed | failed
+      target_ref TEXT,
+      ip TEXT,
+      user_agent TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_canvas_submissions_action ON canvas_submissions(action_id, created_at DESC);
+  `);
+
 	// Backfill: re-parent canvas sessions to the per-admin user_id.
 	// Before per-admin scoping was added (REVIEW-2026-06-09.md C-NEW-1),
 	// canvas sessions were stored with user_id="canvas-user". Now they
@@ -426,7 +505,9 @@ function runMigrations(db: Database): void {
 	// filtered out of /sessions.
 	try {
 		const firstAdmin = db
-			.query<{ id: number }, []>("SELECT id FROM web_admins ORDER BY id ASC LIMIT 1")
+			.query<{ id: number }, []>(
+				"SELECT id FROM web_admins ORDER BY id ASC LIMIT 1",
+			)
 			.get();
 		if (firstAdmin) {
 			db.run(
