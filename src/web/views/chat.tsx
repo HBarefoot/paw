@@ -2056,6 +2056,11 @@ export function getChatScript(): string {
   };
 
   window.canvasRefresh = function() {
+    // The index.html portrait is a LIVE/dynamic view (reacts to agent activity
+    // via postMessage) — reloading it just wipes its reactions/feed and
+    // re-renders the same capabilities. Skip it so the refresh button doesn't
+    // reset the live face. (Counts refresh when the canvas is reopened.)
+    if (canvasCurrentFileName === "index.html") return;
     // Refresh the active tab's iframe with a cache-busting query so the
     // preview re-fetches. We intentionally avoid the old "about:blank then
     // restore src" round-trip: in Safari, navigating a sandboxed (null-origin)
