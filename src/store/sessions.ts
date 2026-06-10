@@ -80,6 +80,15 @@ export function listRecentSessionsForUser(
 		.all(userId, limit);
 }
 
+/** Total session rows regardless of owner — used to diagnose whether an empty
+ * "for this user" list is a wiped DB (total=0) vs an owner mismatch (total>0). */
+export function countAllSessions(db: Database): number {
+	return (
+		db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sessions").get()
+			?.n ?? 0
+	);
+}
+
 export function getSessionOwnedBy(
 	db: Database,
 	sessionId: string,

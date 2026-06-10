@@ -33,12 +33,14 @@ import {
 	forkSessionAtMessage,
 	forkSessionOwnedBy,
 	getSessionOwnedBy,
+	countAllSessions,
 	getSessionWithMessages,
 	listRecentSessions,
 	listRecentSessionsForUser,
 	updateSessionTitle,
 	updateSessionTitleOwnedBy,
 } from "../store/sessions.js";
+import { createLogger } from "../observability/logger.js";
 import type { PawConfig } from "../types/config.js";
 import { CANVAS_TEMPLATES } from "./canvas-templates.js";
 import { parseUploadedFiles } from "./file-parser.js";
@@ -2674,6 +2676,13 @@ export function createWebApp(
 		const userId = getRequestUserId(c);
 		if (!userId) return c.text("Unauthorized", 401);
 		const sessions = listRecentSessionsForUser(kernel.database, userId, 50);
+		// Persistence diagnostic: forUser=0 but total>0 ⇒ owner mismatch;
+		// both 0 ⇒ empty/wiped DB.
+		createLogger("web").info("Sessions list", {
+			userId,
+			forUser: sessions.length,
+			total: countAllSessions(kernel.database),
+		});
 		return c.html(SessionsListPage({ sessions }));
 	});
 

@@ -173,6 +173,22 @@ function resolvedCredentials(): Record<string, unknown> {
 	};
 }
 
+/**
+ * Deployment/infrastructure paths from env that MUST win over a persisted
+ * config.json. These are environment concerns (where data lives on the host /
+ * volume), not user-editable settings — and a stale config.json that baked in
+ * the default `store.dbPath` ("./data/paw.db") would otherwise shadow
+ * `PAW_DB_PATH=/data/paw.db` and send the SQLite DB to ephemeral storage,
+ * wiping sessions on every redeploy. Applied AFTER the file merge.
+ */
+function resolvedInfraOverrides(): Record<string, unknown> {
+	const env = process.env;
+	const out: Record<string, unknown> = {};
+	if (env.PAW_DB_PATH) out.store = { dbPath: env.PAW_DB_PATH };
+	if (env.PAW_CANVAS_ROOT) out.web = { canvas: { root: env.PAW_CANVAS_ROOT } };
+	return out;
+}
+
 export function loadConfig(overrides?: Partial<PawConfig>): PawConfig {
 	let merged = deepMerge(
 		defaults as unknown as Record<string, unknown>,
@@ -184,6 +200,10 @@ export function loadConfig(overrides?: Partial<PawConfig>): PawConfig {
 	if (Object.keys(fileOverrides).length > 0) {
 		merged = deepMerge(merged, fileOverrides);
 	}
+
+	// Deployment-infra env paths win over the persisted file config (but still
+	// below explicit programmatic overrides below, so tests stay controllable).
+	merged = deepMerge(merged, resolvedInfraOverrides());
 
 	if (overrides) {
 		merged = deepMerge(merged, overrides as unknown as Record<string, unknown>);
