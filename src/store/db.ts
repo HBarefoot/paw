@@ -107,6 +107,19 @@ function runMigrations(db: Database): void {
       PRIMARY KEY (plugin, key)
     );
 
+    -- Credential vault: AES-256-GCM encrypted secrets (see src/security/vault.ts).
+    -- ciphertext/iv/tag are base64; decryptable only with PAW_VAULT_KEY. Lives on
+    -- the persistent /data volume with the rest of the DB.
+    CREATE TABLE IF NOT EXISTS vault_secrets (
+      name TEXT PRIMARY KEY,
+      ciphertext TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'custom',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS memories (
       id TEXT PRIMARY KEY,
       text TEXT NOT NULL,
