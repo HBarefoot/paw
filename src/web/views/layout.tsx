@@ -244,6 +244,35 @@ const cssDesignSystem = `
     align-items: center;
     gap: 10px;
   }
+  /* Header shows the logo only — no name/version text next to it. */
+  .sidebar-header .wordmark .name,
+  .sidebar-header .wordmark .ver { display: none; }
+
+  /* ===== Manual sidebar collapse (icon-only rail) =====
+     Mirrors the <768px responsive rules, keyed on an <html> class toggled
+     by __pawToggleSidebar (pre-applied before paint to avoid a flash). */
+  html.sidebar-collapsed .sidebar { width: var(--sidebar-collapsed); }
+  html.sidebar-collapsed .main-area { margin-left: var(--sidebar-collapsed); }
+  html.sidebar-collapsed .nav-label,
+  html.sidebar-collapsed .nav-group-chevron,
+  html.sidebar-collapsed .sidebar-footer span { display: none; }
+  html.sidebar-collapsed .nav-item { justify-content: center; padding: 12px; }
+  html.sidebar-collapsed .nav-item.nav-sub { padding-left: 12px; justify-content: center; }
+  html.sidebar-collapsed .nav-group-header { justify-content: center; }
+  html.sidebar-collapsed .sidebar-header { justify-content: center; padding: 16px 8px; }
+  html.sidebar-collapsed .sidebar-footer { text-align: center; padding: 12px 8px; }
+  html.sidebar-collapsed .theme-toggle { flex-direction: column; }
+
+  /* Collapse toggle button (sidebar footer) */
+  .sidebar-collapse-btn {
+    width: 100%; background: transparent; border: 1px solid var(--border-primary);
+    color: var(--text-secondary); justify-content: flex-start; gap: 10px;
+    padding: 8px 12px; margin-bottom: 8px; font-size: 12px; border-radius: var(--radius-md);
+  }
+  .sidebar-collapse-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .sidebar-collapse-btn .nav-icon { display: inline-flex; transition: transform var(--transition); }
+  html.sidebar-collapsed .sidebar-collapse-btn { justify-content: center; }
+  html.sidebar-collapsed .sidebar-collapse-btn .nav-icon { transform: rotate(180deg); }
 
   .logo-icon {
     width: 32px;
@@ -1846,7 +1875,7 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
       <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">`)}
 			<title>{title} - Paw</title>
 			{raw(
-				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`,
+				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");if(localStorage.getItem("paw-sidebar-collapsed")==="1")document.documentElement.classList.add("sidebar-collapsed");window.__pawToggleSidebar=function(){var c=document.documentElement.classList.toggle("sidebar-collapsed");try{localStorage.setItem("paw-sidebar-collapsed",c?"1":"0");}catch(e){}};window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`,
 			)}
 			{raw(`<style>${cssDesignSystem}</style>`)}
 			{/* Brand theme override — maps the active brand onto the design tokens.
@@ -1921,6 +1950,9 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 						})()}
 					</nav>
 					<div class="sidebar-footer">
+						{raw(
+							`<button type="button" class="sidebar-collapse-btn btn" onclick="__pawToggleSidebar()" title="Collapse sidebar"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></span><span class="nav-label">Collapse</span></button>`,
+						)}
 						{raw(`<div class="theme-toggle">
               <button class="theme-btn" data-theme="light" onclick="__pawSetTheme('light')" title="Light">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
