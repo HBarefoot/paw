@@ -298,6 +298,30 @@ const cssDesignSystem = `
     width: 3px; height: 16px; border-radius: 99px; background: var(--accent-bright);
   }
 
+  /* ===== COLLAPSIBLE NAV GROUP (Settings) ===== */
+  .nav-group { display: flex; flex-direction: column; }
+  .nav-group-header {
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 12px; width: 100%;
+    background: transparent; border: none; box-shadow: none;
+    color: var(--text-secondary); font-size: 13.5px; font-weight: 450;
+    border-radius: var(--radius-md); cursor: pointer; position: relative;
+    transition: all var(--transition); font-family: var(--font-sans);
+    text-align: left;
+  }
+  .nav-group-header:hover { background: var(--bg-hover); color: var(--text-primary); transform: none; }
+  .nav-group.child-active > .nav-group-header { color: var(--text-primary); }
+  .nav-group.child-active > .nav-group-header .nav-icon { color: var(--accent-bright); }
+  .nav-group-chevron {
+    margin-left: auto; display: inline-flex; color: var(--text-tertiary);
+    transition: transform .15s var(--ease);
+  }
+  .nav-group.open > .nav-group-header .nav-group-chevron { transform: rotate(90deg); }
+  .nav-group-body { display: none; flex-direction: column; gap: 2px; margin: 2px 0 2px 0; }
+  .nav-group.open > .nav-group-body { display: flex; }
+  .nav-item.nav-sub { padding-left: 24px; font-size: 13px; }
+  .nav-item.nav-sub .nav-icon { width: 17px; height: 17px; }
+
   .nav-icon {
     width: 20px;
     height: 20px;
@@ -702,6 +726,25 @@ const cssDesignSystem = `
   .msg.assistant .md-content .code-block pre {
     border: none; border-radius: 0;
   }
+  /* Collapse large code blocks: cap height + fade the cut-off bottom. */
+  .msg.assistant .md-content .code-block.collapsed pre {
+    max-height: 240px; overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent);
+    mask-image: linear-gradient(to bottom, #000 80%, transparent);
+  }
+  .msg.assistant .md-content .code-expand {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--accent-bright); font-size: 11px; padding: 2px 6px;
+    margin-left: 8px; border-radius: 4px;
+    font-family: var(--font-mono); transition: background 0.15s;
+  }
+  .msg.assistant .md-content .code-expand:hover { background: var(--accent-subtle); }
+  .msg.assistant .md-content .code-streaming {
+    margin-left: 8px; font-family: var(--font-mono); font-size: 11px;
+    color: var(--accent-bright); opacity: .85;
+  }
+  /* In-progress code while streaming is capped shorter so it never dominates. */
+  .msg.assistant .md-content .code-block.streaming pre { max-height: 200px; }
   .msg.assistant .md-content .code-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 4px 10px; font-size: 11px;
@@ -878,23 +921,26 @@ const cssDesignSystem = `
 
   /* ===== ACTIVITY TIMELINE ===== */
   .activity-timeline {
-    margin-top: 10px;
-    padding-left: 16px;
+    margin-top: 8px;
+    padding-left: 20px;
     border-left: 2px solid var(--border-secondary);
     position: relative;
   }
 
+  /* Shared left gutter: status dots sit centered on the rail (left edge);
+     every text element (step labels, "STEP N" dividers) starts at the
+     timeline content edge so they all align in one column. */
   .activity-step {
     position: relative;
-    padding: 4px 0 4px 12px;
+    padding: 4px 0;
     font-size: 12px;
     color: var(--text-secondary);
   }
   .activity-step::before {
     content: "";
     position: absolute;
-    left: -17px;
-    top: 10px;
+    left: -23px;
+    top: 9px;
     width: 8px;
     height: 8px;
     border-radius: 50%;
@@ -1190,7 +1236,7 @@ const cssDesignSystem = `
   }
 
   .activity-roundtrip-divider {
-    padding: 4px 0 4px 12px;
+    padding: 6px 0 4px 0;
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -1236,8 +1282,8 @@ const cssDesignSystem = `
   .activity-timeline-header {
     display: none;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
+    gap: 0;
+    padding: 6px 10px 6px 0;
     margin-top: 8px;
     margin-bottom: 2px;
     cursor: pointer;
@@ -1250,8 +1296,13 @@ const cssDesignSystem = `
   .activity-timeline-header:hover { background: var(--bg-hover); }
   .activity-timeline-header.visible { display: flex; }
 
+  /* 22px gutter matches the timeline content edge so the summary counts line
+     up with the step labels + "STEP N" dividers below; the chevron sits in
+     the gutter column. */
   .activity-toggle-icon {
+    width: 22px;
     display: inline-flex;
+    justify-content: center;
     transition: transform 150ms ease;
     flex-shrink: 0;
   }
@@ -1573,7 +1624,9 @@ const cssDesignSystem = `
   /* ===== RESPONSIVE ===== */
   @media (max-width: 768px) {
     .sidebar { width: var(--sidebar-collapsed); }
-    .nav-label, .logo-text, .wordmark .name, .wordmark .ver { display: none; }
+    .nav-label, .logo-text, .wordmark .name, .wordmark .ver, .nav-group-chevron { display: none; }
+    .nav-item.nav-sub { padding-left: 12px; justify-content: center; }
+    .nav-group-header { justify-content: center; }
     .nav-item { justify-content: center; padding: 12px; }
     .sidebar-header { justify-content: center; padding: 16px 8px; }
     .sidebar-footer { text-align: center; padding: 12px 8px; }
@@ -1713,23 +1766,31 @@ document.addEventListener("keydown", function(e) {
 });
 `;
 
+// Primary, always-visible operational pages.
 const navItems = [
 	{ path: "/", label: "Dashboard", icon: "dashboard" },
-	{ path: "/config", label: "Config", icon: "config" },
 	{ path: "/cron", label: "Cron", icon: "cron" },
 	{ path: "/heartbeat", label: "Heartbeat", icon: "heartbeat" },
-	{ path: "/memory", label: "Memory", icon: "memory" },
-	{ path: "/sessions", label: "Sessions", icon: "sessions" },
 	{ path: "/search", label: "Search", icon: "search" },
-	{ path: "/audit", label: "Audit", icon: "audit" },
-	{ path: "/tools", label: "Tools", icon: "tools" },
 	{ path: "/prompts", label: "Prompts", icon: "prompts" },
-	{ path: "/mcp", label: "MCP", icon: "mcp" },
-	{ path: "/skills", label: "Skills", icon: "skills" },
-	{ path: "/webhooks", label: "Webhooks", icon: "webhooks" },
 	{ path: "/submissions", label: "Submissions", icon: "submissions" },
 	{ path: "/chat", label: "Chat", icon: "chat" },
 ];
+
+// Secondary pages tucked under a collapsible "Settings" group.
+const settingsItems = [
+	{ path: "/config", label: "Config", icon: "config" },
+	{ path: "/memory", label: "Memory", icon: "memory" },
+	{ path: "/sessions", label: "Sessions", icon: "sessions" },
+	{ path: "/audit", label: "Audit", icon: "audit" },
+	{ path: "/tools", label: "Tools", icon: "tools" },
+	{ path: "/mcp", label: "MCP", icon: "mcp" },
+	{ path: "/skills", label: "Skills", icon: "skills" },
+	{ path: "/webhooks", label: "Webhooks", icon: "webhooks" },
+];
+
+const settingsIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+const chevronIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
 
 export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 	<html lang="en">
@@ -1769,6 +1830,43 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 								<span class="nav-label">{item.label}</span>
 							</a>
 						))}
+						{(() => {
+							const settingsActive = settingsItems.some(
+								(s) => s.path === currentPath,
+							);
+							return (
+								<div
+									class={`nav-group${settingsActive ? " open child-active" : ""}`}
+									id="settings-group"
+								>
+									<button
+										type="button"
+										class="nav-group-header"
+										onclick="__pawToggleSettings(this)"
+										aria-expanded={settingsActive ? "true" : "false"}
+									>
+										{raw(`<span class="nav-icon">${settingsIcon}</span>`)}
+										<span class="nav-label">Settings</span>
+										{raw(
+											`<span class="nav-group-chevron">${chevronIcon}</span>`,
+										)}
+									</button>
+									<div class="nav-group-body">
+										{settingsItems.map((item) => (
+											<a
+												href={item.path}
+												class={`nav-item nav-sub${currentPath === item.path ? " active" : ""}`}
+											>
+												{raw(
+													`<span class="nav-icon">${navIcon(item.icon)}</span>`,
+												)}
+												<span class="nav-label">{item.label}</span>
+											</a>
+										))}
+									</div>
+								</div>
+							);
+						})()}
 					</nav>
 					<div class="sidebar-footer">
 						{raw(`<div class="theme-toggle">
@@ -1805,6 +1903,19 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 			{raw(
 				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});})()</script>`,
 			)}
+			{raw(`<script>(function(){
+				var g=document.getElementById("settings-group");
+				if(!g)return;
+				// Auto-open when a Settings page is active; otherwise restore saved state.
+				if(!g.classList.contains("child-active")){
+					try{ if(localStorage.getItem("paw-settings-open")==="1") g.classList.add("open"); }catch(e){}
+				}
+				window.__pawToggleSettings=function(btn){
+					var open=g.classList.toggle("open");
+					btn.setAttribute("aria-expanded",open?"true":"false");
+					try{ localStorage.setItem("paw-settings-open",open?"1":"0"); }catch(e){}
+				};
+			})()</script>`)}
 		</body>
 	</html>
 );

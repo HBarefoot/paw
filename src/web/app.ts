@@ -971,6 +971,7 @@ export function createWebApp(
 
 			// Parse dotted form field names into nested objects
 			const agentFields = new Map<string, Record<string, string>>();
+			let n8nEndpointsRaw: string | null = null;
 			for (const [key, value] of Object.entries(body)) {
 				// Agent fields use agents[idx].field format — collect separately
 				const agentMatch = key.match(/^agents\[(\d+)]\.(\w+)$/);
@@ -979,6 +980,11 @@ export function createWebApp(
 					if (!agentFields.has(idx)) agentFields.set(idx, {});
 					const fields = agentFields.get(idx);
 					if (fields) fields[agentMatch[2]] = String(value);
+					continue;
+				}
+				// n8n endpoints arrive as a JSON array in a hidden field.
+				if (key === "n8nEndpoints") {
+					n8nEndpointsRaw = String(value);
 					continue;
 				}
 
@@ -1038,6 +1044,28 @@ export function createWebApp(
 			}
 			// Always write agents key (empty object clears all agents)
 			overrides.agents = agentsConfig;
+
+			// n8n endpoints: replace the array from the hidden JSON field.
+			if (n8nEndpointsRaw !== null) {
+				let eps: Array<{ name: string; url: string }> = [];
+				try {
+					const parsed = JSON.parse(n8nEndpointsRaw);
+					if (Array.isArray(parsed)) {
+						eps = parsed
+							.filter(
+								(e) =>
+									e && typeof e.name === "string" && typeof e.url === "string",
+							)
+							.map((e) => ({ name: e.name.trim(), url: e.url.trim() }))
+							.filter((e) => e.name && e.url);
+					}
+				} catch {
+					// ignore malformed
+				}
+				const n8n = (overrides.n8n ?? {}) as Record<string, unknown>;
+				n8n.endpoints = eps;
+				overrides.n8n = n8n;
+			}
 
 			// Convert comma-separated ICP discovery fields into string arrays
 			const icpConfig = overrides["icp-discovery"] as
@@ -3120,6 +3148,8 @@ export function createWebApp(
 		let args: string;
 		let url: string;
 		let envStr: string;
+		let authToken: string;
+		let headersStr: string;
 
 		if (contentType.includes("application/json")) {
 			const body = await c.req.json<Record<string, string>>();
@@ -3129,6 +3159,8 @@ export function createWebApp(
 			args = body.args ?? "";
 			url = body.url ?? "";
 			envStr = body.env ?? "";
+			authToken = body.authToken ?? "";
+			headersStr = body.headers ?? "";
 		} else {
 			const body = await c.req.parseBody();
 			name = String(body.name ?? "");
@@ -3137,6 +3169,8 @@ export function createWebApp(
 			args = String(body.args ?? "");
 			url = String(body.url ?? "");
 			envStr = String(body.env ?? "");
+			authToken = String(body.authToken ?? "");
+			headersStr = String(body.headers ?? "");
 		}
 
 		name = name.trim();
@@ -3167,6 +3201,13 @@ export function createWebApp(
 			if (Object.keys(env).length > 0) serverConfig.env = env;
 		}
 
+		// Auth for remote transports
+		if (authToken.trim()) serverConfig.authToken = authToken.trim();
+		if (headersStr.trim()) {
+			const headers = parseHeaderLines(headersStr);
+			if (Object.keys(headers).length > 0) serverConfig.headers = headers;
+		}
+
 		// Persist to config file
 		const existing = (
 			await import("../config/writer.js")
@@ -3191,6 +3232,115 @@ export function createWebApp(
 			return c.redirect("/mcp?success=1");
 		}
 		return c.json({ ok: true, name }, 201);
+	});
+
+	// Parse "Key: Value" (or "Key=Value") header lines into an object.
+	function parseHeaderLines(s: string): Record<string, string> {
+		const out: Record<string, string> = {};
+		for (const line of s.split("\n")) {
+			const t = line.trim();
+			if (!t) continue;
+			const sep = t.search(/[:=]/);
+			if (sep > 0) out[t.slice(0, sep).trim()] = t.slice(sep + 1).trim();
+		}
+		return out;
+	}
+
+	// Import one or more MCP servers from a pasted standard config. Accepts the
+	// canonical { "mcpServers": { name: {...} } }, a bare { name: {...} } map, or
+	// a single server object (with `name`). Each entry may carry authToken/headers.
+	app.post("/api/mcp/import", async (c) => {
+		let raw: unknown;
+		try {
+			const body = await c.req.json<{ json?: string }>();
+			raw =
+				typeof body.json === "string"
+					? JSON.parse(body.json)
+					: (body.json ?? body);
+		} catch {
+			return c.json({ error: "Invalid JSON" }, 400);
+		}
+		// Normalize into a name->config map.
+		let servers: Record<string, unknown> = {};
+		const obj = raw as Record<string, unknown>;
+		if (obj && typeof obj === "object") {
+			if (obj.mcpServers && typeof obj.mcpServers === "object") {
+				servers = obj.mcpServers as Record<string, unknown>;
+			} else if (typeof obj.name === "string") {
+				const { name, ...rest } = obj as { name: string };
+				servers = { [name]: rest };
+			} else {
+				servers = obj;
+			}
+		}
+		const names = Object.keys(servers).filter(
+			(k) => servers[k] && typeof servers[k] === "object",
+		);
+		if (names.length === 0) {
+			return c.json({ error: "No MCP servers found in the pasted JSON" }, 400);
+		}
+
+		const writer = await import("../config/writer.js");
+		const existing = writer.readConfigOverrides();
+		const mcpServers = (existing.mcpServers ?? {}) as Record<string, unknown>;
+		const imported: string[] = [];
+		const connected: string[] = [];
+		for (const name of names) {
+			const cfg = servers[name] as Record<string, unknown>;
+			// Infer transport if missing: url → http, command → stdio.
+			if (!cfg.transport) cfg.transport = cfg.url ? "http" : "stdio";
+			mcpServers[name] = cfg;
+			imported.push(name);
+		}
+		existing.mcpServers = mcpServers;
+		writer.saveConfigOverrides(existing);
+
+		// Live-connect each imported server (best-effort).
+		for (const name of imported) {
+			try {
+				await kernel.mcpManager.connectServer(
+					name,
+					mcpServers[name] as Parameters<
+						typeof kernel.mcpManager.connectServer
+					>[1],
+				);
+				const tools = await kernel.mcpManager.discoverTools(name);
+				if (tools.length > 0) kernel.registerTools(tools);
+				connected.push(name);
+			} catch {
+				// saved but not connected — user can reconnect
+			}
+		}
+		return c.json({ ok: true, imported, connected });
+	});
+
+	// Live-(re)connect the configured n8n MCP endpoints without a full restart.
+	app.post("/api/n8n/reconnect", async (c) => {
+		const n8n = liveConfig().n8n;
+		if (!n8n?.enabled || !n8n.token) {
+			return c.json(
+				{ error: "n8n is disabled or missing a token — save the form first." },
+				400,
+			);
+		}
+		const eps = (n8n.endpoints ?? []).filter((e) => e?.name && e?.url);
+		const connected: string[] = [];
+		for (const ep of eps) {
+			const key = `n8n_${ep.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
+			try {
+				await kernel.mcpManager.connectServer(key, {
+					transport: n8n.transport,
+					url: ep.url,
+					authToken: n8n.token,
+				} as Parameters<typeof kernel.mcpManager.connectServer>[1]);
+				const tools = await kernel.mcpManager.discoverTools(key);
+				if (tools.length > 0) kernel.registerTools(tools);
+				connected.push(key);
+			} catch {
+				// leave it disconnected; user can retry
+			}
+		}
+		return c.json({ ok: true, total: eps.length, connected });
 	});
 
 	app.delete("/api/mcp/servers/:name", async (c) => {

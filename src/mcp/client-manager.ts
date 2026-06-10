@@ -14,6 +14,10 @@ interface MCPServerConfig {
 	env?: Record<string, string>;
 	url?: string;
 	transport?: "stdio" | "sse" | "http";
+	/** Sent as `Authorization: Bearer <authToken>` on remote (sse/http) requests. */
+	authToken?: string;
+	/** Extra request headers for remote (sse/http) transports. */
+	headers?: Record<string, string>;
 }
 
 // Default allowlist of safe MCP command executables
@@ -129,6 +133,23 @@ export class MCPClientManager {
 	 * Delegates to the unified `url-guard` so CGNAT, ULA, embedded credentials,
 	 * and IPv4-mapped IPv6 are all blocked consistently.
 	 */
+	/**
+	 * Build the fetch RequestInit for a remote (sse/http) MCP transport,
+	 * layering bearer-token + custom headers on top of the SSRF-safe base.
+	 */
+	private buildRequestInit(config: MCPServerConfig): RequestInit {
+		const headers: Record<string, string> = {};
+		if (config.authToken) {
+			headers.Authorization = `Bearer ${config.authToken}`;
+		}
+		if (config.headers) {
+			Object.assign(headers, config.headers);
+		}
+		return Object.keys(headers).length > 0
+			? { ...MCP_REQUEST_INIT, headers }
+			: MCP_REQUEST_INIT;
+	}
+
 	private validateUrl(urlStr: string): URL {
 		const result = validateExternalUrl(urlStr, {
 			allowedSchemes: ["http:", "https:"],
@@ -202,7 +223,7 @@ export class MCPClientManager {
 					"@modelcontextprotocol/sdk/client/sse.js"
 				);
 				transport = new SSEClientTransport(url, {
-					requestInit: MCP_REQUEST_INIT,
+					requestInit: this.buildRequestInit(config),
 				});
 			} else if (transportType === "http") {
 				if (!config.url) {
@@ -216,7 +237,7 @@ export class MCPClientManager {
 					"@modelcontextprotocol/sdk/client/streamableHttp.js"
 				);
 				transport = new StreamableHTTPClientTransport(url, {
-					requestInit: MCP_REQUEST_INIT,
+					requestInit: this.buildRequestInit(config),
 				});
 			} else {
 				throw new Error(`Unknown transport type: ${transportType}`);

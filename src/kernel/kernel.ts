@@ -358,8 +358,27 @@ export class Kernel {
 			}),
 		);
 
-		// Connect MCP servers in parallel
-		const mcpEntries = Object.entries(this.config.mcpServers ?? {});
+		// Connect MCP servers in parallel. n8n is a first-class integration whose
+		// workflow endpoints are just authenticated MCP servers — merge them in as
+		// synthetic entries (NOT persisted into config.mcpServers) so they ride the
+		// same connect path + auth. Each becomes `n8n_<name>` → an `mcp__…` skill.
+		const mcpServerMap: Record<
+			string,
+			import("../types/config.js").PawConfig["mcpServers"][string]
+		> = { ...(this.config.mcpServers ?? {}) };
+		const n8n = this.config.n8n;
+		if (n8n?.enabled && n8n.token) {
+			for (const ep of n8n.endpoints ?? []) {
+				if (!ep?.name || !ep?.url) continue;
+				const key = `n8n_${ep.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
+				mcpServerMap[key] = {
+					transport: n8n.transport,
+					url: ep.url,
+					authToken: n8n.token,
+				};
+			}
+		}
+		const mcpEntries = Object.entries(mcpServerMap);
 		if (mcpEntries.length > 0) {
 			await Promise.allSettled(
 				mcpEntries.map(async ([name, serverConfig]) => {

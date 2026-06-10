@@ -626,6 +626,159 @@ export const ConfigPage: FC<ConfigPageProps> = ({
 				</div>
 
 				<div class="card mt-md">
+					<h3>n8n (workflow MCPs)</h3>
+					<p class="text-muted text-sm" style="margin-bottom: 12px">
+						Connect n8n workflows exposed as MCP servers. One shared Bearer
+						token is sent to every endpoint; each endpoint becomes a skill. Save
+						then <strong>Reconnect</strong> to apply without a restart.
+					</p>
+					<table style="width:100%">
+						<tbody>
+							<tr>
+								<td style="width: 120px">Enabled</td>
+								<td>
+									<select name="n8n.enabled" class="input-md">
+										<option value="true" selected={config.n8n?.enabled}>
+											Enabled
+										</option>
+										<option value="false" selected={!config.n8n?.enabled}>
+											Disabled
+										</option>
+									</select>
+								</td>
+							</tr>
+							<tr>
+								<td>Transport</td>
+								<td>
+									<select name="n8n.transport" class="input-md">
+										<option
+											value="sse"
+											selected={(config.n8n?.transport ?? "sse") === "sse"}
+										>
+											SSE
+										</option>
+										<option
+											value="http"
+											selected={config.n8n?.transport === "http"}
+										>
+											HTTP (streamable)
+										</option>
+									</select>
+								</td>
+							</tr>
+							<tr>
+								<td>Bearer token</td>
+								<td>
+									<input
+										type="password"
+										name="n8n.token"
+										value={config.n8n?.token ?? ""}
+										class="w-full"
+										placeholder="n8n MCP bearer token"
+										autocomplete="off"
+									/>
+								</td>
+							</tr>
+						</tbody>
+					</table>
+					<div style="margin-top:12px">
+						<label style="margin-bottom:8px">Endpoints</label>
+						<div id="n8n-endpoints">
+							{(config.n8n?.endpoints ?? []).map((ep, idx) => (
+								<div
+									key={ep.name || String(idx)}
+									class="n8n-ep flex gap-sm items-center"
+									style="margin-bottom:8px"
+								>
+									<input
+										type="text"
+										class="n8n-ep-name input-md"
+										value={ep.name}
+										placeholder="name (e.g. enrichment-hunter)"
+									/>
+									<input
+										type="text"
+										class="n8n-ep-url w-full"
+										value={ep.url}
+										placeholder="https://n8n.example.com/mcp/…"
+									/>
+									<button
+										type="button"
+										class="btn-remove-ep btn-ghost btn-sm"
+										title="Remove"
+									>
+										&times;
+									</button>
+								</div>
+							))}
+						</div>
+						<div class="flex gap-sm mt-sm">
+							<button
+								type="button"
+								id="add-n8n-ep"
+								class="btn-secondary btn-sm"
+							>
+								+ Add endpoint
+							</button>
+							<button
+								type="button"
+								id="reconnect-n8n"
+								class="btn-ghost btn-sm"
+								onclick="reconnectN8n(this)"
+							>
+								Reconnect n8n
+							</button>
+						</div>
+						{raw(
+							`<input type="hidden" name="n8nEndpoints" id="n8n-endpoints-json">`,
+						)}
+					</div>
+					{raw(`<script>
+(function() {
+	var list = document.getElementById('n8n-endpoints');
+	var addBtn = document.getElementById('add-n8n-ep');
+	function addRow(name, url) {
+		var div = document.createElement('div');
+		div.className = 'n8n-ep flex gap-sm items-center';
+		div.style.marginBottom = '8px';
+		div.innerHTML = '<input type="text" class="n8n-ep-name input-md" placeholder="name (e.g. enrichment-hunter)">'
+			+ '<input type="text" class="n8n-ep-url w-full" placeholder="https://n8n.example.com/mcp/…">'
+			+ '<button type="button" class="btn-remove-ep btn-ghost btn-sm" title="Remove">&times;</button>';
+		div.querySelector('.n8n-ep-name').value = name || '';
+		div.querySelector('.n8n-ep-url').value = url || '';
+		list.appendChild(div);
+	}
+	addBtn.addEventListener('click', function() { addRow('', ''); });
+	list.addEventListener('click', function(e) {
+		if (e.target.classList.contains('btn-remove-ep')) e.target.closest('.n8n-ep').remove();
+	});
+	// Serialize endpoint rows into the hidden field on submit.
+	var form = document.querySelector('form[action="/config"]');
+	if (form) form.addEventListener('submit', function() {
+		var eps = [];
+		list.querySelectorAll('.n8n-ep').forEach(function(row) {
+			var n = row.querySelector('.n8n-ep-name').value.trim();
+			var u = row.querySelector('.n8n-ep-url').value.trim();
+			if (n && u) eps.push({ name: n, url: u });
+		});
+		document.getElementById('n8n-endpoints-json').value = JSON.stringify(eps);
+	});
+	window.reconnectN8n = function(btn) {
+		btn.disabled = true; var orig = btn.textContent; btn.textContent = 'Reconnecting…';
+		fetch('/api/n8n/reconnect', { method: 'POST' })
+			.then(function(r) { return r.json(); })
+			.then(function(d) {
+				if (d.error) { pawModal.alert('Error', d.error); }
+				else { pawModal.alert('n8n', 'Connected ' + (d.connected ? d.connected.length : 0) + ' of ' + (d.total || 0) + ' endpoint(s). Save the form first if you changed values.'); }
+				btn.disabled = false; btn.textContent = orig;
+			})
+			.catch(function(e) { pawModal.alert('Error', String(e)); btn.disabled = false; btn.textContent = orig; });
+	};
+})();
+					</script>`)}
+				</div>
+
+				<div class="card mt-md">
 					<h3>ICP Discovery</h3>
 					<table>
 						<tbody>
@@ -689,9 +842,9 @@ export const ConfigPage: FC<ConfigPageProps> = ({
 				<div class="card mb-md mt-md">
 					<h3>Secrets</h3>
 					<p class="text-sm text-muted mb-md">
-						API keys and tokens are never displayed here. Use <strong>Rotate</strong>{" "}
-						to replace the stored value; changes require a restart to take effect
-						in the running provider.
+						API keys and tokens are never displayed here. Use{" "}
+						<strong>Rotate</strong> to replace the stored value; changes require
+						a restart to take effect in the running provider.
 					</p>
 					<table class="audit-table">
 						<thead>

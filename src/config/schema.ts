@@ -194,8 +194,22 @@ export const configSchema = z.object({
 				env: z.record(z.string()).optional(),
 				url: z.string().optional(),
 				transport: z.enum(["stdio", "sse", "http"]).default("stdio"),
+				// Auth for remote (sse/http) servers.
+				authToken: z.string().optional(), // sent as Authorization: Bearer
+				headers: z.record(z.string()).optional(), // extra request headers
 			}),
 		)
+		.default({}),
+	n8n: z
+		.object({
+			enabled: z.boolean().default(false),
+			// Shared bearer token sent to every n8n MCP endpoint.
+			token: z.string().default(""),
+			transport: z.enum(["sse", "http"]).default("sse"),
+			endpoints: z
+				.array(z.object({ name: z.string(), url: z.string() }))
+				.default([]),
+		})
 		.default({}),
 });
 
