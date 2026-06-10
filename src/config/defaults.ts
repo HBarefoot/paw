@@ -128,4 +128,10 @@ export const defaults: PawConfig = {
 	// could not be deleted from the UI; see src/config/loader.ts deepMerge.)
 	agents: {},
 	mcpServers: {},
+	n8n: {
+		enabled: false,
+		token: "",
+		transport: "sse",
+		endpoints: [],
+	},
 };

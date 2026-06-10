@@ -426,6 +426,17 @@ export function getChatScript(): string {
       var orig = t.textContent;
       t.textContent = "Copied!";
       setTimeout(function() { t.textContent = orig; }, 1200);
+    } else if (t && t.classList && t.classList.contains("code-expand")) {
+      var cblock = t.closest(".code-block");
+      if (!cblock) return;
+      var collapsed = cblock.classList.toggle("collapsed");
+      if (collapsed) {
+        var codeEl = cblock.querySelector("pre code");
+        var n = codeEl ? (codeEl.textContent || "").split("\\n").length : 0;
+        t.textContent = "Show all " + n + " lines";
+      } else {
+        t.textContent = "Show less";
+      }
     }
   });
 
@@ -1097,24 +1108,44 @@ export function getChatScript(): string {
   function renderMarkdown(src) {
     var text = src.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");
 
-    // Extract fenced code blocks first to protect them
     var codeBlocks = [];
-    text = text.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, function(m, code) {
+    function makeCodeBlock(code, streaming) {
       var lines = code.split("\\n");
       var lang = lines[0].trim();
       var body = lang ? lines.slice(1).join("\\n") : code;
       if (lang && body.charAt(0) === "\\n") body = body.substring(1);
       if (!lang && body.charAt(0) === "\\n") body = body.substring(1);
-      var bodyTrimmed = body.replace(/\\n$/, "");
+      var bodyTrimmed = streaming ? body : body.replace(/\\n$/, "");
       var langLabel = lang ? '<span class="code-lang">' + esc(lang) + '</span>' : '';
+      // Collapse large blocks by default (usually full files written to the
+      // canvas). An in-progress (streaming, unclosed) fence is ALWAYS collapsed
+      // so a long generation never takes over the chat.
+      var lineCount = bodyTrimmed.split("\\n").length;
+      var isLarge = streaming || lineCount > 16 || bodyTrimmed.length > 1200;
+      var headerLeft = langLabel;
+      if (streaming) {
+        headerLeft += '<span class="code-streaming">writing… ' + lineCount + ' lines</span>';
+      } else if (isLarge) {
+        headerLeft += '<button class="code-expand" type="button">Show all ' + lineCount + ' lines</button>';
+      }
       var copyBtn = '<button class="code-copy" type="button" title="Copy code" aria-label="Copy code">Copy</button>';
       codeBlocks.push(
-        '<div class="code-block">'
-        + '<div class="code-header">' + langLabel + copyBtn + '</div>'
+        '<div class="code-block' + (isLarge ? ' collapsed' : '') + (streaming ? ' streaming' : '') + '">'
+        + '<div class="code-header">' + headerLeft + copyBtn + '</div>'
         + '<pre><code' + (lang ? ' class="language-' + esc(lang) + '"' : '') + '>' + esc(bodyTrimmed) + '</code></pre>'
         + '</div>'
       );
       return "%%CODEBLOCK_" + (codeBlocks.length - 1) + "%%";
+    }
+
+    // Extract closed fenced code blocks first to protect them.
+    text = text.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, function(m, code) {
+      return makeCodeBlock(code, false);
+    });
+    // A remaining (leftmost) fence is still streaming (no closing marker yet) —
+    // render everything from it to end-of-text as an in-progress collapsed block.
+    text = text.replace(/\`\`\`([\\s\\S]*)$/, function(m, code) {
+      return makeCodeBlock(code, true);
     });
 
     var lines = text.split("\\n");

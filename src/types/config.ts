@@ -157,6 +157,14 @@ export interface PawConfig {
 			env?: Record<string, string>;
 			url?: string;
 			transport?: "stdio" | "sse" | "http";
+			authToken?: string;
+			headers?: Record<string, string>;
 		}
 	>;
+	n8n: {
+		enabled: boolean;
+		token: string;
+		transport: "sse" | "http";
+		endpoints: Array<{ name: string; url: string }>;
+	};
 }

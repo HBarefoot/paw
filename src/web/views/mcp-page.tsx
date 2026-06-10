@@ -40,6 +40,30 @@ function mcpScript(): string {
       var el = document.getElementById('advanced-fields');
       el.style.display = el.style.display === 'none' ? 'flex' : 'none';
     }
+
+    async function importMcpJson(btn) {
+      var ta = document.getElementById('mcp-json');
+      var text = (ta.value || '').trim();
+      if (!text) { pawModal.alert("Nothing to import", "Paste an MCP config first."); return; }
+      btn.disabled = true; var orig = btn.textContent; btn.textContent = 'Importing…';
+      try {
+        var res = await fetch('/api/mcp/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ json: text })
+        });
+        var data = await res.json();
+        if (!res.ok) { pawModal.alert("Import failed", data.error || 'Invalid MCP config.'); btn.disabled = false; btn.textContent = orig; return; }
+        var msg = 'Imported ' + data.imported.length + ' server(s)';
+        if (data.connected && data.connected.length < data.imported.length) {
+          msg += ' — connected ' + data.connected.length + '. The rest saved but failed to connect (check URL/auth).';
+        }
+        await pawModal.alert("Imported", msg);
+        window.location.reload();
+      } catch (e) {
+        pawModal.alert("Import failed", String(e)); btn.disabled = false; btn.textContent = orig;
+      }
+    }
   `;
 }
 
@@ -207,9 +231,39 @@ export const MCPPage: FC<MCPPageProps> = ({ servers, error, success }) => {
 						>
 							<div>
 								<label>
+									Auth token{" "}
+									<span class="text-muted text-xs">
+										(Bearer — for remote SSE/HTTP servers)
+									</span>
+								</label>
+								<input
+									type="password"
+									name="authToken"
+									placeholder="sent as Authorization: Bearer …"
+									class="w-full"
+									autocomplete="off"
+								/>
+							</div>
+							<div>
+								<label>
+									Custom headers{" "}
+									<span class="text-muted text-xs">
+										(Key: Value, one per line)
+									</span>
+								</label>
+								<textarea
+									name="headers"
+									rows={2}
+									placeholder="X-Api-Key: abc123&#10;X-Workspace: default"
+									class="w-full"
+									style="resize: vertical"
+								/>
+							</div>
+							<div>
+								<label>
 									Environment Variables{" "}
 									<span class="text-muted text-xs">
-										(KEY=VALUE, one per line)
+										(KEY=VALUE, one per line — for stdio)
 									</span>
 								</label>
 								<textarea
@@ -226,6 +280,29 @@ export const MCPPage: FC<MCPPageProps> = ({ servers, error, success }) => {
 						Add Server
 					</button>
 				</form>
+			</div>
+
+			<div class="card">
+				<div class="flex justify-between items-center mb-md">
+					<h3 style="margin:0">Import from JSON</h3>
+					<span class="badge badge-neutral">standard mcpServers</span>
+				</div>
+				<p class="text-secondary text-sm mb-md" style="max-width:560px">
+					Paste a standard MCP config — copy the <code>mcpServers</code> block
+					straight from any server's docs (Claude Desktop / Cursor / VS Code
+					format). Supports <code>headers</code> and <code>authToken</code> per
+					server.
+				</p>
+				{raw(
+					`<textarea id="mcp-json" rows="8" class="w-full" style="resize:vertical;font-family:var(--font-mono);font-size:12px" placeholder='{\n  "mcpServers": {\n    "github": {\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-github"],\n      "env": { "GITHUB_TOKEN": "ghp_..." }\n    },\n    "my-remote": {\n      "transport": "http",\n      "url": "https://example.com/mcp",\n      "authToken": "secret-token"\n    }\n  }\n}'></textarea>`,
+				)}
+				<button
+					type="button"
+					class="btn-primary self-start mt-sm"
+					onclick="importMcpJson(this)"
+				>
+					Import &amp; connect
+				</button>
 			</div>
 
 			{raw(`<script>${mcpScript()}</script>`)}
