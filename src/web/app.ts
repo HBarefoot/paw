@@ -2409,12 +2409,12 @@ export function createWebApp(
           .spark { position:absolute; inset:-8px; border-radius:inherit; pointer-events:none; opacity:0;
             box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); }
           .face.working .spark { opacity:1; animation: spark 1.4s ease-out infinite; }
-          /* feed (revealed in busy mode) */
-          .feed { display:none; flex-direction:column; gap:5px; width: 300px; max-width: 86vw; }
-          body.busy .feed { display:flex; animation: popin .4s ease both; }
-          body.busy .badges { display:none; }
-          body.busy .stage { transform: scale(.86) translateY(-6px); }
-          body.busy .placeholder p { display:none; }
+          /* live activity feed — shown whenever it has rows; dims when idle. */
+          .feed { display:none; flex-direction:column; gap:5px; width: 300px; max-width: 86vw; transition: opacity .6s ease; }
+          .feed:not(:empty) { display:flex; }
+          .feed.idle { opacity:.42; }
+          body.busy .stage { transform: scale(.9) translateY(-4px); }
+          .placeholder:has(.feed:not(:empty)) > p { display:none; }
           .feed-row { display:flex; align-items:center; gap:8px; padding:7px 11px; border-radius:10px; text-align:left;
             font-size:12px; color: var(--title); background: color-mix(in srgb, var(--bg) 66%, var(--accent) 7%);
             border:1px solid color-mix(in srgb, var(--accent) 16%, transparent); animation: feedin .35s ease both; }
@@ -2470,26 +2470,54 @@ export function createWebApp(
             function step(ts){ if(!t0)t0=ts; var p=Math.min(1,(ts-t0)/dur); el.textContent=Math.round(p*target).toLocaleString(); if(p<1)requestAnimationFrame(step); }
             requestAnimationFrame(step);
           });
-          // ===== live agent activity (parent relays tool_start/tool_end via postMessage) =====
+          // ===== live agent activity (parent relays tool/thinking events via postMessage) =====
+          // start/end drive pills + feed; "work" (thinking/roundtrip) is a keep-alive
+          // heartbeat so the face stays working between tools. The face stays in
+          // "working" mode for the whole turn and only winds down ~3s after the last
+          // event; pills hold a readable minimum; the feed persists then dims.
           var feed=document.getElementById("feed");
+          var MIN_HOLD=900, CALM_MS=3000, GLOW_MS=2500, FEED_CLEAR_MS=25000;
+          var activeAt={}, clearTimer=null;
           function nodesFor(key){ if(!key) return []; return document.querySelectorAll('.node[data-key="'+String(key).replace(/["\\\\]/g,"")+'"]'); }
           function lookToward(deg){ if(!pupils.length||deg==null) return; var a=deg*Math.PI/180; setPupils(Math.cos(a)*4.5, Math.sin(a)*4.5); }
-          function trimFeed(){ while(feed && feed.children.length>4) feed.removeChild(feed.firstChild); }
-          function calmCheck(){ if(idleTimer) clearTimeout(idleTimer); idleTimer=setTimeout(function(){ if(activeCount>0) return; busy=false; document.body.classList.remove("busy"); if(face) face.classList.remove("working"); if(feed) feed.innerHTML=""; setPupils(0,0); }, 1300); }
+          function trimFeed(){ while(feed && feed.children.length>5) feed.removeChild(feed.firstChild); }
+          function keepAlive(){
+            if(idleTimer){ clearTimeout(idleTimer); idleTimer=null; }
+            if(clearTimer){ clearTimeout(clearTimer); clearTimer=null; }
+            busy=true; document.body.classList.add("busy"); if(feed) feed.classList.remove("idle");
+            if(face) face.classList.add("working");
+          }
+          function calmCheck(){
+            if(idleTimer) clearTimeout(idleTimer);
+            idleTimer=setTimeout(function(){
+              if(activeCount>0) return;
+              busy=false; document.body.classList.remove("busy"); if(face) face.classList.remove("working"); setPupils(0,0);
+              // keep the feed visible but dimmed so the run can be read, then clear after a long idle
+              if(feed && feed.children.length){ feed.classList.add("idle"); clearTimer=setTimeout(function(){ if(!busy && feed) feed.innerHTML=""; }, FEED_CLEAR_MS); }
+            }, CALM_MS);
+          }
           window.addEventListener("message", function(e){
             var m=e.data; if(!m || m.type!=="paw:tool") return;
+            var wasIdle = feed && feed.classList.contains("idle");
+            keepAlive();
+            if(m.phase==="work") return; // heartbeat only
             var key=m.skillKey, label=String(m.summary||m.toolName||"working");
             if(m.phase==="start"){
-              if(idleTimer){ clearTimeout(idleTimer); idleTimer=null; }
-              busy=true; activeCount++; document.body.classList.add("busy"); if(face) face.classList.add("working");
+              // a fresh burst after the feed had dimmed → clear the stale rows
+              if(wasIdle && feed){ feed.innerHTML=""; }
+              activeCount++;
               var ns=nodesFor(key), ang=null;
-              for(var i=0;i<ns.length;i++){ ns[i].classList.add("active"); ns[i].classList.remove("done","errored"); if(ang===null) ang=parseFloat(ns[i].getAttribute("data-angle")); }
+              for(var i=0;i<ns.length;i++){ ns[i].classList.add("active"); ns[i].classList.remove("done","errored"); activeAt[ns[i].getAttribute("data-key")]=Date.now(); if(ang===null) ang=parseFloat(ns[i].getAttribute("data-angle")); }
               lookToward(ang);
               if(feed){ var row=document.createElement("div"); row.className="feed-row run"; row.setAttribute("data-tid", String(m.toolId||"")); row.innerHTML='<span class="fdot"></span><span class="ftxt"></span>'; row.querySelector(".ftxt").textContent=label; feed.appendChild(row); trimFeed(); }
             } else if(m.phase==="end"){
               activeCount=Math.max(0, activeCount-1);
               var ns2=nodesFor(key);
-              for(var j=0;j<ns2.length;j++){ (function(n){ n.classList.remove("active"); n.classList.add(m.isError?"errored":"done"); setTimeout(function(){ n.classList.remove("done","errored"); },1600); })(ns2[j]); }
+              for(var j=0;j<ns2.length;j++){ (function(n){
+                var since=Date.now()-(activeAt[n.getAttribute("data-key")]||0);
+                var hold=Math.max(0, MIN_HOLD-since); // keep the pulse visible a readable minimum
+                setTimeout(function(){ n.classList.remove("active"); n.classList.add(m.isError?"errored":"done"); setTimeout(function(){ n.classList.remove("done","errored"); }, GLOW_MS); }, hold);
+              })(ns2[j]); }
               if(feed){ var r2=feed.querySelector('.feed-row[data-tid="'+String(m.toolId||"").replace(/["\\\\]/g,"")+'"]'); if(r2){ r2.classList.remove("run"); if(m.isError) r2.classList.add("err"); } }
               calmCheck();
             }

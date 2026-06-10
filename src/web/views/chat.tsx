@@ -542,7 +542,7 @@ export function getChatScript(): string {
 
     // Relay tool activity to the canvas portrait (index.html) so the face
     // reacts in real time as the agent works.
-    if (chunk.type === "tool_start" || chunk.type === "tool_end") notifyPortrait(chunk);
+    if (chunk.type === "tool_start" || chunk.type === "tool_end" || chunk.type === "thinking" || chunk.type === "roundtrip_start") notifyPortrait(chunk);
 
     if (chunk.type === "thinking") {
       // Skip sub-agent thinking — parent spawn_agent step already shows it's running
@@ -1382,9 +1382,13 @@ export function getChatScript(): string {
       for (var i = 0; i < canvasTabs.length; i++) {
         var t = canvasTabs[i];
         if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        // tool_start/end drive pills + feed; thinking/roundtrip_start are
+        // keep-alive "work" heartbeats so the face stays working between tools.
+        var phase = chunk.type === "tool_start" ? "start"
+          : chunk.type === "tool_end" ? "end" : "work";
         t.iframeEl.contentWindow.postMessage({
           type: "paw:tool",
-          phase: chunk.type === "tool_start" ? "start" : "end",
+          phase: phase,
           toolName: chunk.toolName,
           summary: chunk.toolSummary,
           skillKey: chunk.skillKey,
