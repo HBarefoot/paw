@@ -37,6 +37,7 @@ import { CronScheduler } from "../cron/scheduler.js";
 import { HeartbeatChecker } from "../heartbeat/checker.js";
 import { AccessController } from "../security/access-control.js";
 import { RateLimiter } from "../security/rate-limiter.js";
+import { VaultManager } from "../security/vault.js";
 import { createWebApp } from "../web/app.js";
 import { startWebServer } from "../web/server.js";
 import { MCPClientManager } from "../mcp/client-manager.js";
@@ -72,6 +73,7 @@ export class Kernel {
 	private plugins: ChannelPlugin[] = [];
 	private config: PawConfig;
 	private db: Database;
+	private vaultManager!: VaultManager;
 	private memoryStore: MemoryStore | null = null;
 	private feedbackStore: FeedbackStore | null = null;
 	private cronScheduler: CronScheduler | null = null;
@@ -154,6 +156,21 @@ export class Kernel {
 		} catch {
 			this.logger.info("Database ready", { path: resolvedDbPath });
 		}
+
+		// Credential vault: decrypt web-managed secrets and overlay them onto the
+		// live config BEFORE any subsystem (providers, plugins, MCP, Strapi,
+		// HubSpot) reads its credentials. Vault values win over env/credentials
+		// (resolution order: vault → env → defaults). Disabled-but-safe when
+		// PAW_VAULT_KEY is unset — the app falls back to env/credentials.
+		this.vaultManager = new VaultManager(this.db);
+		this.vaultManager.overlayConfig(
+			this.config as unknown as Record<string, unknown>,
+		);
+		this.logger.info(
+			this.vaultManager.enabled
+				? `Vault: enabled (${this.vaultManager.count()} encrypted secret(s))`
+				: "Vault: disabled (PAW_VAULT_KEY unset — using env/credentials fallback)",
+		);
 
 		// H-NEW-4: register a built-in "kernel" manifest so the sandbox
 		// can enforce permissions on built-in tools. Previously the
@@ -1985,6 +2002,11 @@ export class Kernel {
 
 	get database(): Database {
 		return this.db;
+	}
+
+	/** Credential vault — web-managed encrypted secrets (server-side only). */
+	get vault(): VaultManager {
+		return this.vaultManager;
 	}
 
 	get aiProvider(): AIProvider {

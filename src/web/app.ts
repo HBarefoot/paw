@@ -49,6 +49,8 @@ import { createSecurityHeaders } from "./middleware/security-headers.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
 import { BrandPage } from "./views/brand-page.js";
 import { ConfigPage } from "./views/config-page.js";
+import { VaultPage, type VaultSlotStatus } from "./views/vault-page.js";
+import { KNOWN_SECRET_SLOTS, type VaultScope } from "../security/vault.js";
 // canvas-page.tsx removed — canvas is now merged into chat
 import { CronPage } from "./views/cron-page.js";
 import { DashboardPage } from "./views/dashboard.js";
@@ -894,6 +896,136 @@ export function createWebApp(
 		);
 
 		return c.json({ rotated: true, service, restartRequired: true });
+	});
+
+	// ===== Credential vault (encrypted, web-managed secrets) =====
+	// All routes are auth-guarded (registered after the auth middleware).
+	// Secret VALUES are never returned by any of these — list is metadata only,
+	// and there is no read endpoint (the model/canvas must never see secrets).
+	function buildVaultSlots(): VaultSlotStatus[] {
+		return KNOWN_SECRET_SLOTS.map((s) => ({
+			name: s.name,
+			scope: s.scope,
+			label: s.label,
+			inVault: kernel.vault.enabled && kernel.vault.has(s.name),
+		}));
+	}
+
+	app.get("/vault", (c) => {
+		return c.html(
+			VaultPage({
+				enabled: kernel.vault.enabled,
+				secrets: kernel.vault.enabled ? kernel.vault.list() : [],
+				slots: buildVaultSlots(),
+			}),
+		);
+	});
+
+	app.get("/api/vault", (c) => {
+		return c.json({
+			enabled: kernel.vault.enabled,
+			secrets: kernel.vault.enabled ? kernel.vault.list() : [],
+		});
+	});
+
+	app.post("/api/vault", async (c) => {
+		if (!kernel.vault.enabled)
+			return c.json({ error: "Vault is disabled (PAW_VAULT_KEY unset)" }, 400);
+		const body = await c.req
+			.json<{ name?: string; value?: string; scope?: string }>()
+			.catch(() => ({}) as { name?: string; value?: string; scope?: string });
+		const name = (body.name ?? "").trim();
+		const value = body.value ?? "";
+		const scope = (body.scope ?? "custom") as VaultScope;
+		if (!name) return c.json({ error: "name is required" }, 400);
+		if (!value) return c.json({ error: "value is required" }, 400);
+
+		const session = c.get("session") as { user_id: number } | undefined;
+		const ip = getClientIp(c);
+		try {
+			kernel.vault.set(name, value, scope, String(session?.user_id ?? "web"));
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 400);
+		}
+		authManager.audit.log(
+			"vault.set",
+			session?.user_id ?? null,
+			{ name, scope },
+			ip,
+		);
+		return c.json({ saved: true, name, restartRequired: true });
+	});
+
+	app.delete("/api/vault/:name", (c) => {
+		if (!kernel.vault.enabled)
+			return c.json({ error: "Vault is disabled (PAW_VAULT_KEY unset)" }, 400);
+		const name = c.req.param("name");
+		kernel.vault.delete(name);
+		const session = c.get("session") as { user_id: number } | undefined;
+		authManager.audit.log(
+			"vault.delete",
+			session?.user_id ?? null,
+			{ name },
+			getClientIp(c),
+		);
+		return c.json({ deleted: true, name });
+	});
+
+	// One-time migration: copy current effective secrets (env + credentials.json
+	// + config tokens) into the encrypted vault so the operator can drop the
+	// PAW_* env vars. Existing same-named entries are overwritten.
+	app.post("/api/vault/import", (c) => {
+		if (!kernel.vault.enabled)
+			return c.json({ error: "Vault is disabled (PAW_VAULT_KEY unset)" }, 400);
+		const cfg = liveConfig();
+		const candidates: {
+			name: string;
+			value: string | undefined;
+			scope: VaultScope;
+		}[] = [
+			{ name: "ai.apiKey", value: cfg.ai.apiKey, scope: "ai" },
+			{ name: "openai.apiKey", value: cfg.openai.apiKey, scope: "ai" },
+			{ name: "gemini.apiKey", value: cfg.gemini.apiKey, scope: "ai" },
+			{ name: "ollama.apiKey", value: cfg.ollama.apiKey, scope: "ai" },
+			{ name: "slack.botToken", value: cfg.slack.botToken, scope: "slack" },
+			{ name: "slack.appToken", value: cfg.slack.appToken, scope: "slack" },
+			{
+				name: "slack.signingSecret",
+				value: cfg.slack.signingSecret,
+				scope: "slack",
+			},
+			{ name: "strapi.token", value: cfg.strapi.token, scope: "strapi" },
+			{ name: "hubspot.token", value: cfg.hubspot?.token, scope: "hubspot" },
+			{ name: "n8n.token", value: cfg.n8n?.token, scope: "n8n" },
+		];
+		for (const [serverName, sc] of Object.entries(cfg.mcpServers ?? {})) {
+			if (sc?.authToken)
+				candidates.push({
+					name: `mcp.${serverName}.authToken`,
+					value: sc.authToken,
+					scope: "mcp",
+				});
+		}
+		const session = c.get("session") as { user_id: number } | undefined;
+		let imported = 0;
+		for (const cand of candidates) {
+			const v = (cand.value ?? "").trim();
+			if (!v) continue;
+			kernel.vault.set(
+				cand.name,
+				v,
+				cand.scope,
+				String(session?.user_id ?? "web"),
+			);
+			imported++;
+		}
+		authManager.audit.log(
+			"vault.import",
+			session?.user_id ?? null,
+			{ imported },
+			getClientIp(c),
+		);
+		return c.json({ imported, restartRequired: true });
 	});
 
 	app.get("/api/stats", (c) => {
