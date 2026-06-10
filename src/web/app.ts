@@ -2231,16 +2231,109 @@ export function createWebApp(
 					? `:root { --accent:${acc}; --accent-bright:${pal.primary ?? acc}; --accent-press:${acc}; --soft:color-mix(in srgb, ${acc} 14%, transparent); --bg:${pal.bg ?? pal.surface ?? "#08090b"}; --fg:${pal.muted ?? "#6b7079"}; --title:${pal.text ?? "#f4f5f7"}; --ink:${ink}; }`
 					: `:root { --accent:#6a4bf0; --accent-bright:#7c5cff; --accent-press:#4f2fdf; --soft:rgba(106,75,240,.10); --bg:#f7f7f9; --fg:#82858e; --title:#14151a; --ink:#ffffff; }
           @media (prefers-color-scheme: dark) { :root { --accent:#7458f5; --accent-bright:#a78bfa; --accent-press:#6446e8; --soft:rgba(116,88,245,.15); --bg:#08090b; --fg:#6b7079; --title:#f4f5f7; } }`;
+				// ===== living portrait: capabilities constellation around the face =====
+				const esc = (s: string) =>
+					s.replace(
+						/[&<>"]/g,
+						(ch) =>
+							({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch] ??
+							ch,
+					);
+				const prettify = (s: string) =>
+					s.replace(/[-_]+/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+				let portraitSkills: string[] = [];
+				let portraitServices: string[] = [];
+				let toolCount = 0;
+				let jobsCompleted = 0;
+				try {
+					portraitSkills = kernel.skills.skillNames ?? [];
+					const mcp = kernel.mcpManager
+						.getServerInfo()
+						.filter((s) => s.connected)
+						.map((s) => s.name);
+					portraitServices = Array.from(
+						new Set([...mcp, ...(kernel.strapi ? ["Strapi"] : [])]),
+					);
+					toolCount = kernel.toolRegistryPublic.size;
+					jobsCompleted =
+						kernel.database
+							.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tool_log")
+							.get()?.n ?? 0;
+				} catch {
+					/* fresh DB / not-ready subsystems → render what we have */
+				}
+				const income: number | null = null; // not tracked yet → "soon"
+				type PNode = { label: string; kind: "skill" | "service" | "more" };
+				// Services first, then skills; de-dupe by label so a capability that is
+				// both (e.g. Strapi skill + Strapi service) only appears once.
+				let nodes: PNode[] = [];
+				const seenNodes = new Set<string>();
+				for (const s of portraitServices) {
+					const label = prettify(s);
+					if (seenNodes.has(label.toLowerCase())) continue;
+					seenNodes.add(label.toLowerCase());
+					nodes.push({ label, kind: "service" });
+				}
+				for (const s of portraitSkills) {
+					const label = prettify(s);
+					if (seenNodes.has(label.toLowerCase())) continue;
+					seenNodes.add(label.toLowerCase());
+					nodes.push({ label, kind: "skill" });
+				}
+				const MAX_NODES = 12;
+				if (nodes.length > MAX_NODES) {
+					const extra = nodes.length - (MAX_NODES - 1);
+					nodes = nodes.slice(0, MAX_NODES - 1);
+					nodes.push({ label: `+${extra}`, kind: "more" });
+				}
+				const RING = 134;
+				const STAGE = 340;
+				const CENTER = STAGE / 2;
+				const nodesHtml = nodes
+					.map((node, i) => {
+						const ang = ((-90 + (360 / nodes.length) * i) * Math.PI) / 180;
+						const x = (CENTER + RING * Math.cos(ang)).toFixed(1);
+						const y = (CENTER + RING * Math.sin(ang)).toFixed(1);
+						const d = (0.12 * i).toFixed(2);
+						return `<div class="node" style="left:${x}px;top:${y}px"><div class="chip ${node.kind}" style="animation-delay:${d}s,${d}s"><span class="ndot"></span><span class="lbl">${esc(node.label)}</span></div></div>`;
+					})
+					.join("");
+				const badge = (label: string, value: number | null) =>
+					value === null
+						? `<div class="badge muted"><span class="bnum">—</span><span class="blbl">${label} · soon</span></div>`
+						: `<div class="badge"><span class="bnum" data-count="${value}">0</span><span class="blbl">${label}</span></div>`;
+				const badgesHtml =
+					badge("Tools", toolCount) +
+					badge("Operations", jobsCompleted) +
+					badge("Income", income);
+
 				return c.html(`<!DOCTYPE html><html><head><meta charset="UTF-8">
         <style>
           ${rootVars}
           * { box-sizing: border-box; }
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; display: flex; align-items: center; justify-content: center;
-                 height: 100vh; margin: 0; color: var(--fg); background: radial-gradient(70% 55% at 50% 38%, var(--soft), transparent 70%), var(--bg);
+                 min-height: 100vh; margin: 0; color: var(--fg); background: radial-gradient(70% 55% at 50% 38%, var(--soft), transparent 70%), var(--bg);
                  -webkit-font-smoothing: antialiased; overflow: hidden; }
-          .placeholder { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 24px; }
+          .placeholder { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 24px; }
+          /* ===== capabilities constellation ===== */
+          .stage { position: relative; width: ${STAGE}px; height: ${STAGE}px; display: grid; place-items: center; }
+          .orbit { position: absolute; inset: 0; pointer-events: none; }
+          .node { position: absolute; transform: translate(-50%, -50%); }
+          .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px 5px 8px; border-radius: 999px;
+            font-size: 11px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; max-width: 124px;
+            color: var(--title); background: color-mix(in srgb, var(--bg) 72%, var(--accent) 8%);
+            border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+            box-shadow: 0 6px 18px -10px rgba(0,0,0,.6);
+            animation: popin .55s cubic-bezier(.34,1.56,.64,1) both, bob 5.5s ease-in-out infinite; }
+          .chip .lbl { overflow: hidden; text-overflow: ellipsis; }
+          .chip .ndot { width: 7px; height: 7px; border-radius: 50%; flex: none;
+            background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+          .chip.service { background: color-mix(in srgb, var(--bg) 60%, var(--accent) 14%); }
+          .chip.service .ndot { background: var(--title); box-shadow: 0 0 0 3px color-mix(in srgb, var(--title) 16%, transparent); }
+          .chip.more { color: var(--fg); }
+          .chip.more .ndot { display:none; }
           /* ===== friendly orb face ===== */
-          .face-wrap { animation: greet .8s cubic-bezier(.34,1.56,.64,1) both; }
+          .face-wrap { animation: greet .8s cubic-bezier(.34,1.56,.64,1) both; position: relative; z-index: 2; }
           .face {
             width: 132px; height: 132px; border-radius: 48%;
             display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
@@ -2266,30 +2359,57 @@ export function createWebApp(
           .face:hover .cheek, .face.happy .cheek { opacity:1; }
           .placeholder .title { font-size: 18px; font-weight: 600; letter-spacing: -.02em; color: var(--title); }
           .placeholder p { font-size: 13px; max-width: 260px; margin: 0; }
+          /* ===== count badges ===== */
+          .badges { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+          .badge { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 78px;
+            padding: 8px 14px; border-radius: 12px; background: color-mix(in srgb, var(--bg) 70%, var(--accent) 6%);
+            border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); }
+          .badge .bnum { font-size: 20px; font-weight: 700; letter-spacing: -.03em; color: var(--accent); }
+          .badge .blbl { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg); }
+          .badge.muted .bnum { color: var(--fg); }
           @keyframes greet { 0%{transform:scale(.5) translateY(26px); opacity:0;} 100%{transform:scale(1) translateY(0); opacity:1;} }
           @keyframes float { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-7px);} }
           @keyframes bounce { 0%{transform:translateY(0) scale(1);} 30%{transform:translateY(-15px) scale(1.06);} 60%{transform:translateY(2px) scale(.97);} 100%{transform:translateY(0) scale(1);} }
-          @media (prefers-reduced-motion: reduce) { .face, .face-wrap { animation: none !important; } .pupil, .mouth, .eye { transition: none !important; } }
+          @keyframes popin { 0%{transform:scale(.2); opacity:0;} 100%{transform:scale(1); opacity:1;} }
+          @keyframes bob { 0%,100%{margin-top:0;} 50%{margin-top:-6px;} }
+          @media (prefers-reduced-motion: reduce) {
+            .face, .face-wrap, .chip { animation: none !important; }
+            .pupil, .mouth, .eye { transition: none !important; }
+          }
+          @media (max-width: 460px) { .stage { transform: scale(.8); } }
         </style></head><body><div class="placeholder">
+        <div class="stage">${nodesHtml ? `<div class="orbit">${nodesHtml}</div>` : ""}
         <div class="face-wrap"><div class="face" id="face" title="Hi!">
           <span class="cheek l"></span><span class="cheek r"></span>
           <div class="eyes"><div class="eye"><div class="pupil"></div></div><div class="eye"><div class="pupil"></div></div></div>
           <div class="mouth"></div>
-        </div></div>
+        </div></div></div>
         <div class="title">Hi — I'm ${brandName}</div>
-        <p>Ask me to build something and it'll show up right here.</p></div>
+        <p>Ask me to build something and it'll show up right here.</p>
+        <div class="badges">${badgesHtml}</div></div>
         <script>(function(){
-          var face=document.getElementById("face"); if(!face) return;
-          var pupils=face.querySelectorAll(".pupil");
-          document.addEventListener("mousemove",function(e){
-            var r=face.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2;
-            var dx=e.clientX-cx, dy=e.clientY-cy, a=Math.atan2(dy,dx), d=Math.min(4.5, Math.hypot(dx,dy)/36);
-            var x=Math.cos(a)*d, y=Math.sin(a)*d;
-            pupils.forEach(function(p){ p.style.transform="translate("+x+"px,"+y+"px)"; });
+          var face=document.getElementById("face");
+          if(face){
+            var pupils=face.querySelectorAll(".pupil");
+            document.addEventListener("mousemove",function(e){
+              var r=face.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2;
+              var dx=e.clientX-cx, dy=e.clientY-cy, a=Math.atan2(dy,dx), d=Math.min(4.5, Math.hypot(dx,dy)/36);
+              var x=Math.cos(a)*d, y=Math.sin(a)*d;
+              pupils.forEach(function(p){ p.style.transform="translate("+x+"px,"+y+"px)"; });
+            });
+            function blink(){ face.classList.add("blink"); setTimeout(function(){ face.classList.remove("blink"); },150); }
+            (function loop(){ setTimeout(function(){ blink(); loop(); }, 2600+Math.random()*2800); })();
+            face.addEventListener("click",function(){ face.classList.add("happy"); blink(); setTimeout(function(){ face.classList.remove("happy"); },650); });
+          }
+          // count-up the stat badges
+          document.querySelectorAll(".bnum[data-count]").forEach(function(el){
+            var target=parseInt(el.getAttribute("data-count"),10)||0, t0=null, dur=900;
+            function step(ts){ if(!t0)t0=ts; var p=Math.min(1,(ts-t0)/dur); el.textContent=Math.round(p*target).toLocaleString(); if(p<1)requestAnimationFrame(step); }
+            requestAnimationFrame(step);
           });
-          function blink(){ face.classList.add("blink"); setTimeout(function(){ face.classList.remove("blink"); },150); }
-          (function loop(){ setTimeout(function(){ blink(); loop(); }, 2600+Math.random()*2800); })();
-          face.addEventListener("click",function(){ face.classList.add("happy"); blink(); setTimeout(function(){ face.classList.remove("happy"); },650); });
+          // live-ish: re-render the portrait so new skills/services appear. A plain
+          // same-URL reload (not about:blank) is sandbox-safe; guarded + only when visible.
+          setTimeout(function(){ try{ if(document.visibilityState!=="hidden") location.reload(); }catch(e){} }, 45000);
         })();</script>
         </body></html>`);
 			}
