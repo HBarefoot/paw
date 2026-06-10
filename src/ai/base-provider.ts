@@ -35,6 +35,9 @@ export interface StreamChunk {
 	toolSummary?: string;
 	toolResult?: string;
 	toolIsError?: boolean;
+	/** Skill/group key the tool belongs to (e.g. "web-pilot", "mcp:n8n"), set
+	 * server-side so the canvas portrait can light up the matching pill. */
+	skillKey?: string;
 	durationMs?: number;
 	roundtrip?: number;
 	error?: string;

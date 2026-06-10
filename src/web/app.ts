@@ -1201,6 +1201,20 @@ export function createWebApp(
 		if (pruneCount > 0) buf.splice(0, pruneCount);
 	}
 
+	// Tag tool chunks with the skill/group they belong to, so the canvas
+	// portrait can light up the matching pill as the agent works. Mutates +
+	// returns the chunk (no-op for non-tool chunks).
+	function enrichChunk(chunk: StreamChunk): StreamChunk {
+		if (
+			(chunk.type === "tool_start" || chunk.type === "tool_end") &&
+			chunk.toolName &&
+			!chunk.skillKey
+		) {
+			chunk.skillKey = kernel.skills.skillNameForTool(chunk.toolName);
+		}
+		return chunk;
+	}
+
 	// Share tokens (in-memory, expire after 24 hours)
 	const canvasShareTokens = new Map<
 		string,
@@ -1583,7 +1597,7 @@ export function createWebApp(
 		(async () => {
 			try {
 				for await (const chunk of streamCanvasWithFallback(msg, targetFile)) {
-					pushCanvasEvent(sessionId, "chunk", chunk);
+					pushCanvasEvent(sessionId, "chunk", enrichChunk(chunk));
 				}
 			} catch (err) {
 				pushCanvasEvent(sessionId, "error", {
@@ -1644,7 +1658,7 @@ export function createWebApp(
 				try {
 					for await (const chunk of streamCanvasWithFallback(msg, targetFile)) {
 						await stream.writeSSE({
-							data: JSON.stringify(chunk),
+							data: JSON.stringify(enrichChunk(chunk)),
 						});
 					}
 				} catch (err) {
@@ -2241,61 +2255,76 @@ export function createWebApp(
 					);
 				const prettify = (s: string) =>
 					s.replace(/[-_]+/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
-				let portraitSkills: string[] = [];
-				let portraitServices: string[] = [];
+				type PNode = {
+					label: string;
+					key: string;
+					kind: "skill" | "service" | "more";
+				};
+				// Each node carries a stable `key` that matches the live tool→skill
+				// key (deriveSkillName), so the parent can light up the right pill in
+				// real time. Skills key on their raw name; MCP services on
+				// `mcp:<server>` (so the service + its skill collapse to one node).
+				const rawNodes: PNode[] = [];
+				try {
+					for (const s of kernel.mcpManager
+						.getServerInfo()
+						.filter((s) => s.connected)) {
+						rawNodes.push({
+							label: prettify(s.name),
+							key: `mcp:${s.name}`,
+							kind: "service",
+						});
+					}
+					if (kernel.strapi)
+						rawNodes.push({ label: "Strapi", key: "strapi", kind: "service" });
+					for (const name of kernel.skills.skillNames ?? []) {
+						rawNodes.push({
+							label: prettify(name),
+							key: name,
+							kind: "skill",
+						});
+					}
+				} catch {
+					/* fresh DB / not-ready subsystems → render what we have */
+				}
 				let toolCount = 0;
 				let jobsCompleted = 0;
 				try {
-					portraitSkills = kernel.skills.skillNames ?? [];
-					const mcp = kernel.mcpManager
-						.getServerInfo()
-						.filter((s) => s.connected)
-						.map((s) => s.name);
-					portraitServices = Array.from(
-						new Set([...mcp, ...(kernel.strapi ? ["Strapi"] : [])]),
-					);
 					toolCount = kernel.toolRegistryPublic.size;
 					jobsCompleted =
 						kernel.database
 							.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tool_log")
 							.get()?.n ?? 0;
 				} catch {
-					/* fresh DB / not-ready subsystems → render what we have */
+					/* counts default to 0 */
 				}
 				const income: number | null = null; // not tracked yet → "soon"
-				type PNode = { label: string; kind: "skill" | "service" | "more" };
-				// Services first, then skills; de-dupe by label so a capability that is
-				// both (e.g. Strapi skill + Strapi service) only appears once.
+				// De-dupe by key (collapses a skill + its service, e.g. mcp:n8n).
 				let nodes: PNode[] = [];
 				const seenNodes = new Set<string>();
-				for (const s of portraitServices) {
-					const label = prettify(s);
-					if (seenNodes.has(label.toLowerCase())) continue;
-					seenNodes.add(label.toLowerCase());
-					nodes.push({ label, kind: "service" });
-				}
-				for (const s of portraitSkills) {
-					const label = prettify(s);
-					if (seenNodes.has(label.toLowerCase())) continue;
-					seenNodes.add(label.toLowerCase());
-					nodes.push({ label, kind: "skill" });
+				for (const node of rawNodes) {
+					const k = node.key.toLowerCase();
+					if (seenNodes.has(k)) continue;
+					seenNodes.add(k);
+					nodes.push(node);
 				}
 				const MAX_NODES = 12;
 				if (nodes.length > MAX_NODES) {
 					const extra = nodes.length - (MAX_NODES - 1);
 					nodes = nodes.slice(0, MAX_NODES - 1);
-					nodes.push({ label: `+${extra}`, kind: "more" });
+					nodes.push({ label: `+${extra}`, key: "more", kind: "more" });
 				}
 				const RING = 134;
 				const STAGE = 340;
 				const CENTER = STAGE / 2;
 				const nodesHtml = nodes
 					.map((node, i) => {
-						const ang = ((-90 + (360 / nodes.length) * i) * Math.PI) / 180;
+						const deg = -90 + (360 / nodes.length) * i;
+						const ang = (deg * Math.PI) / 180;
 						const x = (CENTER + RING * Math.cos(ang)).toFixed(1);
 						const y = (CENTER + RING * Math.sin(ang)).toFixed(1);
 						const d = (0.12 * i).toFixed(2);
-						return `<div class="node" style="left:${x}px;top:${y}px"><div class="chip ${node.kind}" style="animation-delay:${d}s,${d}s"><span class="ndot"></span><span class="lbl">${esc(node.label)}</span></div></div>`;
+						return `<div class="node" data-key="${esc(node.key)}" data-angle="${deg.toFixed(0)}" style="left:${x}px;top:${y}px"><div class="chip ${node.kind}" style="animation-delay:${d}s,${d}s"><span class="ndot"></span><span class="lbl">${esc(node.label)}</span></div></div>`;
 					})
 					.join("");
 				const badge = (label: string, value: number | null) =>
@@ -2367,35 +2396,69 @@ export function createWebApp(
           .badge .bnum { font-size: 20px; font-weight: 700; letter-spacing: -.03em; color: var(--accent); }
           .badge .blbl { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg); }
           .badge.muted .bnum { color: var(--fg); }
+          /* ===== live activity reactions ===== */
+          .node.active .chip { border-color: var(--accent); color: var(--title);
+            background: color-mix(in srgb, var(--bg) 40%, var(--accent) 26%);
+            box-shadow: 0 0 0 1px var(--accent), 0 0 22px -2px var(--accent); transform: scale(1.12); z-index: 3; }
+          .node.active .chip .ndot { background: var(--accent);
+            box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent); animation: ndotpulse 1s ease-in-out infinite; }
+          .node.done .chip { border-color: var(--accent); box-shadow: 0 0 14px -2px var(--accent); }
+          .node.errored .chip { border-color: #f87171; box-shadow: 0 0 14px -2px #f87171; }
+          .face.working { animation: workbob 1.2s ease-in-out infinite !important; }
+          .face.working .mouth { width: 22px; height: 8px; border-radius: 0 0 22px 22px; }
+          .spark { position:absolute; inset:-8px; border-radius:inherit; pointer-events:none; opacity:0;
+            box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); }
+          .face.working .spark { opacity:1; animation: spark 1.4s ease-out infinite; }
+          /* feed (revealed in busy mode) */
+          .feed { display:none; flex-direction:column; gap:5px; width: 300px; max-width: 86vw; }
+          body.busy .feed { display:flex; animation: popin .4s ease both; }
+          body.busy .badges { display:none; }
+          body.busy .stage { transform: scale(.86) translateY(-6px); }
+          body.busy .placeholder p { display:none; }
+          .feed-row { display:flex; align-items:center; gap:8px; padding:7px 11px; border-radius:10px; text-align:left;
+            font-size:12px; color: var(--title); background: color-mix(in srgb, var(--bg) 66%, var(--accent) 7%);
+            border:1px solid color-mix(in srgb, var(--accent) 16%, transparent); animation: feedin .35s ease both; }
+          .feed-row .fdot { width:7px; height:7px; border-radius:50%; flex:none; background: var(--accent); }
+          .feed-row.run .fdot { animation: ndotpulse 1s ease-in-out infinite; }
+          .feed-row.err .fdot { background:#f87171; }
+          .feed-row .ftxt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          @keyframes ndotpulse { 0%,100%{transform:scale(1); opacity:1;} 50%{transform:scale(.6); opacity:.6;} }
+          @keyframes spark { 0%{box-shadow:0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);} 100%{box-shadow:0 0 0 16px transparent;} }
+          @keyframes workbob { 0%,100%{transform:translateY(0) scale(1);} 50%{transform:translateY(-4px) scale(1.04);} }
+          @keyframes feedin { 0%{transform:translateX(-8px); opacity:0;} 100%{transform:translateX(0); opacity:1;} }
           @keyframes greet { 0%{transform:scale(.5) translateY(26px); opacity:0;} 100%{transform:scale(1) translateY(0); opacity:1;} }
           @keyframes float { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-7px);} }
           @keyframes bounce { 0%{transform:translateY(0) scale(1);} 30%{transform:translateY(-15px) scale(1.06);} 60%{transform:translateY(2px) scale(.97);} 100%{transform:translateY(0) scale(1);} }
           @keyframes popin { 0%{transform:scale(.2); opacity:0;} 100%{transform:scale(1); opacity:1;} }
           @keyframes bob { 0%,100%{margin-top:0;} 50%{margin-top:-6px;} }
           @media (prefers-reduced-motion: reduce) {
-            .face, .face-wrap, .chip { animation: none !important; }
+            .face, .face-wrap, .chip, .face.working, .node.active .chip .ndot, .face.working .spark, .feed-row.run .fdot { animation: none !important; }
             .pupil, .mouth, .eye { transition: none !important; }
           }
           @media (max-width: 460px) { .stage { transform: scale(.8); } }
         </style></head><body><div class="placeholder">
         <div class="stage">${nodesHtml ? `<div class="orbit">${nodesHtml}</div>` : ""}
         <div class="face-wrap"><div class="face" id="face" title="Hi!">
+          <span class="spark"></span>
           <span class="cheek l"></span><span class="cheek r"></span>
           <div class="eyes"><div class="eye"><div class="pupil"></div></div><div class="eye"><div class="pupil"></div></div></div>
           <div class="mouth"></div>
         </div></div></div>
         <div class="title">Hi — I'm ${brandName}</div>
         <p>Ask me to build something and it'll show up right here.</p>
-        <div class="badges">${badgesHtml}</div></div>
+        <div class="badges">${badgesHtml}</div>
+        <div class="feed" id="feed"></div></div>
         <script>(function(){
           var face=document.getElementById("face");
+          var pupils=face?face.querySelectorAll(".pupil"):[];
+          var busy=false, idleTimer=null, activeCount=0;
+          function setPupils(x,y){ for(var i=0;i<pupils.length;i++) pupils[i].style.transform="translate("+x+"px,"+y+"px)"; }
           if(face){
-            var pupils=face.querySelectorAll(".pupil");
             document.addEventListener("mousemove",function(e){
+              if(busy) return; // while working, the face looks toward the active pill
               var r=face.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2;
               var dx=e.clientX-cx, dy=e.clientY-cy, a=Math.atan2(dy,dx), d=Math.min(4.5, Math.hypot(dx,dy)/36);
-              var x=Math.cos(a)*d, y=Math.sin(a)*d;
-              pupils.forEach(function(p){ p.style.transform="translate("+x+"px,"+y+"px)"; });
+              setPupils(Math.cos(a)*d, Math.sin(a)*d);
             });
             function blink(){ face.classList.add("blink"); setTimeout(function(){ face.classList.remove("blink"); },150); }
             (function loop(){ setTimeout(function(){ blink(); loop(); }, 2600+Math.random()*2800); })();
@@ -2407,9 +2470,33 @@ export function createWebApp(
             function step(ts){ if(!t0)t0=ts; var p=Math.min(1,(ts-t0)/dur); el.textContent=Math.round(p*target).toLocaleString(); if(p<1)requestAnimationFrame(step); }
             requestAnimationFrame(step);
           });
-          // live-ish: re-render the portrait so new skills/services appear. A plain
-          // same-URL reload (not about:blank) is sandbox-safe; guarded + only when visible.
-          setTimeout(function(){ try{ if(document.visibilityState!=="hidden") location.reload(); }catch(e){} }, 45000);
+          // ===== live agent activity (parent relays tool_start/tool_end via postMessage) =====
+          var feed=document.getElementById("feed");
+          function nodesFor(key){ if(!key) return []; return document.querySelectorAll('.node[data-key="'+String(key).replace(/["\\\\]/g,"")+'"]'); }
+          function lookToward(deg){ if(!pupils.length||deg==null) return; var a=deg*Math.PI/180; setPupils(Math.cos(a)*4.5, Math.sin(a)*4.5); }
+          function trimFeed(){ while(feed && feed.children.length>4) feed.removeChild(feed.firstChild); }
+          function calmCheck(){ if(idleTimer) clearTimeout(idleTimer); idleTimer=setTimeout(function(){ if(activeCount>0) return; busy=false; document.body.classList.remove("busy"); if(face) face.classList.remove("working"); if(feed) feed.innerHTML=""; setPupils(0,0); }, 1300); }
+          window.addEventListener("message", function(e){
+            var m=e.data; if(!m || m.type!=="paw:tool") return;
+            var key=m.skillKey, label=String(m.summary||m.toolName||"working");
+            if(m.phase==="start"){
+              if(idleTimer){ clearTimeout(idleTimer); idleTimer=null; }
+              busy=true; activeCount++; document.body.classList.add("busy"); if(face) face.classList.add("working");
+              var ns=nodesFor(key), ang=null;
+              for(var i=0;i<ns.length;i++){ ns[i].classList.add("active"); ns[i].classList.remove("done","errored"); if(ang===null) ang=parseFloat(ns[i].getAttribute("data-angle")); }
+              lookToward(ang);
+              if(feed){ var row=document.createElement("div"); row.className="feed-row run"; row.setAttribute("data-tid", String(m.toolId||"")); row.innerHTML='<span class="fdot"></span><span class="ftxt"></span>'; row.querySelector(".ftxt").textContent=label; feed.appendChild(row); trimFeed(); }
+            } else if(m.phase==="end"){
+              activeCount=Math.max(0, activeCount-1);
+              var ns2=nodesFor(key);
+              for(var j=0;j<ns2.length;j++){ (function(n){ n.classList.remove("active"); n.classList.add(m.isError?"errored":"done"); setTimeout(function(){ n.classList.remove("done","errored"); },1600); })(ns2[j]); }
+              if(feed){ var r2=feed.querySelector('.feed-row[data-tid="'+String(m.toolId||"").replace(/["\\\\]/g,"")+'"]'); if(r2){ r2.classList.remove("run"); if(m.isError) r2.classList.add("err"); } }
+              calmCheck();
+            }
+          });
+          // live-ish: re-render so new skills/services surface. Same-URL reload
+          // (sandbox-safe); waits until not busy + visible.
+          (function reloadTick(){ setTimeout(function(){ try{ if(!busy && document.visibilityState!=="hidden"){ location.reload(); return; } }catch(e){} reloadTick(); }, busy?8000:45000); })();
         })();</script>
         </body></html>`);
 			}
@@ -3225,7 +3312,7 @@ export function createWebApp(
 				try {
 					for await (const chunk of kernel.handleInboundStream(msg)) {
 						await stream.writeSSE({
-							data: JSON.stringify(chunk),
+							data: JSON.stringify(enrichChunk(chunk)),
 						});
 					}
 				} catch (err) {
