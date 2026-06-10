@@ -1951,7 +1951,7 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 					</nav>
 					<div class="sidebar-footer">
 						{raw(
-							`<button type="button" class="sidebar-collapse-btn btn" onclick="__pawToggleSidebar()" title="Collapse sidebar"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></span><span class="nav-label">Collapse</span></button>`,
+							`<button type="button" class="sidebar-collapse-btn" onclick="__pawToggleSidebar()" title="Collapse sidebar"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></span><span class="nav-label">Collapse</span></button>`,
 						)}
 						{raw(`<div class="theme-toggle">
               <button class="theme-btn" data-theme="light" onclick="__pawSetTheme('light')" title="Light">
