@@ -1,6 +1,6 @@
 import { resolveProjectPath } from "../paths.js";
 import { existsSync, mkdirSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { EventBus } from "./bus.js";
 import { Sandbox } from "./sandbox.js";
 import { discoverPlugins } from "./plugin-loader.js";
@@ -101,7 +101,17 @@ export class Kernel {
 		this.bus = new EventBus();
 		this.toolRegistry = new ToolRegistry();
 		this.sandbox = new Sandbox(createLogger("sandbox"));
-		const resolvedDbPath = resolveProjectPath(config.store.dbPath);
+		// Keep the DB on the persistent volume. When a relocated config home is
+		// set (PAW_CONFIG_DIR, e.g. /data/.paw on Railway) but store.dbPath is
+		// RELATIVE, it would otherwise resolve under the ephemeral app dir
+		// (/app/data/paw.db) and reset every deploy. Co-locate it with config on
+		// the volume. Absolute paths are honored unchanged.
+		let dbPathSetting = config.store.dbPath;
+		const persistentHome = process.env.PAW_CONFIG_DIR;
+		if (persistentHome && !isAbsolute(dbPathSetting)) {
+			dbPathSetting = join(persistentHome, basename(dbPathSetting));
+		}
+		const resolvedDbPath = resolveProjectPath(dbPathSetting);
 		// Probe BEFORE opening (getDb creates the file): did the DB survive the
 		// last deploy? Emitted as a plain-text banner so it shows even in log
 		// views that strip structured attributes.
