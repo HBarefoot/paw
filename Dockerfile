@@ -52,13 +52,17 @@ async function preload() { \
 } \
 preload().catch(console.error);"
 
-# Create persistent data and config directories
-RUN mkdir -p /data /root/.paw
+# Create persistent data + config directories. /data is the Railway volume —
+# DB, config, credentials and canvas files all live under it so they survive
+# redeploys (mount a volume at /data).
+RUN mkdir -p /data/.paw /data/canvas
 
 # Environment defaults for Railway
 # PAW_PROVIDER is set via Railway env vars (not hardcoded here)
 ENV PAW_WEB_HOST=0.0.0.0
 ENV PAW_DB_PATH=/data/paw.db
+ENV PAW_CONFIG_DIR=/data/.paw
+ENV PAW_CANVAS_ROOT=/data/canvas
 ENV PAW_WEB_ENABLED=true
 ENV PAW_WEB_TRUSTED_PROXY=true
 ENV NODE_ENV=production
