@@ -63,6 +63,7 @@ import {
 	deleteBrand,
 	getActiveBrand,
 	getBrand,
+	getBrandPalette,
 	getBrandUi,
 	listBrands,
 	renderBrandAppThemeCss,
@@ -2209,26 +2210,94 @@ export function createWebApp(
 				// No external resources (e.g. web fonts): this page renders inside the
 				// sandboxed, null-origin canvas iframe, where cross-origin loads can
 				// trip Safari's "Unsafe attempt to load URL" guard. System fonts only.
+				// The active brand is baked in server-side: colors inline, the logo as
+				// a data: URI (no external load), and the name in the copy.
+				const brand = getActiveBrand(kernel.database);
+				const pal = getBrandPalette(brand);
+				const brandName = (brand?.name ?? "Paw").replace(
+					/[&<>"]/g,
+					(ch) =>
+						({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch] ??
+						ch,
+				);
+				const acc = pal?.accent ?? pal?.primary ?? "#6a4bf0";
+				// Feature (mouth) color must contrast with the face = the accent:
+				// dark ink on a light accent (e.g. mint), white on a dark one (violet).
+				let faceLight = false;
+				const hx = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(acc);
+				if (hx) {
+					let h = hx[1];
+					if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+					const r = Number.parseInt(h.slice(0, 2), 16);
+					const g = Number.parseInt(h.slice(2, 4), 16);
+					const b = Number.parseInt(h.slice(4, 6), 16);
+					faceLight = (r * 299 + g * 587 + b * 114) / 1000 > 150;
+				}
+				const ink = faceLight ? "#0b1220" : "#ffffff";
+				const rootVars = pal
+					? `:root { --accent:${acc}; --accent-bright:${pal.primary ?? acc}; --accent-press:${acc}; --soft:color-mix(in srgb, ${acc} 14%, transparent); --bg:${pal.bg ?? pal.surface ?? "#08090b"}; --fg:${pal.muted ?? "#6b7079"}; --title:${pal.text ?? "#f4f5f7"}; --ink:${ink}; }`
+					: `:root { --accent:#6a4bf0; --accent-bright:#7c5cff; --accent-press:#4f2fdf; --soft:rgba(106,75,240,.10); --bg:#f7f7f9; --fg:#82858e; --title:#14151a; --ink:#ffffff; }
+          @media (prefers-color-scheme: dark) { :root { --accent:#7458f5; --accent-bright:#a78bfa; --accent-press:#6446e8; --soft:rgba(116,88,245,.15); --bg:#08090b; --fg:#6b7079; --title:#f4f5f7; } }`;
 				return c.html(`<!DOCTYPE html><html><head><meta charset="UTF-8">
         <style>
-          :root { --accent:#6a4bf0; --accent-bright:#7c5cff; --accent-press:#4f2fdf; --soft:rgba(106,75,240,.10); --bg:#f7f7f9; --fg:#82858e; --title:#14151a; }
-          @media (prefers-color-scheme: dark) { :root { --accent:#7458f5; --accent-bright:#a78bfa; --accent-press:#6446e8; --soft:rgba(116,88,245,.15); --bg:#08090b; --fg:#6b7079; --title:#f4f5f7; } }
+          ${rootVars}
           * { box-sizing: border-box; }
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; display: flex; align-items: center; justify-content: center;
                  height: 100vh; margin: 0; color: var(--fg); background: radial-gradient(70% 55% at 50% 38%, var(--soft), transparent 70%), var(--bg);
-                 -webkit-font-smoothing: antialiased; }
-          .placeholder { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px; }
-          .app-icon { width: 56px; height: 56px; display: grid; place-items: center; border-radius: 28%;
-                 background: linear-gradient(150deg, var(--accent-bright), var(--accent) 55%, var(--accent-press)); color: #fff;
-                 box-shadow: 0 8px 24px -6px rgba(116,88,245,.45), inset 0 1px 0 rgba(255,255,255,.25); position: relative; overflow: hidden; }
-          .app-icon::after { content:""; position:absolute; inset:0; background: radial-gradient(120% 80% at 30% 10%, rgba(255,255,255,.35), transparent 50%); }
-          .app-icon svg path, .app-icon svg ellipse { fill: currentColor; }
+                 -webkit-font-smoothing: antialiased; overflow: hidden; }
+          .placeholder { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 24px; }
+          /* ===== friendly orb face ===== */
+          .face-wrap { animation: greet .8s cubic-bezier(.34,1.56,.64,1) both; }
+          .face {
+            width: 132px; height: 132px; border-radius: 48%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+            background: linear-gradient(150deg, var(--accent-bright), var(--accent) 55%, var(--accent-press));
+            box-shadow: 0 22px 60px -14px var(--soft), 0 10px 28px -10px rgba(0,0,0,.45), inset 0 3px 0 rgba(255,255,255,.28);
+            position: relative; cursor: pointer; animation: float 4s ease-in-out infinite; user-select: none;
+          }
+          .face::before { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+            background: radial-gradient(120% 80% at 30% 12%, rgba(255,255,255,.42), transparent 55%); }
+          .face.happy { animation: bounce .6s ease; }
+          .eyes { display:flex; gap:18px; z-index:1; }
+          .eye { width:26px; height:30px; background:#fff; border-radius:50%; position:relative; overflow:hidden;
+            box-shadow: inset 0 -2px 5px rgba(0,0,0,.10), 0 0 0 1px rgba(0,0,0,.06); transition: transform .12s ease; }
+          .face.blink .eye { transform: scaleY(.08); }
+          .pupil { width:12px; height:12px; background:#11131d; border-radius:50%; position:absolute;
+            left:calc(50% - 6px); top:calc(54% - 6px); transition: transform .1s ease; }
+          .mouth { width:30px; height:14px; border:3.5px solid var(--ink); border-top:0; border-radius:0 0 30px 30px;
+            margin-top:9px; z-index:1; transition: width .25s ease, height .25s ease; }
+          .face:hover .mouth, .face.happy .mouth { width:44px; height:23px; }
+          .cheek { position:absolute; width:15px; height:9px; border-radius:50%; background:rgba(255,120,120,.45);
+            top:60%; opacity:0; transition:opacity .25s ease; pointer-events:none; }
+          .cheek.l{ left:15%; } .cheek.r{ right:15%; }
+          .face:hover .cheek, .face.happy .cheek { opacity:1; }
           .placeholder .title { font-size: 18px; font-weight: 600; letter-spacing: -.02em; color: var(--title); }
           .placeholder p { font-size: 13px; max-width: 260px; margin: 0; }
+          @keyframes greet { 0%{transform:scale(.5) translateY(26px); opacity:0;} 100%{transform:scale(1) translateY(0); opacity:1;} }
+          @keyframes float { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-7px);} }
+          @keyframes bounce { 0%{transform:translateY(0) scale(1);} 30%{transform:translateY(-15px) scale(1.06);} 60%{transform:translateY(2px) scale(.97);} 100%{transform:translateY(0) scale(1);} }
+          @media (prefers-reduced-motion: reduce) { .face, .face-wrap { animation: none !important; } .pupil, .mouth, .eye { transition: none !important; } }
         </style></head><body><div class="placeholder">
-        <div class="app-icon"><svg width="31" height="31" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="6.4" cy="9.2" rx="2.05" ry="2.6"/><ellipse cx="10.2" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="13.9" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="17.7" cy="9.2" rx="2.05" ry="2.6"/><path d="M12 11.4c-3 0-5.6 2.2-5.6 4.9 0 2.1 1.8 3 3.4 3 1 0 1.5-.4 2.2-.4s1.2.4 2.2.4c1.6 0 3.4-.9 3.4-3 0-2.7-2.6-4.9-5.6-4.9Z"/></svg></div>
-        <div class="title">Canvas</div>
-        <p>Your live preview will render here once Paw writes to the canvas.</p></div>
+        <div class="face-wrap"><div class="face" id="face" title="Hi!">
+          <span class="cheek l"></span><span class="cheek r"></span>
+          <div class="eyes"><div class="eye"><div class="pupil"></div></div><div class="eye"><div class="pupil"></div></div></div>
+          <div class="mouth"></div>
+        </div></div>
+        <div class="title">Hi — I'm ${brandName}</div>
+        <p>Ask me to build something and it'll show up right here.</p></div>
+        <script>(function(){
+          var face=document.getElementById("face"); if(!face) return;
+          var pupils=face.querySelectorAll(".pupil");
+          document.addEventListener("mousemove",function(e){
+            var r=face.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2;
+            var dx=e.clientX-cx, dy=e.clientY-cy, a=Math.atan2(dy,dx), d=Math.min(4.5, Math.hypot(dx,dy)/36);
+            var x=Math.cos(a)*d, y=Math.sin(a)*d;
+            pupils.forEach(function(p){ p.style.transform="translate("+x+"px,"+y+"px)"; });
+          });
+          function blink(){ face.classList.add("blink"); setTimeout(function(){ face.classList.remove("blink"); },150); }
+          (function loop(){ setTimeout(function(){ blink(); loop(); }, 2600+Math.random()*2800); })();
+          face.addEventListener("click",function(){ face.classList.add("happy"); blink(); setTimeout(function(){ face.classList.remove("happy"); },650); });
+        })();</script>
         </body></html>`);
 			}
 			return c.text("Not found", 404);

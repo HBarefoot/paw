@@ -452,7 +452,7 @@ export function getChatScript(): string {
 
     var avatar = document.createElement("div");
     avatar.className = "avatar bot-avatar";
-    avatar.innerHTML = '<img src="/paw-logo.jpg" alt="Paw" />';
+    avatar.innerHTML = '<img src="' + (window.__brandLogo || "/paw-logo.jpg") + '" alt="" />';
 
     var bubble = document.createElement("div");
     bubble.className = "msg assistant";

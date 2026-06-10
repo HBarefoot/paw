@@ -163,6 +163,22 @@ function safeGoogleFontsUrl(v: unknown): string | null {
 }
 
 /**
+ * Whether a color is light enough that dark text reads better on top of it.
+ * Uses YIQ perceived brightness on `#rgb`/`#rrggbb`. Non-hex (e.g. `rgb(...)`)
+ * returns false → defaults to white text, matching the dark default accent.
+ */
+function isLightColor(color: string): boolean {
+	const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+	if (!m) return false;
+	let h = m[1];
+	if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+	const r = Number.parseInt(h.slice(0, 2), 16);
+	const g = Number.parseInt(h.slice(2, 4), 16);
+	const b = Number.parseInt(h.slice(4, 6), 16);
+	return (r * 299 + g * 587 + b * 114) / 1000 > 150;
+}
+
+/**
  * A `:root { --brand-* }` stylesheet for the active brand. Served publicly so
  * sandboxed/shared canvas pages can `<link>` it. All values are sanitized.
  */
@@ -235,6 +251,9 @@ export function renderBrandAppThemeCss(brand: Brand | null): string {
 		m.push(
 			`--accent-gradient: linear-gradient(150deg, color-mix(in srgb, ${accent} 82%, #fff), ${accent} 55%, color-mix(in srgb, ${accent} 74%, #000));`,
 		);
+		// On-accent foreground: dark text on light accents (e.g. mint), white on
+		// dark accents (e.g. violet), so text/icons on accent fills stay readable.
+		m.push(`--accent-fg: ${isLightColor(accent) ? "#0b0b0b" : "#ffffff"};`);
 	}
 	if (bg) {
 		m.push(`--bg-secondary: ${bg};`);
@@ -253,15 +272,20 @@ export function renderBrandAppThemeCss(brand: Brand | null): string {
 		);
 		m.push(`--border-strong: color-mix(in srgb, ${surface} 74%, ${anchor});`);
 	}
-	if (text) {
-		m.push(`--text-primary: ${text};`);
-		m.push(`--text-secondary: color-mix(in srgb, ${text} 72%, ${onSurface});`);
-		m.push(
-			`--text-tertiary: ${muted ?? `color-mix(in srgb, ${text} 52%, ${onSurface})`};`,
-		);
-	} else if (muted) {
-		m.push(`--text-tertiary: ${muted};`);
-	}
+	if (text) m.push(`--text-primary: ${text};`);
+	// Secondary text tier: the brand's Muted color drives it (operator choice);
+	// fall back to a derived shade of the primary text when Muted is unset.
+	const secondary =
+		muted ?? (text ? `color-mix(in srgb, ${text} 72%, ${onSurface})` : null);
+	if (secondary) m.push(`--text-secondary: ${secondary};`);
+	// Faintest tier: a step dimmer than secondary (Muted mixed toward the
+	// surface), so the three tiers stay distinct. --text-muted aliases this.
+	const tertiary = muted
+		? `color-mix(in srgb, ${muted} 70%, ${onSurface})`
+		: text
+			? `color-mix(in srgb, ${text} 50%, ${onSurface})`
+			: null;
+	if (tertiary) m.push(`--text-tertiary: ${tertiary};`);
 	if (body)
 		m.push(
 			`--font-sans: "${body}", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;`,
@@ -296,6 +320,25 @@ export function getBrandUi(
 		logo: asset(logos.light) ?? asset(logos.icon),
 		favicon: asset(logos.favicon) ?? asset(logos.icon) ?? asset(logos.light),
 	};
+}
+
+/**
+ * The active brand's sanitized color palette (`{primary, accent, bg, surface,
+ * text, muted}`, only keys with a valid color). Used to brand server-rendered
+ * surfaces that can't `<link>` the theme stylesheet (e.g. the sandboxed canvas
+ * placeholder iframe). Returns null when no brand / no valid colors.
+ */
+export function getBrandPalette(
+	brand: Brand | null,
+): Record<string, string> | null {
+	if (!brand) return null;
+	const c = brand.data.colors ?? {};
+	const out: Record<string, string> = {};
+	for (const key of ["primary", "accent", "bg", "surface", "text", "muted"]) {
+		const col = safeColor(c[key]);
+		if (col) out[key] = col;
+	}
+	return Object.keys(out).length ? out : null;
 }
 
 /**
