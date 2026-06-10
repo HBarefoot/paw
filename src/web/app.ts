@@ -1210,7 +1210,11 @@ export function createWebApp(
 			chunk.toolName &&
 			!chunk.skillKey
 		) {
-			chunk.skillKey = kernel.skills.skillNameForTool(chunk.toolName);
+			// Sub-agent chunks carry a "[agentName] " display prefix on toolName
+			// (added in kernel.runAgentTurnStream); strip it so the skill lookup
+			// resolves (e.g. "[copy-writer-mate] browser_navigate" → "web-pilot").
+			const cleanName = chunk.toolName.replace(/^\[[^\]]+\]\s*/, "");
+			chunk.skillKey = kernel.skills.skillNameForTool(cleanName);
 		}
 		return chunk;
 	}
