@@ -9,7 +9,9 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { configSchema } from "./schema.js";
 
-const CONFIG_DIR = join(homedir(), ".paw");
+// PAW_CONFIG_DIR relocates config + credentials (e.g. onto a persistent volume
+// like /data/.paw on Railway). Defaults to ~/.paw.
+const CONFIG_DIR = process.env.PAW_CONFIG_DIR || join(homedir(), ".paw");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 /** In-memory config cache, keyed on file mtime so external edits are caught. */

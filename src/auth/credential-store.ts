@@ -12,7 +12,9 @@ import {
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const PAW_DIR = join(homedir(), ".paw");
+// PAW_CONFIG_DIR relocates config + credentials onto a persistent path
+// (e.g. /data/.paw on a Railway volume). Defaults to ~/.paw.
+const PAW_DIR = process.env.PAW_CONFIG_DIR || join(homedir(), ".paw");
 const LEGACY_DIR = join(homedir(), ".clawme");
 const CREDENTIALS_PATH = join(PAW_DIR, "credentials.json");
 const CREDENTIALS_TMP_PATH = join(PAW_DIR, "credentials.json.tmp");

@@ -39,6 +39,42 @@ function deepMerge(
 	return result;
 }
 
+/**
+ * Parse PAW_N8N_ENDPOINTS — either a JSON array `[{"name","url"}]` or a simple
+ * `name=url,name2=url2` (comma/newline-separated) list.
+ */
+function parseN8nEndpoints(
+	raw: string | undefined,
+): Array<{ name: string; url: string }> {
+	if (!raw || !raw.trim()) return [];
+	const t = raw.trim();
+	if (t.startsWith("[")) {
+		try {
+			const parsed = JSON.parse(t);
+			if (Array.isArray(parsed)) {
+				return parsed
+					.filter(
+						(e) => e && typeof e.name === "string" && typeof e.url === "string",
+					)
+					.map((e) => ({ name: e.name.trim(), url: e.url.trim() }));
+			}
+		} catch {
+			/* fall through to pair parsing */
+		}
+	}
+	return t
+		.split(/[\n,]/)
+		.map((s) => s.trim())
+		.filter(Boolean)
+		.map((s) => {
+			const i = s.indexOf("=");
+			return i > 0
+				? { name: s.slice(0, i).trim(), url: s.slice(i + 1).trim() }
+				: null;
+		})
+		.filter((e): e is { name: string; url: string } => !!e && !!e.url);
+}
+
 /** Reads from credential store + Claude CLI + env vars. */
 function resolvedCredentials(): Record<string, unknown> {
 	const env = process.env;
@@ -104,19 +140,29 @@ function resolvedCredentials(): Record<string, unknown> {
 				: env.PORT
 					? Number(env.PORT)
 					: undefined,
+			// Relocate the canvas workspace (e.g. onto a persistent volume).
+			canvas: env.PAW_CANVAS_ROOT ? { root: env.PAW_CANVAS_ROOT } : undefined,
 		},
+		// First-class n8n: configurable purely via env so it survives redeploys
+		// even without a persisted config.json. PAW_N8N_TOKEN auto-enables it.
+		n8n: env.PAW_N8N_TOKEN
+			? {
+					enabled: true,
+					token: env.PAW_N8N_TOKEN,
+					transport: env.PAW_N8N_TRANSPORT,
+					endpoints: parseN8nEndpoints(env.PAW_N8N_ENDPOINTS),
+				}
+			: undefined,
 		strapi: {
 			url: env.PAW_STRAPI_URL ?? env.STRAPI_URL ?? strapiCreds?.url,
-			token:
-				env.PAW_STRAPI_TOKEN ??
-				env.STRAPI_API_TOKEN ??
-				strapiCreds?.token,
+			token: env.PAW_STRAPI_TOKEN ?? env.STRAPI_API_TOKEN ?? strapiCreds?.token,
 			// Auto-enable when a token is available
-			enabled: !!(
-				env.PAW_STRAPI_TOKEN ??
-				env.STRAPI_API_TOKEN ??
-				strapiCreds?.token
-			) || undefined,
+			enabled:
+				!!(
+					env.PAW_STRAPI_TOKEN ??
+					env.STRAPI_API_TOKEN ??
+					strapiCreds?.token
+				) || undefined,
 		},
 		store: {
 			dbPath: env.PAW_DB_PATH,
