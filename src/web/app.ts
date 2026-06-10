@@ -63,7 +63,9 @@ import {
 	deleteBrand,
 	getActiveBrand,
 	getBrand,
+	getBrandUi,
 	listBrands,
+	renderBrandAppThemeCss,
 	renderBrandTokensCss,
 	updateBrand,
 	type BrandDefinition,
@@ -3412,6 +3414,27 @@ export function createWebApp(
 		return c.body(renderBrandTokensCss(brand));
 	});
 
+	// Public: app-chrome theme — maps the active brand onto the Paw design
+	// tokens so the console + auth screens re-skin. Empty (no-op) when no brand.
+	app.get("/api/brand/theme.css", (c) => {
+		c.header("Content-Type", "text/css; charset=utf-8");
+		c.header("Cache-Control", "no-cache");
+		return c.body(renderBrandAppThemeCss(getActiveBrand(kernel.database)));
+	});
+
+	// Public: active brand identity (name + logo/favicon URLs) for white-label
+	// theming of the console + auth screens. Nulls when no brand is active.
+	app.get("/api/brand/ui", (c) => {
+		c.header("Cache-Control", "no-cache");
+		return c.json(
+			getBrandUi(getActiveBrand(kernel.database)) ?? {
+				name: null,
+				logo: null,
+				favicon: null,
+			},
+		);
+	});
+
 	// Public: serve a brand asset file (logo etc.).
 	app.get("/api/brand/asset/*", async (c) => {
 		const prefix = "/api/brand/asset/";
@@ -3423,13 +3446,18 @@ export function createWebApp(
 		if (!full || !existsSync(full) || statSync(full).isDirectory()) {
 			return c.text("Not found", 404);
 		}
-		c.header("Content-Type", IMG_MIME[extname(full).toLowerCase()] ?? "application/octet-stream");
+		c.header(
+			"Content-Type",
+			IMG_MIME[extname(full).toLowerCase()] ?? "application/octet-stream",
+		);
 		c.header("Cache-Control", "public, max-age=300");
 		return c.body(await Bun.file(full).arrayBuffer());
 	});
 
 	// --- Auth-guarded brand management ---
-	app.get("/api/brands", (c) => c.json({ brands: listBrands(kernel.database) }));
+	app.get("/api/brands", (c) =>
+		c.json({ brands: listBrands(kernel.database) }),
+	);
 
 	app.post("/api/brands", async (c) => {
 		const body = (await c.req.json().catch(() => ({}))) as {
@@ -3476,7 +3504,11 @@ export function createWebApp(
 			? (body.slot as "light" | "dark" | "icon" | "favicon")
 			: "light";
 		const mime = body.mimeType ?? "";
-		if (!body.data || !IMG_MIME[extForMime(mime)] || !mime.startsWith("image/")) {
+		if (
+			!body.data ||
+			!IMG_MIME[extForMime(mime)] ||
+			!mime.startsWith("image/")
+		) {
 			return c.json({ error: "An image file is required" }, 400);
 		}
 		const buf = Buffer.from(body.data, "base64");

@@ -1,6 +1,6 @@
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
-import { pawMark } from "./layout.js";
+import { brandIdentityScript, pawMark } from "./layout.js";
 
 interface LoginPageProps {
 	error?: string;
@@ -186,7 +186,9 @@ export const LoginPage: FC<LoginPageProps> = ({
 		<head>
 			<meta charset="UTF-8" />
 			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-			<link rel="icon" type="image/png" href="/favicon.png" />
+			{raw(
+				`<link rel="icon" id="favicon" type="image/png" href="/favicon.png" />`,
+			)}
 			<link rel="preconnect" href="https://fonts.googleapis.com" />
 			{raw(
 				`<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`,
@@ -197,11 +199,16 @@ export const LoginPage: FC<LoginPageProps> = ({
 			/>
 			<title>{setupMode ? "Setup" : "Login"} - Paw</title>
 			{raw(`<style>${loginCss}</style>`)}
+			{raw(`<link rel="stylesheet" href="/api/brand/theme.css">`)}
+			{raw(`<script>${brandIdentityScript()}</script>`)}
 		</head>
 		<body>
 			<div class="login-card">
 				<div class="login-header">
 					{raw(`<div class="app-icon">${pawMark(33)}</div>`)}
+					{raw(
+						`<img class="app-logo" data-brand-logo alt="" style="display:none;height:44px;max-width:200px;object-fit:contain;">`,
+					)}
 					{setupMode ? (
 						<>
 							<h1>Create Admin Account</h1>
@@ -209,7 +216,9 @@ export const LoginPage: FC<LoginPageProps> = ({
 						</>
 					) : (
 						<>
-							<h1>Sign in to Paw</h1>
+							<h1>
+								Sign in to <span data-brand-name="">Paw</span>
+							</h1>
 							<p>Enter your credentials to continue</p>
 						</>
 					)}

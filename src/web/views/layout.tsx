@@ -1794,12 +1794,49 @@ const settingsItems = [
 const settingsIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const chevronIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
 
+/**
+ * Inline head script that white-labels the UI identity from the active brand
+ * (name, logo, favicon, page title). Mirrors the theme switcher: applies a
+ * localStorage-cached identity synchronously for the head-level bits (title +
+ * favicon — no flash), wires the body bits on DOMContentLoaded, then refreshes
+ * from the public `/api/brand/ui` endpoint and persists. Sets only
+ * textContent/href (no innerHTML) so a brand name can't inject markup. Shared
+ * by Layout + the standalone login/TOTP pages. Returns the script body (caller
+ * wraps in <script>). No backticks — embedded inside a template literal.
+ */
+export function brandIdentityScript(): string {
+	return [
+		"(function(){",
+		'var KEY="paw-brand";',
+		'function read(){try{return JSON.parse(localStorage.getItem(KEY)||"null");}catch(e){return null;}}',
+		'function setTitle(name){if(window.__brandTitleBase===undefined){window.__brandTitleBase=document.title.replace(/ - Paw$/,"");}document.title=window.__brandTitleBase+" - "+(name||"Paw");}',
+		'function setFavicon(href){var l=document.getElementById("favicon");if(l)l.setAttribute("href",href||"/favicon.png");}',
+		"function applyHead(b){setTitle(b&&b.name);setFavicon(b&&b.favicon);}",
+		"function applyBody(b){",
+		'var name=(b&&b.name)||"Paw";',
+		"window.__brandLogo=(b&&b.logo)||null;",
+		"window.__brandName=name;",
+		'document.querySelectorAll("[data-brand-name]").forEach(function(el){el.textContent=name;});',
+		'document.querySelectorAll("[data-brand-logo]").forEach(function(img){var mark=img.parentElement?img.parentElement.querySelector(".app-icon"):null;if(b&&b.logo){img.setAttribute("src",b.logo);img.style.display="";if(mark)mark.style.display="none";}else{img.style.display="none";if(mark)mark.style.display="";}});',
+		'document.querySelectorAll("[data-brand-avatar]").forEach(function(img){img.setAttribute("src",(b&&b.logo)||"/paw-logo.jpg");});',
+		"}",
+		"function apply(b){applyHead(b);if(document.body)applyBody(b);}",
+		"var cached=read();",
+		"applyHead(cached);",
+		'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",function(){applyBody(cached);});}else{applyBody(cached);}',
+		'fetch("/api/brand/ui").then(function(r){return r.json();}).then(function(d){var b=(d&&d.name)?d:null;try{localStorage.setItem(KEY,JSON.stringify(b));}catch(e){}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",function(){apply(b);});}else{apply(b);}}).catch(function(){});',
+		"})()",
+	].join("");
+}
+
 export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 	<html lang="en">
 		<head>
 			<meta charset="UTF-8" />
 			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-			<link rel="icon" type="image/png" href="/favicon.png" />
+			{raw(
+				`<link rel="icon" id="favicon" type="image/png" href="/favicon.png" />`,
+			)}
 			{raw(`<link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">`)}
@@ -1808,6 +1845,10 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`,
 			)}
 			{raw(`<style>${cssDesignSystem}</style>`)}
+			{/* Brand theme override — maps the active brand onto the design tokens.
+			    Render-blocking + empty when no brand, so no flash and a true no-op. */}
+			{raw(`<link rel="stylesheet" href="/api/brand/theme.css">`)}
+			{raw(`<script>${brandIdentityScript()}</script>`)}
 			{raw(`<script>${modalScript}</script>`)}
 		</head>
 		<body>
@@ -1818,7 +1859,12 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 							{raw(
 								`<div class="app-icon" style="width:30px;height:30px;">${pawMark(17)}</div>`,
 							)}
-							<span class="name">Paw</span>
+							{raw(
+								`<img class="wordmark-logo" data-brand-logo alt="" style="display:none;height:26px;max-width:130px;object-fit:contain;border-radius:6px;">`,
+							)}
+							<span class="name" data-brand-name="">
+								Paw
+							</span>
 							<span class="ver">v0.1.0</span>
 						</div>
 					</div>
@@ -1882,7 +1928,9 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
               </button>
             </div>`)}
-						<span>Paw v0.1.0</span>
+						<span>
+							<span data-brand-name="">Paw</span> v0.1.0
+						</span>
 						<a
 							href="/logout"
 							class="nav-item"

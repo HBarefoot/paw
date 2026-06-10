@@ -19,6 +19,9 @@ const PUBLIC_PREFIXES = [
 	// Brand tokens + logo assets are embedded by (public) canvas pages.
 	"/api/brand/tokens.css",
 	"/api/brand/asset/",
+	// Brand identity + app-chrome theme for the console + pre-auth screens.
+	"/api/brand/ui",
+	"/api/brand/theme.css",
 ];
 
 function isPublicRoute(path: string): boolean {
