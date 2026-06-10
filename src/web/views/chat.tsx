@@ -540,6 +540,10 @@ export function getChatScript(): string {
   function addActivityStep(streamBubble, chunk) {
     var activityDiv = streamBubble.activityDiv;
 
+    // Relay tool activity to the canvas portrait (index.html) so the face
+    // reacts in real time as the agent works.
+    if (chunk.type === "tool_start" || chunk.type === "tool_end") notifyPortrait(chunk);
+
     if (chunk.type === "thinking") {
       // Skip sub-agent thinking — parent spawn_agent step already shows it's running
       if (!streamBubble._activeAgentId) showThinking(streamBubble);
@@ -1369,6 +1373,27 @@ export function getChatScript(): string {
   // Multi-tab state
   var canvasTabs = [];
   var canvasTabIdSeq = 0;
+
+  // Relay a tool_start/tool_end chunk to the canvas portrait (index.html) iframe
+  // so the orb face + capability pills react in real time. Sandbox-safe: the
+  // iframe is null-origin but can still receive postMessage.
+  function notifyPortrait(chunk) {
+    try {
+      for (var i = 0; i < canvasTabs.length; i++) {
+        var t = canvasTabs[i];
+        if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        t.iframeEl.contentWindow.postMessage({
+          type: "paw:tool",
+          phase: chunk.type === "tool_start" ? "start" : "end",
+          toolName: chunk.toolName,
+          summary: chunk.toolSummary,
+          skillKey: chunk.skillKey,
+          isError: !!chunk.toolIsError,
+          toolId: chunk.toolId,
+        }, "*");
+      }
+    } catch (e) {}
+  }
 
   function createCanvasTab(path) {
     var id = ++canvasTabIdSeq;
