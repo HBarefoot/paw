@@ -1711,18 +1711,9 @@ export function createWebApp(
       <title>Shared Canvas - Paw</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: system-ui, sans-serif; background: #f8f9fb; }
-        .header { padding: 12px 20px; background: #fff; border-bottom: 1px solid #e2e4e9;
-          display: flex; align-items: center; gap: 10px; font-size: 14px; color: #6b7280; }
-        .header strong { color: #111827; }
-        iframe { width: 100%; height: calc(100vh - 49px); border: none; }
-        @media (prefers-color-scheme: dark) {
-          body { background: #09090b; }
-          .header { background: #131316; border-color: #27272a; color: #a1a1aa; }
-          .header strong { color: #f4f4f5; }
-        }
+        html, body { height: 100%; background: #09090b; }
+        iframe { width: 100%; height: 100vh; border: none; display: block; }
       </style></head><body>
-      <div class="header"><strong>Paw Canvas</strong> &mdash; Shared preview (read-only) &mdash; <code>${meta.path.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</code></div>
       <iframe src="/api/canvas/preview/${encodeURIComponent(meta.path)}"></iframe>
     </body></html>`);
 	});
