@@ -163,6 +163,22 @@ function safeGoogleFontsUrl(v: unknown): string | null {
 }
 
 /**
+ * Whether a color is light enough that dark text reads better on top of it.
+ * Uses YIQ perceived brightness on `#rgb`/`#rrggbb`. Non-hex (e.g. `rgb(...)`)
+ * returns false → defaults to white text, matching the dark default accent.
+ */
+function isLightColor(color: string): boolean {
+	const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+	if (!m) return false;
+	let h = m[1];
+	if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+	const r = Number.parseInt(h.slice(0, 2), 16);
+	const g = Number.parseInt(h.slice(2, 4), 16);
+	const b = Number.parseInt(h.slice(4, 6), 16);
+	return (r * 299 + g * 587 + b * 114) / 1000 > 150;
+}
+
+/**
  * A `:root { --brand-* }` stylesheet for the active brand. Served publicly so
  * sandboxed/shared canvas pages can `<link>` it. All values are sanitized.
  */
@@ -235,6 +251,9 @@ export function renderBrandAppThemeCss(brand: Brand | null): string {
 		m.push(
 			`--accent-gradient: linear-gradient(150deg, color-mix(in srgb, ${accent} 82%, #fff), ${accent} 55%, color-mix(in srgb, ${accent} 74%, #000));`,
 		);
+		// On-accent foreground: dark text on light accents (e.g. mint), white on
+		// dark accents (e.g. violet), so text/icons on accent fills stay readable.
+		m.push(`--accent-fg: ${isLightColor(accent) ? "#0b0b0b" : "#ffffff"};`);
 	}
 	if (bg) {
 		m.push(`--bg-secondary: ${bg};`);

@@ -76,6 +76,9 @@ const cssDesignSystem = `
     --accent-subtle: rgba(106,75,240,0.10);
     --accent-line: rgba(106,75,240,0.28);
     --accent-gradient: linear-gradient(150deg, #7c5cff, #6a4bf0 55%, #4f2fdf);
+    /* foreground for text/icons sitting ON an accent fill — brand theme
+       overrides this to dark on light accents (see renderBrandAppThemeCss) */
+    --accent-fg: #ffffff;
 
     --success: #16a36a;
     --success-bg: rgba(22,163,106,0.12);
@@ -136,6 +139,7 @@ const cssDesignSystem = `
       --accent-subtle: rgba(116,88,245,0.15);
       --accent-line: rgba(116,88,245,0.35);
       --accent-gradient: linear-gradient(150deg, #a78bfa, #7458f5 55%, #6446e8);
+      --accent-fg: #ffffff;
 
       --success: #34d399;
       --success-bg: rgba(52,211,153,0.14);
@@ -197,7 +201,7 @@ const cssDesignSystem = `
   .app-icon {
     display: grid; place-items: center; border-radius: 28%;
     background: linear-gradient(150deg, var(--accent-bright), var(--accent) 55%, var(--accent-press));
-    color: #fff; box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,.25);
+    color: var(--accent-fg); box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,.25);
     position: relative; overflow: hidden; flex-shrink: 0;
   }
   .app-icon::after {
@@ -249,7 +253,7 @@ const cssDesignSystem = `
     display: flex;
     align-items: center;
     justify-content: center;
-    color: white;
+    color: var(--accent-fg);
     font-weight: 700;
     font-size: 14px;
     flex-shrink: 0;
@@ -549,14 +553,14 @@ const cssDesignSystem = `
     transition: all .16s var(--transition);
     font-family: var(--font-sans);
     background: var(--accent);
-    color: var(--text-inverse);
+    color: var(--accent-fg);
   }
   button:hover, .btn:hover { background: var(--accent-hover); }
   button:active, .btn:active { background: var(--accent-press); }
   button:disabled, .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
 
   /* The prominent primary CTA gets the control-room lift + violet glow */
-  .btn-primary { background: var(--accent); color: var(--text-inverse); box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, var(--shadow-sm); }
+  .btn-primary { background: var(--accent); color: var(--accent-fg); box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, var(--shadow-sm); }
   .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: var(--glow); }
   .btn-primary:active { background: var(--accent-press); transform: translateY(0); }
 
@@ -644,7 +648,7 @@ const cssDesignSystem = `
     font-weight: 600;
     flex-shrink: 0;
   }
-  .avatar.user-avatar { background: var(--accent); color: var(--text-inverse); }
+  .avatar.user-avatar { background: var(--accent); color: var(--accent-fg); }
   .avatar.bot-avatar { background: var(--accent-subtle); overflow: hidden; }
   .avatar.bot-avatar img { width: 100%; height: 100%; object-fit: cover; }
 
@@ -660,10 +664,10 @@ const cssDesignSystem = `
   /* User bubble = solid violet accent; assistant = raised card */
   .msg.user {
     background: var(--accent);
-    color: #ffffff;
+    color: var(--accent-fg);
     border-bottom-right-radius: var(--radius-sm);
   }
-  .msg.user .role { color: rgba(255,255,255,0.9); opacity: 1; }
+  .msg.user .role { color: color-mix(in srgb, var(--accent-fg) 85%, transparent); opacity: 1; }
   .msg.assistant {
     background: var(--bg-card);
     color: var(--text-primary);
@@ -1055,7 +1059,7 @@ const cssDesignSystem = `
     transition: background 0.15s, color 0.15s;
   }
   .mem-cite:hover, .mem-cite:focus {
-    background: var(--accent); color: white; outline: none;
+    background: var(--accent); color: var(--accent-fg); outline: none;
   }
 
   /* Drag-and-drop overlay on the chat container */
@@ -1389,7 +1393,7 @@ const cssDesignSystem = `
     background: transparent; color: var(--text-secondary); border: 1px solid var(--border-primary);
   }
   .paw-modal-actions .btn-cancel:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .paw-modal-actions .btn-confirm { background: var(--accent); color: var(--text-inverse); }
+  .paw-modal-actions .btn-confirm { background: var(--accent); color: var(--accent-fg); }
   .paw-modal-actions .btn-confirm:hover { background: var(--accent-hover); }
   .paw-modal-actions .btn-confirm.danger { background: var(--error); }
   .paw-modal-actions .btn-confirm.danger:hover { background: #dc2626; }
@@ -1616,7 +1620,7 @@ const cssDesignSystem = `
   }
   .chat-toolbar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
   .chat-toolbar-btn.primary {
-    background: var(--accent-gradient); color: #ffffff;
+    background: var(--accent-gradient); color: var(--accent-fg);
     border-color: transparent;
   }
   .chat-toolbar-btn.primary:hover { opacity: 0.9; background: var(--accent-gradient); }
