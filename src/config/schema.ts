@@ -225,6 +225,9 @@ export const configSchema = z.object({
 			baseUrl: z.string().default("https://api.github.com"),
 			// Allowlist of `owner/repo` the agent may touch. Empty = none allowed.
 			repoAllowlist: z.array(z.string()).default([]),
+			// When CI fails on a PR, automatically run an agent turn that reads the
+			// logs and posts a diagnosis comment (never commits/merges).
+			autoInvestigateCi: z.boolean().default(true),
 		})
 		.default({}),
 });
