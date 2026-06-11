@@ -1410,6 +1410,7 @@ export function getChatScript(): string {
         t.iframeEl.contentWindow.postMessage({
           type: "paw:tool",
           phase: phase,
+          kind: chunk.type,
           toolName: chunk.toolName,
           summary: chunk.toolSummary,
           skillKey: chunk.skillKey,

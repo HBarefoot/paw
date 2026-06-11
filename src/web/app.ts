@@ -2869,7 +2869,25 @@ export function createWebApp(
           /* ===== capabilities constellation ===== */
           .stage { position: relative; width: ${STAGE}px; height: ${STAGE}px; display: grid; place-items: center; }
           .orbit { position: absolute; inset: 0; pointer-events: none; }
-          .node { position: absolute; transform: translate(-50%, -50%); }
+          .node { position: absolute; transform: translate(-50%, -50%);
+            transition: left .55s cubic-bezier(.45,.05,.2,1), top .55s cubic-bezier(.45,.05,.2,1), transform .55s ease; }
+          /* ===== workbench: pills reflow to a left column + wires to the agent ===== */
+          .wires { position:absolute; inset:0; pointer-events:none; z-index:1; overflow:visible; }
+          .wire { fill:none; stroke: var(--accent); stroke-width:2; stroke-linecap:round; opacity:.5;
+            filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 55%, transparent)); }
+          .wire.live { stroke-width:2.5; opacity:.9; animation: wirepulse 1.1s ease-in-out infinite; }
+          .wires.fade { opacity:0; transition: opacity .7s ease; }
+          @keyframes wirepulse { 0%,100%{ opacity:.5; } 50%{ opacity:.95; } }
+          /* ===== thinking indicator ===== */
+          .think { position:absolute; top:-28px; left:50%; transform:translateX(-50%); display:none; gap:6px; align-items:center; z-index:3; }
+          .think.show { display:flex; }
+          .think span { width:7px; height:7px; border-radius:50%; background: var(--accent);
+            box-shadow: 0 0 8px -1px var(--accent); animation: thinkdot 1.15s ease-in-out infinite; }
+          .think span:nth-child(2){ animation-delay:.18s; } .think span:nth-child(3){ animation-delay:.36s; }
+          @keyframes thinkdot { 0%,75%,100%{ transform:translateY(0); opacity:.4; } 38%{ transform:translateY(-7px); opacity:1; } }
+          .face.thinking { animation: thinkbob 2.6s ease-in-out infinite !important; }
+          .face.thinking .mouth { width:15px; height:6px; }
+          @keyframes thinkbob { 0%,100%{ transform: translateY(0) rotate(-1.5deg); } 50%{ transform: translateY(-3px) rotate(1.5deg); } }
           .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px 5px 8px; border-radius: 999px;
             font-size: 11px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; max-width: 124px;
             color: var(--title); background: color-mix(in srgb, var(--bg) 72%, var(--accent) 8%);
@@ -2964,13 +2982,14 @@ export function createWebApp(
           @keyframes popin { 0%{transform:scale(.2); opacity:0;} 100%{transform:scale(1); opacity:1;} }
           @keyframes bob { 0%,100%{margin-top:0;} 50%{margin-top:-6px;} }
           @media (prefers-reduced-motion: reduce) {
-            .face, .face-wrap, .chip, .face.working, .node.active .chip .ndot, .face.working .spark, .feed-row.run .fdot { animation: none !important; }
-            .pupil, .mouth, .eye { transition: none !important; }
+            .face, .face-wrap, .chip, .face.working, .face.thinking, .think span, .wire.live, .node.active .chip .ndot, .face.working .spark, .feed-row.run .fdot { animation: none !important; }
+            .pupil, .mouth, .eye, .node { transition: none !important; }
           }
           @media (max-width: 460px) { .stage { transform: scale(.8); } }
         </style></head><body><div class="placeholder">
         <div class="stage">${nodesHtml ? `<div class="orbit">${nodesHtml}</div>` : ""}
-        <div class="face-wrap"><div class="face" id="face" title="Hi!">
+        <svg class="wires" id="wires" width="${STAGE}" height="${STAGE}" viewBox="0 0 ${STAGE} ${STAGE}"></svg>
+        <div class="face-wrap"><div class="think" id="think"><span></span><span></span><span></span></div><div class="face" id="face" title="Hi!">
           <span class="spark"></span>
           <span class="cheek l"></span><span class="cheek r"></span>
           <div class="eyes"><div class="eye"><div class="pupil"></div></div><div class="eye"><div class="pupil"></div></div></div>
@@ -3013,11 +3032,41 @@ export function createWebApp(
           function nodesFor(key){ if(!key) return []; return document.querySelectorAll('.node[data-key="'+String(key).replace(/["\\\\]/g,"")+'"]'); }
           function lookToward(deg){ if(!pupils.length||deg==null) return; var a=deg*Math.PI/180; setPupils(Math.cos(a)*4.5, Math.sin(a)*4.5); }
           function trimFeed(){ while(feed && feed.children.length>5) feed.removeChild(feed.firstChild); }
+          // ===== workbench: thinking face + left-column reflow + wires to agent =====
+          var CENTER=${CENTER}, STAGEPX=${STAGE};
+          var think=document.getElementById("think"), wiresEl=document.getElementById("wires");
+          var drawnWires={}, ringSaved=false;
+          function showThink(on){ if(think){ if(on) think.classList.add("show"); else think.classList.remove("show"); } }
+          function faceWorking(){ if(!face)return; face.classList.add("working"); face.classList.remove("thinking"); showThink(false); }
+          function faceThinking(){ if(!face)return; face.classList.add("thinking"); face.classList.remove("working"); showThink(true); setPupils(0,-3); }
+          function faceIdle(){ if(face){ face.classList.remove("working","thinking"); } showThink(false); }
+          function saveRing(){ if(ringSaved)return; document.querySelectorAll(".node").forEach(function(n){ n.dataset.rl=n.style.left; n.dataset.rt=n.style.top; }); ringSaved=true; }
+          function reflowLeft(){
+            var nodes=document.querySelectorAll(".node"); if(!nodes.length) return; saveRing();
+            var N=nodes.length, pad=28, span=STAGEPX-pad*2, gap=N>1?span/(N-1):0;
+            for(var i=0;i<N;i++){ nodes[i].style.left="16px"; nodes[i].style.top=(N>1?(pad+gap*i):STAGEPX/2).toFixed(1)+"px"; nodes[i].style.transform="translate(0,-50%)"; }
+            var st=document.querySelector(".stage"); if(st) st.classList.add("col");
+          }
+          function restoreRing(){ if(!ringSaved)return; document.querySelectorAll(".node").forEach(function(n){ if(n.dataset.rl!==undefined){ n.style.left=n.dataset.rl; n.style.top=n.dataset.rt; } n.style.transform=""; }); var st=document.querySelector(".stage"); if(st) st.classList.remove("col"); }
+          function wireStart(n){ var x=parseFloat(n.style.left)||0, y=parseFloat(n.style.top)||0; if(document.querySelector(".stage.col")){ var chip=n.querySelector(".chip"); var w=chip?chip.offsetWidth:60; return {x:x+w+3,y:y}; } return {x:x,y:y}; }
+          function drawWire(key){
+            if(!key||!wiresEl) return; var ns=nodesFor(key); if(!ns.length) return;
+            if(drawnWires[key]){ drawnWires[key].classList.add("live"); return; }
+            var p=wireStart(ns[0]), mx=(p.x+CENTER)/2;
+            var d="M "+p.x.toFixed(1)+" "+p.y.toFixed(1)+" C "+mx.toFixed(1)+" "+p.y.toFixed(1)+" "+mx.toFixed(1)+" "+CENTER+" "+CENTER+" "+CENTER;
+            var path=document.createElementNS("http://www.w3.org/2000/svg","path");
+            path.setAttribute("d",d); path.setAttribute("class","wire live"); wiresEl.classList.remove("fade"); wiresEl.appendChild(path);
+            try{ var len=path.getTotalLength(); path.style.strokeDasharray=len; path.style.strokeDashoffset=len; path.getBoundingClientRect(); path.style.transition="stroke-dashoffset .5s ease"; path.style.strokeDashoffset="0"; }catch(e){}
+            drawnWires[key]=path;
+          }
+          function endWire(key){ if(drawnWires[key]) drawnWires[key].classList.remove("live"); }
+          function clearWires(){ if(!wiresEl) return; wiresEl.classList.add("fade"); setTimeout(function(){ if(!busy && wiresEl){ wiresEl.innerHTML=""; drawnWires={}; wiresEl.classList.remove("fade"); } }, 700); }
           function keepAlive(){
+            var wasBusy=busy;
             if(idleTimer){ clearTimeout(idleTimer); idleTimer=null; }
             if(clearTimer){ clearTimeout(clearTimer); clearTimer=null; }
             busy=true; document.body.classList.add("busy"); if(feed) feed.classList.remove("idle");
-            if(face) face.classList.add("working");
+            if(!wasBusy) reflowLeft(); // first activity of a turn → pills slide to the left column
           }
           function calmCheck(){
             if(idleTimer) clearTimeout(idleTimer);
@@ -3025,7 +3074,8 @@ export function createWebApp(
               if(activeCount>0) return;
               // Defensive: a missed tool_end can strand a pill .active — sweep any leftovers.
               document.querySelectorAll(".node.active").forEach(function(n){ n.classList.remove("active"); });
-              busy=false; document.body.classList.remove("busy"); if(face) face.classList.remove("working"); setPupils(0,0);
+              busy=false; document.body.classList.remove("busy"); faceIdle(); setPupils(0,0);
+              restoreRing(); clearWires(); // pills float back to the ring; wires fade out
               // keep the feed visible but dimmed so the run can be read, then clear after a long idle
               if(feed && feed.children.length){ feed.classList.add("idle"); clearTimer=setTimeout(function(){ if(!busy && feed) feed.innerHTML=""; }, FEED_CLEAR_MS); }
             }, CALM_MS);
@@ -3072,7 +3122,7 @@ export function createWebApp(
               // clear every pill (even ones whose tool_end never arrived) and let the
               // face wind down via the normal calm grace. Without this, an unpaired
               // tool_start leaves a pill stuck .active and activeCount stuck > 0.
-              activeCount=0;
+              activeCount=0; showThink(false);
               document.querySelectorAll(".node.active").forEach(function(n){
                 n.classList.remove("active"); n.classList.add("done");
                 setTimeout(function(){ n.classList.remove("done","errored"); }, GLOW_MS);
@@ -3082,18 +3132,20 @@ export function createWebApp(
             }
             var wasIdle = feed && feed.classList.contains("idle");
             keepAlive();
-            if(m.phase==="work") return; // heartbeat only
+            if(m.phase==="work"){ if(m.kind==="thinking" && activeCount===0) faceThinking(); return; } // heartbeat / thinking
             var key=m.skillKey, label=String(m.summary||m.toolName||"working");
             if(m.phase==="start"){
               // a fresh burst after the feed had dimmed → clear the stale rows
               if(wasIdle && feed){ feed.innerHTML=""; }
               activeCount++;
+              faceWorking(); drawWire(key); // the agent reaches for the skill it's using
               var ns=nodesFor(key), ang=null;
               for(var i=0;i<ns.length;i++){ ns[i].classList.add("active"); ns[i].classList.remove("done","errored"); activeAt[ns[i].getAttribute("data-key")]=Date.now(); if(ang===null) ang=parseFloat(ns[i].getAttribute("data-angle")); }
               lookToward(ang);
               if(feed){ var row=document.createElement("div"); row.className="feed-row run"; row.setAttribute("data-tid", String(m.toolId||"")); row.innerHTML='<span class="fdot"></span><span class="ftxt"></span>'; row.querySelector(".ftxt").textContent=label; feed.appendChild(row); trimFeed(); }
             } else if(m.phase==="end"){
               activeCount=Math.max(0, activeCount-1);
+              endWire(key);
               var ns2=nodesFor(key);
               for(var j=0;j<ns2.length;j++){ (function(n){
                 var since=Date.now()-(activeAt[n.getAttribute("data-key")]||0);
