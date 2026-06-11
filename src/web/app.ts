@@ -212,6 +212,62 @@ function readTotals(db: import("bun:sqlite").Database): {
 	}
 }
 
+/**
+ * Condense a GitHub webhook payload into a short feed item for the /github UI.
+ * Returns null for events we don't surface (keeps the feed signal-dense).
+ */
+function summarizeGithubWebhook(
+	eventType: string,
+	payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+	const repo = (payload.repository as { full_name?: string } | undefined)
+		?.full_name;
+	switch (eventType) {
+		case "pull_request": {
+			const pr = payload.pull_request as
+				| { number?: number; title?: string; html_url?: string }
+				| undefined;
+			return {
+				repo,
+				summary: `PR #${pr?.number} ${String(payload.action)}: ${pr?.title ?? ""}`,
+				url: pr?.html_url,
+			};
+		}
+		case "check_run":
+		case "check_suite": {
+			const cr = payload[eventType] as
+				| { status?: string; conclusion?: string; name?: string }
+				| undefined;
+			return {
+				repo,
+				summary: `${eventType} ${cr?.name ?? ""}: ${cr?.status ?? ""}${
+					cr?.conclusion ? ` (${cr.conclusion})` : ""
+				}`,
+			};
+		}
+		case "workflow_run": {
+			const wr = payload.workflow_run as
+				| { name?: string; status?: string; conclusion?: string; html_url?: string }
+				| undefined;
+			return {
+				repo,
+				summary: `workflow "${wr?.name ?? ""}" ${wr?.status ?? ""}${
+					wr?.conclusion ? ` (${wr.conclusion})` : ""
+				}`,
+				url: wr?.html_url,
+			};
+		}
+		case "push": {
+			return {
+				repo,
+				summary: `push to ${String(payload.ref ?? "").replace("refs/heads/", "")}`,
+			};
+		}
+		default:
+			return null;
+	}
+}
+
 export function createWebApp(
 	kernel: Kernel,
 	config: PawConfig,
@@ -277,6 +333,10 @@ export function createWebApp(
 		}
 		// Skip CSRF for incoming webhook endpoints (external services)
 		if (c.req.path.startsWith("/api/webhooks/incoming/")) {
+			return next();
+		}
+		// Skip CSRF for the GitHub App webhook (verified by HMAC signature instead).
+		if (c.req.path === "/api/github/webhook") {
 			return next();
 		}
 		// Skip CSRF for public canvas form receivers — these are submitted by
@@ -976,6 +1036,7 @@ export function createWebApp(
 	app.get("/github", async (c) => {
 		const gh = liveConfig().github;
 		const status = kernel.github ? await kernel.github.getStatus() : null;
+		const approvals = kernel.githubApprovals;
 		return c.html(
 			GitHubPage({
 				enabled: gh.enabled,
@@ -991,6 +1052,8 @@ export function createWebApp(
 					: false,
 				vaultEnabled: kernel.vault.enabled,
 				status,
+				pending: approvals ? approvals.listPending() : [],
+				recent: approvals ? approvals.listRecent(10) : [],
 			}),
 		);
 	});
@@ -1033,6 +1096,143 @@ export function createWebApp(
 			getClientIp(c),
 		);
 		return c.json({ saved: true, restartRequired: true });
+	});
+
+	// --- GitHub control plane (Phase 3): approvals inbox + live event feed ---
+
+	// In-memory event feed for the /github UI (admin-only single pane). Fed by
+	// webhooks + approval decisions; the page polls /api/github/events.
+	const githubEvents: Array<{
+		id: number;
+		event: string;
+		data: unknown;
+		ts: number;
+	}> = [];
+	let githubEventSeq = 0;
+	const GITHUB_EVENT_TTL = 300_000; // 5 min
+	const GITHUB_MAX_EVENTS = 200;
+	function pushGithubEvent(event: string, data: unknown) {
+		githubEvents.push({ id: ++githubEventSeq, event, data, ts: Date.now() });
+		const cutoff = Date.now() - GITHUB_EVENT_TTL;
+		while (
+			githubEvents.length > 0 &&
+			(githubEvents.length > GITHUB_MAX_EVENTS || githubEvents[0].ts < cutoff)
+		) {
+			githubEvents.shift();
+		}
+	}
+	// Dedupe webhook deliveries by X-GitHub-Delivery (bounded set).
+	const seenGithubDeliveries = new Set<string>();
+
+	app.get("/api/github/pending", (c) => {
+		const q = kernel.githubApprovals;
+		if (!q) return c.json({ pending: [], recent: [] });
+		return c.json({ pending: q.listPending(), recent: q.listRecent(20) });
+	});
+
+	app.post("/api/github/pending/:id/approve", async (c) => {
+		const q = kernel.githubApprovals;
+		if (!q) return c.json({ error: "GitHub approvals unavailable" }, 400);
+		const id = c.req.param("id");
+		const session = c.get("session") as { user_id: number } | undefined;
+		try {
+			const row = await q.approve(id, String(session?.user_id ?? "web"));
+			pushGithubEvent("approval", {
+				id,
+				action: row.action,
+				status: row.status,
+			});
+			authManager.audit.log(
+				"github.approval.approve",
+				session?.user_id ?? null,
+				{ id, action: row.action, status: row.status },
+				getClientIp(c),
+			);
+			return c.json(row);
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 400);
+		}
+	});
+
+	app.post("/api/github/pending/:id/reject", (c) => {
+		const q = kernel.githubApprovals;
+		if (!q) return c.json({ error: "GitHub approvals unavailable" }, 400);
+		const id = c.req.param("id");
+		const session = c.get("session") as { user_id: number } | undefined;
+		try {
+			const row = q.reject(id, String(session?.user_id ?? "web"));
+			pushGithubEvent("approval", { id, action: row.action, status: "rejected" });
+			authManager.audit.log(
+				"github.approval.reject",
+				session?.user_id ?? null,
+				{ id, action: row.action },
+				getClientIp(c),
+			);
+			return c.json(row);
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 400);
+		}
+	});
+
+	app.get("/api/github/events", (c) => {
+		const since = Number.parseInt(c.req.query("since") || "0", 10);
+		return c.json({ events: githubEvents.filter((e) => e.id > since) });
+	});
+
+	// Public, HMAC-verified GitHub App webhook. Reads the RAW body (GitHub signs
+	// the exact bytes — re-serializing would never match). Dedupes by delivery id.
+	app.post("/api/github/webhook", async (c) => {
+		const secret = liveConfig().github.webhookSecret;
+		const raw = await c.req.text();
+		const eventType = c.req.header("x-github-event") || "";
+		const delivery = c.req.header("x-github-delivery") || "";
+
+		if (secret) {
+			const sigHeader = c.req.header("x-hub-signature-256");
+			if (!sigHeader) return c.json({ error: "Missing signature" }, 401);
+			const key = await crypto.subtle.importKey(
+				"raw",
+				new TextEncoder().encode(secret),
+				{ name: "HMAC", hash: "SHA-256" },
+				false,
+				["sign"],
+			);
+			const sig = await crypto.subtle.sign(
+				"HMAC",
+				key,
+				new TextEncoder().encode(raw),
+			);
+			const expected = `sha256=${Array.from(new Uint8Array(sig))
+				.map((b) => b.toString(16).padStart(2, "0"))
+				.join("")}`;
+			// Constant-time compare (equal length required).
+			const a = new TextEncoder().encode(expected);
+			const b = new TextEncoder().encode(sigHeader);
+			let diff = a.length ^ b.length;
+			for (let i = 0; i < a.length && i < b.length; i++) diff |= a[i] ^ b[i];
+			if (diff !== 0) {
+				return c.json({ error: "Invalid signature" }, 401);
+			}
+		}
+
+		// Dedupe redeliveries.
+		if (delivery) {
+			if (seenGithubDeliveries.has(delivery)) {
+				return c.json({ ok: true, dedup: true });
+			}
+			seenGithubDeliveries.add(delivery);
+			if (seenGithubDeliveries.size > 1000) seenGithubDeliveries.clear();
+		}
+
+		let payload: Record<string, unknown> = {};
+		try {
+			payload = JSON.parse(raw) as Record<string, unknown>;
+		} catch {
+			/* non-JSON ping */
+		}
+		const summary = summarizeGithubWebhook(eventType, payload);
+		if (summary) pushGithubEvent("webhook", { type: eventType, ...summary });
+		return c.json({ ok: true });
 	});
 
 	// One-time migration: copy current effective secrets (env + credentials.json

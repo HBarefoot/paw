@@ -1,10 +1,19 @@
 import type { ToolDefinition, ToolResult } from "../../types/message.js";
+import type { GitHubApprovals } from "./approvals.js";
 import type { GitHubClient } from "./client.js";
 import type { CommitFileInput } from "./types.js";
 
 export interface GitHubToolDeps {
 	/** Records a security-audit entry for write actions (action, details). */
 	audit?: (action: string, details: Record<string, unknown>) => void;
+	/** Approval queue for gated (irreversible) actions. */
+	approvals?: GitHubApprovals;
+}
+
+/** Best-effort requester id from the injected session, for the audit trail. */
+function requesterOf(input: Record<string, unknown>): string {
+	const sid = input.__sessionId;
+	return typeof sid === "string" && sid ? sid : "agent";
 }
 
 /**
@@ -388,6 +397,182 @@ export function createGitHubTools(
 		},
 	};
 
+	// --- Gated actions: enqueue for human approval, do NOT execute ---
+
+	const queueUnavailable: ToolResult = {
+		content:
+			"The GitHub approval queue is unavailable, so this action cannot be requested.",
+		is_error: true,
+	};
+
+	const mergePr: ToolDefinition = {
+		name: "github_merge_pr",
+		description:
+			"Request to merge a pull request. This does NOT merge immediately — it queues the merge for one-click human approval on the GitHub page. Returns the pending-action id.",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				number: { type: "number", description: "Pull request number." },
+				method: {
+					type: "string",
+					enum: ["merge", "squash", "rebase"],
+					description: "Merge method (default: squash).",
+				},
+			},
+			required: ["repo", "number"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			if (!deps.approvals) return queueUnavailable;
+			try {
+				const repo = input.repo as string;
+				const number = input.number as number;
+				const method = (input.method as string) ?? "squash";
+				const id = deps.approvals.enqueue(
+					"merge_pr",
+					repo,
+					`Merge PR #${number} in ${repo} (${method})`,
+					{ number, method },
+					requesterOf(input),
+				);
+				return {
+					content: JSON.stringify({
+						queued: true,
+						id,
+						message:
+							"Merge queued for human approval on the GitHub page. It will NOT merge until approved.",
+					}),
+				};
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const deleteBranch: ToolDefinition = {
+		name: "github_delete_branch",
+		description:
+			"Request to delete a branch. Queues for human approval (does not delete immediately). Refuses the default/protected branch.",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				branch: { type: "string", description: "Branch name to delete." },
+			},
+			required: ["repo", "branch"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			if (!deps.approvals) return queueUnavailable;
+			try {
+				const repo = input.repo as string;
+				const branch = input.branch as string;
+				const id = deps.approvals.enqueue(
+					"delete_branch",
+					repo,
+					`Delete branch "${branch}" in ${repo}`,
+					{ branch },
+					requesterOf(input),
+				);
+				return {
+					content: JSON.stringify({
+						queued: true,
+						id,
+						message: "Branch deletion queued for human approval.",
+					}),
+				};
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const closeIssue: ToolDefinition = {
+		name: "github_close_issue",
+		description:
+			"Request to close an issue. Queues for human approval (does not close immediately).",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				number: { type: "number", description: "Issue number." },
+			},
+			required: ["repo", "number"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			if (!deps.approvals) return queueUnavailable;
+			try {
+				const repo = input.repo as string;
+				const number = input.number as number;
+				const id = deps.approvals.enqueue(
+					"close_issue",
+					repo,
+					`Close issue #${number} in ${repo}`,
+					{ number },
+					requesterOf(input),
+				);
+				return {
+					content: JSON.stringify({
+						queued: true,
+						id,
+						message: "Issue close queued for human approval.",
+					}),
+				};
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const dispatchWorkflow: ToolDefinition = {
+		name: "github_dispatch_workflow",
+		description:
+			"Request to trigger a GitHub Actions workflow (workflow_dispatch). Queues for human approval (does not run immediately).",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				workflowId: {
+					type: "string",
+					description: "Workflow file name (e.g. ci.yml) or numeric id.",
+				},
+				ref: { type: "string", description: "Git ref (branch/tag) to run on." },
+				inputs: {
+					type: "object",
+					description: "Optional workflow inputs (string values).",
+				},
+			},
+			required: ["repo", "workflowId", "ref"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			if (!deps.approvals) return queueUnavailable;
+			try {
+				const repo = input.repo as string;
+				const workflowId = input.workflowId as string;
+				const ref = input.ref as string;
+				const id = deps.approvals.enqueue(
+					"dispatch_workflow",
+					repo,
+					`Run workflow "${workflowId}" on ${ref} in ${repo}`,
+					{ workflowId, ref, inputs: input.inputs },
+					requesterOf(input),
+				);
+				return {
+					content: JSON.stringify({
+						queued: true,
+						id,
+						message: "Workflow dispatch queued for human approval.",
+					}),
+				};
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
 	return [
 		listRepos,
 		readFile,
@@ -399,5 +584,9 @@ export function createGitHubTools(
 		openPr,
 		updatePr,
 		comment,
+		mergePr,
+		deleteBranch,
+		closeIssue,
+		dispatchWorkflow,
 	];
 }

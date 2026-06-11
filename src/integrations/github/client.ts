@@ -569,4 +569,96 @@ export class GitHubClient {
 			);
 		}
 	}
+
+	// --- Phase 3: gated actions (executed only after human approval) ---
+
+	async mergePr(
+		fullName: string,
+		number: number,
+		method: "merge" | "squash" | "rebase" = "squash",
+	): Promise<{ merged: boolean; sha?: string }> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			const res = await octokit.rest.pulls.merge({
+				owner,
+				repo,
+				pull_number: number,
+				merge_method: method,
+			});
+			return { merged: res.data.merged, sha: res.data.sha };
+		} catch (err) {
+			throw this.toError(
+				`GitHub pulls.merge ${fullName}#${number} failed`,
+				err,
+			);
+		}
+	}
+
+	async deleteBranch(
+		fullName: string,
+		branch: string,
+	): Promise<{ deleted: boolean }> {
+		// Same guard as writes: never delete the default or a protected branch.
+		await this.assertBranchWritable(fullName, branch);
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			await octokit.rest.git.deleteRef({
+				owner,
+				repo,
+				ref: `heads/${branch}`,
+			});
+			return { deleted: true };
+		} catch (err) {
+			throw this.toError(`GitHub deleteRef ${fullName}#${branch} failed`, err);
+		}
+	}
+
+	async closeIssue(
+		fullName: string,
+		number: number,
+	): Promise<{ closed: boolean }> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			await octokit.rest.issues.update({
+				owner,
+				repo,
+				issue_number: number,
+				state: "closed",
+			});
+			return { closed: true };
+		} catch (err) {
+			throw this.toError(
+				`GitHub issues.update ${fullName}#${number} failed`,
+				err,
+			);
+		}
+	}
+
+	async dispatchWorkflow(
+		fullName: string,
+		workflowId: string,
+		ref: string,
+		inputs?: Record<string, string>,
+	): Promise<{ dispatched: boolean }> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			await octokit.rest.actions.createWorkflowDispatch({
+				owner,
+				repo,
+				workflow_id: workflowId,
+				ref,
+				...(inputs ? { inputs } : {}),
+			});
+			return { dispatched: true };
+		} catch (err) {
+			throw this.toError(
+				`GitHub createWorkflowDispatch ${fullName} (${workflowId}) failed`,
+				err,
+			);
+		}
+	}
 }

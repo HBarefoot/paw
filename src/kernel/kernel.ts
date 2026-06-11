@@ -93,6 +93,9 @@ export class Kernel {
 	private githubClient:
 		| import("../integrations/github/client.js").GitHubClient
 		| null = null;
+	private githubApprovalsInstance:
+		| import("../integrations/github/approvals.js").GitHubApprovals
+		| null = null;
 	private skillManager: SkillManager;
 	private agentRegistry: AgentRegistry;
 	private agentDepths = new Map<string, number>();
@@ -525,6 +528,9 @@ export class Kernel {
 				const { createGitHubTools } = await import(
 					"../integrations/github/tools.js"
 				);
+				const { GitHubApprovals } = await import(
+					"../integrations/github/approvals.js"
+				);
 				const { AuditLogger } = await import("../security/audit-log.js");
 				const client = new GitHubClient(gh);
 				this.githubClient = client;
@@ -535,10 +541,14 @@ export class Kernel {
 					permissions: ["github:read", "github:write", "github:admin"],
 				});
 				const ghAudit = new AuditLogger(this.db);
+				const ghAuditFn = (
+					action: string,
+					details: Record<string, unknown>,
+				) => ghAudit.log(action, null, details);
+				const approvals = new GitHubApprovals(this.db, client, ghAuditFn);
+				this.githubApprovalsInstance = approvals;
 				this.toolRegistry.register(
-					createGitHubTools(client, {
-						audit: (action, details) => ghAudit.log(action, null, details),
-					}),
+					createGitHubTools(client, { audit: ghAuditFn, approvals }),
 				);
 				this.logger.info("GitHub integration initialized", {
 					repoAllowlist: gh.repoAllowlist.length,
@@ -2030,6 +2040,13 @@ export class Kernel {
 	/** GitHub App client (null if disabled or not configured). */
 	get github(): import("../integrations/github/client.js").GitHubClient | null {
 		return this.githubClient;
+	}
+
+	/** GitHub approval queue for gated actions (null if disabled). */
+	get githubApprovals():
+		| import("../integrations/github/approvals.js").GitHubApprovals
+		| null {
+		return this.githubApprovalsInstance;
 	}
 
 	cancelSession(sessionId: string): boolean {

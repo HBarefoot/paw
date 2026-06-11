@@ -504,6 +504,25 @@ function runMigrations(db: Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_canvas_submissions_action ON canvas_submissions(action_id, created_at DESC);
+
+    -- GitHub: irreversible/outward-facing actions (merge, delete branch, close
+    -- issue, dispatch workflow) are queued here for one-click human approval
+    -- rather than executed by the agent. Mirrors the canvas_submissions inbox.
+    CREATE TABLE IF NOT EXISTS github_pending_actions (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,                     -- merge_pr | delete_branch | close_issue | dispatch_workflow
+      repo TEXT NOT NULL,                        -- owner/repo
+      summary TEXT NOT NULL,                     -- human-readable description
+      params_json TEXT NOT NULL DEFAULT '{}',    -- action parameters
+      status TEXT NOT NULL DEFAULT 'pending',    -- pending | executed | rejected | failed
+      requested_by TEXT,                         -- session/agent that queued it
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      decided_at TEXT,
+      decided_by TEXT,
+      result_json TEXT                           -- execution result or error
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_github_pending_status ON github_pending_actions(status, created_at DESC);
   `);
 
 	// Brand kit: a library of brand profiles. One is `active` at a time and its
