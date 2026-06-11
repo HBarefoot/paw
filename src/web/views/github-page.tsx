@@ -1,5 +1,6 @@
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import type { PendingActionRow } from "../../integrations/github/approvals.js";
 import type { ConnectionStatus } from "../../integrations/github/types.js";
 import { Layout } from "./layout.js";
 
@@ -13,6 +14,8 @@ export interface GitHubPageProps {
 	webhookSecretInVault: boolean;
 	vaultEnabled: boolean;
 	status: ConnectionStatus | null;
+	pending: PendingActionRow[];
+	recent: PendingActionRow[];
 }
 
 function StatusBadge({ status }: { status: ConnectionStatus | null }) {
@@ -44,6 +47,8 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 		webhookSecretInVault,
 		vaultEnabled,
 		status,
+		pending,
+		recent,
 	} = props;
 
 	const rate = status?.rateLimit;
@@ -111,6 +116,78 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 					</button>
 					<span id="gh-test-result" class="text-sm text-muted" />
 				</div>
+			</div>
+
+			{/* Approvals inbox — the "with control" surface */}
+			<div class="card mb-md">
+				<h3 style="display:flex;align-items:center;gap:8px">
+					Approvals
+					<span id="gh-pending-count" class="badge">
+						{pending.length}
+					</span>
+				</h3>
+				<p class="text-sm text-muted">
+					The agent queues irreversible actions (merge, delete branch, close
+					issue, run workflow) here instead of doing them. Approve to execute,
+					or reject. Updates live.
+				</p>
+				<div id="gh-pending-list">
+					{pending.length === 0 && (
+						<p class="text-sm text-muted" id="gh-pending-empty">
+							Nothing waiting for approval.
+						</p>
+					)}
+					{pending.map((a) => (
+						<div
+							key={a.id}
+							class="gh-pending-item"
+							data-id={a.id}
+							style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid var(--border,#333);border-radius:8px;margin-bottom:8px"
+						>
+							<div>
+								<div>
+									<span class="badge">{a.action}</span>{" "}
+									<strong>{a.summary}</strong>
+								</div>
+								<div class="text-sm text-muted">
+									{a.repo} · requested {a.created_at}
+								</div>
+							</div>
+							<div style="display:flex;gap:6px;flex-shrink:0">
+								<button
+									type="button"
+									class="btn btn-primary"
+									data-id={a.id}
+									onclick="ghApprove(this.dataset.id)"
+								>
+									Approve
+								</button>
+								<button
+									type="button"
+									class="btn btn-secondary"
+									data-id={a.id}
+									onclick="ghReject(this.dataset.id)"
+								>
+									Reject
+								</button>
+							</div>
+						</div>
+					))}
+				</div>
+				{recent.length > 0 && (
+					<details style="margin-top:8px">
+						<summary class="text-sm text-muted">
+							Recent decisions ({recent.length})
+						</summary>
+						<ul class="text-sm" style="line-height:1.8;margin-top:6px">
+							{recent.map((a) => (
+								<li key={a.id}>
+									<span class="badge">{a.status}</span> {a.action} — {a.summary}
+								</li>
+							))}
+						</ul>
+					</details>
+				)}
 			</div>
 
 			{/* Secrets status */}
@@ -254,6 +331,74 @@ async function ghSaveSettings() {
     setTimeout(function(){ window.location.reload(); }, 500);
   } catch (e) { pawModal.alert("Save failed", String(e)); }
 }
+
+// --- Approvals inbox (live) ---
+function ghEsc(s) {
+  return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function ghRenderPending(items) {
+  var list = document.getElementById("gh-pending-list");
+  var count = document.getElementById("gh-pending-count");
+  if (count) count.textContent = items.length;
+  if (!list) return;
+  if (items.length === 0) {
+    list.innerHTML = '<p class="text-sm text-muted">Nothing waiting for approval.</p>';
+    return;
+  }
+  list.innerHTML = items.map(function(a) {
+    return '<div class="gh-pending-item" data-id="' + ghEsc(a.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid var(--border,#333);border-radius:8px;margin-bottom:8px">'
+      + '<div><div><span class="badge">' + ghEsc(a.action) + '</span> <strong>' + ghEsc(a.summary) + '</strong></div>'
+      + '<div class="text-sm text-muted">' + ghEsc(a.repo) + ' · requested ' + ghEsc(a.created_at) + '</div></div>'
+      + '<div style="display:flex;gap:6px;flex-shrink:0">'
+      + '<button type="button" class="btn btn-primary" data-id="' + ghEsc(a.id) + '" onclick="ghApprove(this.dataset.id)">Approve</button>'
+      + '<button type="button" class="btn btn-secondary" data-id="' + ghEsc(a.id) + '" onclick="ghReject(this.dataset.id)">Reject</button>'
+      + '</div></div>';
+  }).join("");
+}
+async function ghRefreshPending() {
+  try {
+    var res = await fetch("/api/github/pending");
+    var data = await res.json().catch(function(){ return {}; });
+    ghRenderPending(data.pending || []);
+  } catch (e) { /* ignore transient */ }
+}
+async function ghApprove(id) {
+  var ok = await pawModal.confirm("Approve action", "Execute this GitHub action now?", { confirmLabel: "Approve" });
+  if (!ok) return;
+  try {
+    var res = await fetch("/api/github/pending/" + encodeURIComponent(id) + "/approve", { method: "POST" });
+    var data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) { pawModal.alert("Approve failed", data.error || ("HTTP " + res.status)); return; }
+    if (data.status === "failed") { pawModal.alert("Action failed", (data.result && data.result.error) || "Execution failed."); }
+    ghRefreshPending();
+  } catch (e) { pawModal.alert("Approve failed", String(e)); }
+}
+async function ghReject(id) {
+  var ok = await pawModal.confirm("Reject action", "Discard this pending action?", { danger: true, confirmLabel: "Reject" });
+  if (!ok) return;
+  try {
+    var res = await fetch("/api/github/pending/" + encodeURIComponent(id) + "/reject", { method: "POST" });
+    if (!res.ok) { var d = await res.json().catch(function(){ return {}; }); pawModal.alert("Reject failed", d.error || ("HTTP " + res.status)); return; }
+    ghRefreshPending();
+  } catch (e) { pawModal.alert("Reject failed", String(e)); }
+}
+// Poll the live event feed; refresh the inbox whenever something changes.
+(function ghPoll() {
+  var since = 0;
+  async function tick() {
+    try {
+      var res = await fetch("/api/github/events?since=" + since);
+      var data = await res.json().catch(function(){ return {}; });
+      var events = (data && data.events) || [];
+      if (events.length > 0) {
+        since = events[events.length - 1].id;
+        ghRefreshPending();
+      }
+    } catch (e) { /* ignore */ }
+    setTimeout(tick, 5000);
+  }
+  setTimeout(tick, 5000);
+})();
 </script>`)}
 		</Layout>
 	);

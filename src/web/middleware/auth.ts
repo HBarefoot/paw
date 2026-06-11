@@ -22,6 +22,8 @@ const PUBLIC_PREFIXES = [
 	// Brand identity + app-chrome theme for the console + pre-auth screens.
 	"/api/brand/ui",
 	"/api/brand/theme.css",
+	// GitHub App webhook — authenticated by HMAC signature, not a session.
+	"/api/github/webhook",
 ];
 
 function isPublicRoute(path: string): boolean {
