@@ -1098,6 +1098,45 @@ export function createWebApp(
 		return c.json({ saved: true, restartRequired: true });
 	});
 
+	// Save the GitHub App private key straight to the vault, normalized at save
+	// time (repairs newline-stripped / PKCS#1 pastes → clean PKCS#8). A dedicated
+	// multi-line field avoids the single-line vault input that flattens the PEM.
+	app.post("/api/github/private-key", async (c) => {
+		if (!kernel.vault.enabled)
+			return c.json({ error: "Vault is disabled (PAW_VAULT_KEY unset)" }, 400);
+		const body = await c.req
+			.json<{ key?: string }>()
+			.catch(() => ({}) as { key?: string });
+		const raw = (body.key ?? "").trim();
+		if (!raw) return c.json({ error: "key is required" }, 400);
+		const { normalizePrivateKey, isValidPrivateKey } = await import(
+			"../integrations/github/private-key.js"
+		);
+		if (!isValidPrivateKey(raw)) {
+			return c.json(
+				{
+					error:
+						"That doesn't parse as an RSA private key. Paste the full contents of the .pem file from GitHub, including the BEGIN/END lines.",
+				},
+				400,
+			);
+		}
+		const session = c.get("session") as { user_id: number } | undefined;
+		kernel.vault.set(
+			"github.appPrivateKey",
+			normalizePrivateKey(raw),
+			"github",
+			String(session?.user_id ?? "web"),
+		);
+		authManager.audit.log(
+			"github.private_key.set",
+			session?.user_id ?? null,
+			{},
+			getClientIp(c),
+		);
+		return c.json({ saved: true, restartRequired: true });
+	});
+
 	// --- GitHub control plane (Phase 3): approvals inbox + live event feed ---
 
 	// In-memory event feed for the /github UI (admin-only single pane). Fed by
