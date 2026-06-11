@@ -525,6 +525,7 @@ export class Kernel {
 				const { createGitHubTools } = await import(
 					"../integrations/github/tools.js"
 				);
+				const { AuditLogger } = await import("../security/audit-log.js");
 				const client = new GitHubClient(gh);
 				this.githubClient = client;
 				this.sandbox.registerManifest({
@@ -533,7 +534,12 @@ export class Kernel {
 					description: "GitHub App integration",
 					permissions: ["github:read", "github:write", "github:admin"],
 				});
-				this.toolRegistry.register(createGitHubTools(client));
+				const ghAudit = new AuditLogger(this.db);
+				this.toolRegistry.register(
+					createGitHubTools(client, {
+						audit: (action, details) => ghAudit.log(action, null, details),
+					}),
+				);
 				this.logger.info("GitHub integration initialized", {
 					repoAllowlist: gh.repoAllowlist.length,
 				});

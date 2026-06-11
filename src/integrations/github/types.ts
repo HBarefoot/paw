@@ -30,6 +30,31 @@ export interface RepoSummary {
 	url: string;
 }
 
+export interface BranchSummary {
+	name: string;
+	protected: boolean;
+	sha: string;
+}
+
+export interface PrSummary {
+	number: number;
+	title: string;
+	state: string;
+	draft: boolean;
+	head: string;
+	base: string;
+	url: string;
+	mergeable?: boolean | null;
+	author?: string;
+}
+
+/** A file to create/update in a single atomic commit. */
+export interface CommitFileInput {
+	path: string;
+	/** UTF-8 text content. */
+	content: string;
+}
+
 export interface RateLimitInfo {
 	limit: number;
 	remaining: number;
