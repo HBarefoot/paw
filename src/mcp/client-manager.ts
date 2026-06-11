@@ -56,13 +56,13 @@ function isSafeMcpIdentifier(name: string): boolean {
 	return true;
 }
 
-interface MCPTool {
+export interface MCPTool {
 	name: string;
 	description?: string;
 	inputSchema?: Record<string, unknown>;
 }
 
-interface MCPClient {
+export interface MCPClient {
 	connect(transport: unknown): Promise<void>;
 	close(): Promise<void>;
 	listTools(): Promise<{ tools: MCPTool[] }>;
@@ -100,6 +100,22 @@ export class MCPClientManager {
 		this.allowedCommands = allowedCommands
 			? new Set(allowedCommands)
 			: DEFAULT_ALLOWED_COMMANDS;
+	}
+
+	/**
+	 * Test seam: register a pre-connected server backed by a fake {@link MCPClient}
+	 * so the discovery / namespacing / tool-wrapping / error paths can be exercised
+	 * without the real MCP SDK transport. Not used in production.
+	 */
+	registerTestServer(name: string, client: MCPClient): void {
+		this.servers.set(name, {
+			name,
+			config: { transport: "stdio" } as MCPServerConfig,
+			client,
+			transport: null,
+			tools: [],
+			connected: true,
+		});
 	}
 
 	/**

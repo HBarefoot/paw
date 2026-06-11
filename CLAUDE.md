@@ -23,6 +23,12 @@ bun run lint             # Lint with Biome
 bun run format           # Format with Biome
 ```
 
+## Testing
+
+Every fix-PR ships a regression test that fails on the pre-fix code. No exceptions.
+
+Tests mirror `src/` under `tests/` and must pass from a clean checkout regardless of the developer's environment — scrub `PAW_*` env vars (and redirect `PAW_CONFIG_DIR` to a temp dir) via `tests/helpers/env.ts` for anything that reads config/credentials/the vault.
+
 ## Architecture
 
 **Kernel-centric event-driven design.** The Kernel (`src/kernel/kernel.ts`) is the central orchestrator that boots all subsystems: AI providers, plugin loader, event bus, memory store, cron scheduler, web server, and MCP client manager.
