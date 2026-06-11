@@ -335,6 +335,17 @@ function runMigrations(db: Database): void {
 		// Column already exists
 	}
 
+	// Canvas form actions: a 'tool' action type can require an authenticated
+	// session before the public receiver runs it (financial/destructive
+	// mutations); strapi/hubspot lead capture stays public (require_auth = 0).
+	try {
+		db.exec(
+			"ALTER TABLE canvas_actions ADD COLUMN require_auth INTEGER NOT NULL DEFAULT 0",
+		);
+	} catch {
+		// Column already exists
+	}
+
 	// Usage/cost tracking
 	db.exec(`
     CREATE TABLE IF NOT EXISTS usage_log (
@@ -479,7 +490,7 @@ function runMigrations(db: Database): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       description TEXT DEFAULT '',
-      type TEXT NOT NULL,                 -- 'strapi' | 'hubspot'
+      type TEXT NOT NULL,                 -- 'strapi' | 'hubspot' | 'tool'
       config_json TEXT NOT NULL DEFAULT '{}',
       field_map_json TEXT NOT NULL DEFAULT '{}',
       redirect_url TEXT,

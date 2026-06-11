@@ -645,8 +645,11 @@ export function createWebApp(
 
 	// --- Public canvas form receiver (before auth — canvas pages are the public face) ---
 	// A canvas <form> posts here; the bound action routes the (field-allowlisted)
-	// payload to its declared destination (Strapi/HubSpot). Never runs arbitrary
-	// skills. Abuse is bounded by rate-limit + honeypot + field allowlist.
+	// payload to its declared destination (Strapi / HubSpot / a single allowlisted
+	// tool). Never runs arbitrary skills — a 'tool' action may invoke ONLY the one
+	// tool named in its config, and still goes through the sandbox permission check.
+	// Abuse is bounded by rate-limit + honeypot + field allowlist; sensitive actions
+	// set require_auth so the (public) receiver refuses anonymous submits.
 	const formRateLimit = new Map<string, { count: number; resetAt: number }>();
 	function checkFormRate(
 		key: string,
@@ -682,6 +685,7 @@ export function createWebApp(
 					redirect_url: string | null;
 					honeypot_field: string | null;
 					secret: string | null;
+					require_auth: number;
 			  }
 			| undefined;
 		if (!action) return c.json({ error: "Unknown form" }, 404, FORM_CORS);
@@ -692,6 +696,24 @@ export function createWebApp(
 			!checkFormRate(`ip:${actionId}:${ip}`, 20, 60_000)
 		) {
 			return c.json({ error: "Too many submissions" }, 429, FORM_CORS);
+		}
+
+		// Tiered trust: this receiver is PUBLIC (pre-auth), so an action flagged
+		// require_auth must present a valid session cookie or bearer token before
+		// it runs. This is what lets a 'tool' action safely drive mutations from an
+		// (authed) app space without exposing them to the open internet.
+		if (action.require_auth) {
+			const sessionToken = getCookie(c, "paw_session");
+			const session = sessionToken
+				? authManager.validateSession(sessionToken)
+				: null;
+			const authHeader = c.req.header("Authorization");
+			const bearerOk =
+				!!config.web.authToken &&
+				authHeader === `Bearer ${config.web.authToken}`;
+			if (!session && !bearerOk) {
+				return c.json({ error: "Authentication required" }, 401, FORM_CORS);
+			}
 		}
 
 		// Parse JSON or form-encoded body
@@ -757,6 +779,7 @@ export function createWebApp(
 		try {
 			const cfg = JSON.parse(action.config_json || "{}") as {
 				contentType?: string;
+				tool?: string;
 			};
 			if (action.type === "strapi") {
 				if (!kernel.strapi) throw new Error("Strapi not configured");
@@ -767,6 +790,20 @@ export function createWebApp(
 				if (!kernel.hubspotClient) throw new Error("HubSpot not configured");
 				const res = await kernel.hubspotClient.createContact(mapped);
 				targetRef = `hubspot:${res.id}`;
+				status = "routed";
+			} else if (action.type === "tool") {
+				// Run the ONE tool this action declared, with the mapped fields as
+				// input. ToolRegistry.execute applies the sandbox permission check,
+				// so a denied tool fails here rather than running unchecked.
+				const toolName = String(cfg.tool ?? "");
+				if (!toolName) throw new Error("tool action missing config.tool");
+				const res = await kernel.toolRegistryPublic.execute(toolName, mapped);
+				if (res.is_error) {
+					throw new Error(
+						typeof res.content === "string" ? res.content : "tool failed",
+					);
+				}
+				targetRef = `tool:${toolName}`;
 				status = "routed";
 			} else {
 				throw new Error(`Unknown action type: ${action.type}`);

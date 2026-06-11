@@ -5,7 +5,7 @@ interface ActionToolsConfig {
 	database: Database;
 }
 
-const ACTION_TYPES = ["strapi", "hubspot"] as const;
+const ACTION_TYPES = ["strapi", "hubspot", "tool"] as const;
 
 /**
  * Tools that let the agent wire a canvas page's form/button to a real backend.
@@ -34,13 +34,19 @@ export function createActionTools(config: ActionToolsConfig): ToolDefinition[] {
 				type: {
 					type: "string",
 					enum: [...ACTION_TYPES],
-					description: "'strapi' (CMS content-type) or 'hubspot' (CRM contact)",
+					description:
+						"'strapi' (CMS content-type), 'hubspot' (CRM contact), or 'tool' (run a single allowlisted built-in tool with the mapped fields as its input).",
 				},
 				config: {
 					type: "object",
 					description:
-						"Target config. strapi: { contentType: 'leads' }. hubspot: {} (uses configured token).",
+						"Target config. strapi: { contentType: 'leads' }. hubspot: {} (uses configured token). tool: { tool: 'the_tool_name' } — the single tool this action may invoke (still subject to the sandbox permission check).",
 					additionalProperties: true,
+				},
+				requireAuth: {
+					type: "boolean",
+					description:
+						"Require an authenticated session to submit. Defaults to TRUE for 'tool' actions (the public receiver refuses anonymous submits) and FALSE for strapi/hubspot lead capture. Set true for any mutation touching money/PII.",
 				},
 				fieldMap: {
 					type: "object",
@@ -85,10 +91,23 @@ export function createActionTools(config: ActionToolsConfig): ToolDefinition[] {
 					is_error: true,
 				};
 			}
+			if (type === "tool" && !cfg.tool) {
+				return {
+					content:
+						"Error: tool actions require config.tool (the single tool name to invoke)",
+					is_error: true,
+				};
+			}
+			// Safe default: 'tool' actions require auth unless explicitly opted out;
+			// strapi/hubspot lead capture is public by default.
+			const requireAuth =
+				typeof input.requireAuth === "boolean"
+					? input.requireAuth
+					: type === "tool";
 			const id = crypto.randomUUID().replace(/-/g, "");
 			db.run(
-				`INSERT INTO canvas_actions (id, name, description, type, config_json, field_map_json, redirect_url, honeypot_field)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO canvas_actions (id, name, description, type, config_json, field_map_json, redirect_url, honeypot_field, require_auth)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				[
 					id,
 					String(input.name),
@@ -98,6 +117,7 @@ export function createActionTools(config: ActionToolsConfig): ToolDefinition[] {
 					JSON.stringify(fieldMap),
 					(input.redirectUrl as string) ?? null,
 					(input.honeypotField as string) ?? null,
+					requireAuth ? 1 : 0,
 				],
 			);
 			const submitUrl = `/api/forms/${id}`;
