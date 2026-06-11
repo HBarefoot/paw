@@ -5,6 +5,7 @@ import {
 	rmSync,
 	existsSync,
 	readFileSync,
+	readdirSync,
 } from "node:fs";
 import { join } from "node:path";
 import { createCanvasTools } from "../../src/tools/canvas-tools.js";
@@ -65,6 +66,15 @@ describe("canvas tools", () => {
 		await getTool("canvas_write").handler({ path: "test.txt", content: "v1" });
 		await getTool("canvas_write").handler({ path: "test.txt", content: "v2" });
 		expect(readFileSync(join(CANVAS_ROOT, "test.txt"), "utf-8")).toBe("v2");
+	});
+
+	test("canvas_write is atomic — leaves no .tmp file behind", async () => {
+		const big = "x".repeat(200_000);
+		await getTool("canvas_write").handler({ path: "data.js", content: big });
+		expect(readFileSync(join(CANVAS_ROOT, "data.js"), "utf-8")).toBe(big);
+		// the temp sibling must have been renamed away, not left in place
+		const leftovers = readdirSync(CANVAS_ROOT).filter((f) => f.includes(".tmp"));
+		expect(leftovers).toEqual([]);
 	});
 
 	// --- canvas_read ---

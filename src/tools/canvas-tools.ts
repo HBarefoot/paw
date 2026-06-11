@@ -90,7 +90,26 @@ export function createCanvasTools(config: CanvasToolsConfig): ToolDefinition[] {
 			const dir = resolve(filePath, "..");
 			mkdirSync(dir, { recursive: true });
 
-			await Bun.write(filePath, content);
+			// Atomic write: write to a temp sibling then rename into place. A page
+			// polling this file (e.g. an app-space data file refreshed on each tool
+			// call) must never read a half-written document — rename is atomic on
+			// the same filesystem. The temp name is unique per process+write so
+			// concurrent writes to the same path don't clobber each other's temp.
+			const tmp = `${filePath}.${process.pid}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+			try {
+				await Bun.write(tmp, content);
+				renameSync(tmp, filePath);
+			} catch (err) {
+				try {
+					if (existsSync(tmp)) rmSync(tmp, { force: true });
+				} catch {
+					// best-effort temp cleanup
+				}
+				return {
+					content: `Error writing file: ${err instanceof Error ? err.message : String(err)}`,
+					is_error: true,
+				};
+			}
 			return { content: JSON.stringify({ written: true, path: relPath }) };
 		},
 	};
