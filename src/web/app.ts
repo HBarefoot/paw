@@ -3018,7 +3018,7 @@ export function createWebApp(
         <p>Ask me to build something and it'll show up right here.</p>
         <div class="badges">${badgesHtml}</div>
         <div class="feed" id="feed"></div></div>
-        <script>(function(){
+        <script data-cfasync="false">(function(){
           var face=document.getElementById("face");
           var pupils=face?face.querySelectorAll(".pupil"):[];
           var busy=false, idleTimer=null, activeCount=0;
@@ -3086,7 +3086,10 @@ export function createWebApp(
           function clearWires(){ if(!wiresEl) return; wiresEl.classList.add("fade"); setTimeout(function(){ if(!busy && wiresEl){ wiresEl.innerHTML=""; drawnWires={}; wiresEl.classList.remove("fade"); } }, 700); }
           // ===== sub-agent satellites (spawned agents get their own mini face) =====
           var subOrbs={}, subByName={};
-          function saClean(s){ return String(s||"").replace(/^\[[^\]]+\]\s*/, ""); }
+          // Strip a leading "[name] " agent prefix. String ops only — a regex
+          // literal here would have its backslashes eaten by the outer template
+          // literal (\[ -> [), producing an INVALID regex in the served script.
+          function saClean(s){ s=String(s||""); if(s.charAt(0)==="["){ var e=s.indexOf("]"); if(e>0) s=s.slice(e+1); } while(s.charAt(0)===" ") s=s.slice(1); return s; }
           function drawSubWire(name, el){
             if(!wiresEl) return; var stage=document.querySelector(".stage"); if(!stage) return;
             var sr=stage.getBoundingClientRect(), mr=el.querySelector(".mini").getBoundingClientRect();
@@ -3201,10 +3204,13 @@ export function createWebApp(
               activeCount++;
               // Sub-agents: a spawn creates a satellite mini-orb; the sub-agent's own
               // tool chunks (prefixed "[name] ") update that orb's current action.
-              var spawnName = (m.summary && m.summary.indexOf("Spawning agent")===0) ? m.summary.replace(/^Spawning agent:\s*/,"").trim() : null;
-              var prefix = (m.toolName||"").match(/^\[([^\]]+)\]/);
+              // String ops only (no regex literals — backslashes get eaten by the
+              // outer template literal, which broke production).
+              var spawnName = (m.summary && m.summary.indexOf("Spawning agent")===0) ? m.summary.slice(m.summary.indexOf(":")+1).trim() : null;
+              var tn=m.toolName||"", prefixName=null;
+              if(tn.charAt(0)==="["){ var pe=tn.indexOf("]"); if(pe>1) prefixName=tn.slice(1,pe); }
               if(spawnName){ createSubOrb(m.toolId, spawnName, m.task); }
-              if(prefix){ updateSubOrb(prefix[1], saClean(m.summary||m.toolName)); }
+              if(prefixName){ updateSubOrb(prefixName, saClean(m.summary||m.toolName)); }
               faceWorking();
               if(!prefix) drawWire(key); // skip main wires for sub-agent tools — their mini-orb shows the work
               var ns=nodesFor(key), ang=null;
