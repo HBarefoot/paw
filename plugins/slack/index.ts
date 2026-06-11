@@ -1,17 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { App } from "@slack/bolt";
-import type { ChannelPlugin, PluginContext } from "../../src/types/plugin.js";
 import type {
 	InboundMessage,
 	OutboundMessage,
 } from "../../src/types/message.js";
+import type { ChannelPlugin, PluginContext } from "../../src/types/plugin.js";
 import { createSlackTools } from "./tools.js";
-import { randomUUID } from "node:crypto";
 
 export default class SlackPlugin implements ChannelPlugin {
 	readonly name = "slack";
 	private app: App | null = null;
 	private ctx: PluginContext | null = null;
 	private unsubOutbound: (() => void) | null = null;
+	private unsubNotify: (() => void) | null = null;
 
 	async register(ctx: PluginContext): Promise<void> {
 		this.ctx = ctx;
@@ -82,6 +83,39 @@ export default class SlackPlugin implements ChannelPlugin {
 				}
 			},
 		);
+
+		// Proactive notifications: post every notification:created to the
+		// configured channel (e.g. #ai-operations) so the agent reaches the user
+		// even when they're not in the console. Bot must be a member of the channel.
+		const notifyChannel =
+			config.notifyChannel || process.env.SLACK_NOTIFY_CHANNEL;
+		if (notifyChannel) {
+			this.unsubNotify = ctx.bus.on("notification:created", async (n) => {
+				if (!this.app) return;
+				const emoji =
+					n.level === "error"
+						? "❌"
+						: n.level === "warning"
+							? "⚠️"
+							: n.level === "success"
+								? "✅"
+								: "ℹ️";
+				let text = `${emoji} *${n.title}*`;
+				if (n.body) text += `\n${n.body}`;
+				if (n.url) text += `\n${n.url}`;
+				try {
+					await this.app.client.chat.postMessage({
+						channel: notifyChannel,
+						text,
+						unfurl_links: false,
+					});
+				} catch (err) {
+					ctx.logger.error("Failed to post Slack notification", {
+						error: String(err),
+					});
+				}
+			});
+		}
 	}
 
 	async start(): Promise<void> {
@@ -92,6 +126,7 @@ export default class SlackPlugin implements ChannelPlugin {
 
 	async stop(): Promise<void> {
 		this.unsubOutbound?.();
+		this.unsubNotify?.();
 		if (this.app) {
 			await this.app.stop();
 			this.app = null;

@@ -64,6 +64,8 @@ export interface EventMap {
 		id: string;
 		kind: string;
 		title: string;
+		body?: string;
+		url?: string;
 		level: string;
 	};
 }

@@ -66,15 +66,7 @@ export function startGitHubReactor(deps: GitHubReactorDeps): () => void {
 		try {
 			if (await isSelf(evt.sender)) return;
 			const n = notificationForEvent(evt);
-			if (n) {
-				const id = deps.notifications.add(n);
-				await deps.bus.emit("notification:created", {
-					id,
-					kind: n.kind ?? "github",
-					title: n.title,
-					level: n.level ?? "info",
-				});
-			}
+			if (n) deps.notifications.add(n);
 			if (deps.autoInvestigateCi) await maybeInvestigateCi(deps, evt);
 		} catch (err) {
 			deps.logger?.warn("GitHub reactor error", { error: String(err) });

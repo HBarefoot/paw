@@ -2932,6 +2932,10 @@ export function createWebApp(
           @keyframes ambientglow { 0%,100%{ box-shadow: 0 0 0 1px #f59e0b, 0 0 14px -2px #f59e0b; } 50%{ box-shadow: 0 0 0 1px #f59e0b, 0 0 22px 0 #f59e0b; } }
           .face.attentive { animation: attentivebob 2.4s ease-in-out infinite; }
           @keyframes attentivebob { 0%,100%{ transform: translateY(0); } 50%{ transform: translateY(-3px); } }
+          .speech { position:absolute; left:50%; top:-14px; transform:translate(-50%,-8px); max-width:280px; padding:9px 13px; border-radius:14px; background:var(--card,#15161c); color:var(--title,#e8e8ee); border:1px solid var(--line,#2a2b33); box-shadow:0 10px 30px -10px rgba(0,0,0,.5); font-size:13px; line-height:1.35; text-align:center; cursor:pointer; opacity:0; pointer-events:none; transition:opacity .35s ease, transform .35s ease; z-index:6; }
+          .speech.show { opacity:1; transform:translate(-50%,0); pointer-events:auto; }
+          .speech::after { content:""; position:absolute; left:50%; bottom:-6px; width:12px; height:12px; transform:translateX(-50%) rotate(45deg); background:inherit; border-right:1px solid var(--line,#2a2b33); border-bottom:1px solid var(--line,#2a2b33); }
+          .speech.error { border-color:#f87171; } .speech.warning { border-color:#f59e0b; } .speech.success { border-color:#34d399; }
           .face.working { animation: workbob 1.2s ease-in-out infinite !important; }
           .face.working .mouth { width: 22px; height: 8px; border-radius: 0 0 22px 22px; }
           .spark { position:absolute; inset:-8px; border-radius:inherit; pointer-events:none; opacity:0;
@@ -2971,7 +2975,7 @@ export function createWebApp(
           <span class="cheek l"></span><span class="cheek r"></span>
           <div class="eyes"><div class="eye"><div class="pupil"></div></div><div class="eye"><div class="pupil"></div></div></div>
           <div class="mouth"></div>
-        </div></div></div>
+        </div></div><div class="speech" id="speech" role="status"></div></div>
         <div class="title">Hi — I'm ${brandName}</div>
         <p>Ask me to build something and it'll show up right here.</p>
         <div class="badges">${badgesHtml}</div>
@@ -3045,9 +3049,23 @@ export function createWebApp(
             var face=document.querySelector(".face");
             if(face){ if(count>0) face.classList.add("attentive"); else face.classList.remove("attentive"); }
           }
+          // The avatar "speaks" a fresh notification: a soft bubble that auto-
+          // dismisses, with the face briefly attentive. Click opens the link
+          // (handled by the parent — sandboxed iframe can't open windows).
+          var speechTimer=null;
+          function speak(n){
+            var el=document.getElementById("speech"); if(!el) return;
+            el.textContent=n.title||"";
+            el.className="speech show "+(n.level||"info");
+            el.onclick=function(){ try{ window.parent.postMessage({type:"paw:notify-open",url:n.url||""},"*"); }catch(e){} };
+            var face=document.querySelector(".face"); if(face){ face.classList.add("attentive"); }
+            if(speechTimer) clearTimeout(speechTimer);
+            speechTimer=setTimeout(function(){ el.className="speech"; },7000);
+          }
           window.addEventListener("message", function(e){
             var m=e.data; if(!m) return;
             if(m.type==="paw:ambient"){ applyAmbient((m.unread||0)+(m.pendingApprovals||0)); return; }
+            if(m.type==="paw:notify"){ speak(m); return; }
             if(m.type!=="paw:tool") return;
             if(m.phase==="done"){
               // Authoritative turn-end reset: the parent says the turn is over, so

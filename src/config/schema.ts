@@ -99,6 +99,9 @@ export const configSchema = z.object({
 		botToken: z.string().default(""),
 		appToken: z.string().default(""),
 		signingSecret: z.string().default(""),
+		// Channel (id or #name) for proactive agent notifications. Empty = off.
+		// The bot must be a member of the channel.
+		notifyChannel: z.string().default(""),
 	}),
 	webPilot: z.object({
 		headless: z.boolean().default(true),

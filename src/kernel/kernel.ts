@@ -182,7 +182,11 @@ export class Kernel {
 		);
 
 		// Durable proactive-notification inbox (nav badge + canvas portrait).
-		this.notificationStoreInstance = new NotificationStore(this.db);
+		// onAdd fans every notification onto the bus so out-of-band senders
+		// (Slack #ai-operations, the avatar) get one central hook.
+		this.notificationStoreInstance = new NotificationStore(this.db, (n) => {
+			void this.bus.emit("notification:created", n);
+		});
 
 		// H-NEW-4: register a built-in "kernel" manifest so the sandbox
 		// can enforce permissions on built-in tools. Previously the
