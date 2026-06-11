@@ -553,8 +553,11 @@ const OPS_SCENE_SCRIPT = `<script data-cfasync="false">(function(){
   for (var i=0;i<nodes.length;i++){ nodes[i].base = (i/N)*Math.PI*2; nodes[i].lit = 0; nodes[i].err = 0; byKey[nodes[i].key] = nodes[i]; }
 
   var packets = [], ripples = [], spin = 0, working = false, corePulse = 0;
+  var T = 0, blinkUntil = 0, nextBlink = 1.5, sats = {};
   var TILT = 0.6;
   function project(a){ var z = Math.sin(a); return { x: CX + Math.cos(a)*R, y: CY + z*R*TILT, depth: (z+1)/2 }; }
+  function clip(s, n){ s = String(s || ""); return s.length > n ? s.slice(0, n-1) + "…" : s; }
+  function eyes(x, y, r, a){ var open = (T < blinkUntil) ? 0.18 : 1; var look = Math.sin(T*0.6)*r*0.18; ctx.fillStyle = rgba([12,10,22], 0.82*a); ctx.beginPath(); ctx.ellipse(x - r*0.34 + look, y - r*0.08, r*0.18, r*0.3*open, 0, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.ellipse(x + r*0.34 + look, y - r*0.08, r*0.18, r*0.3*open, 0, 0, Math.PI*2); ctx.fill(); }
 
   function fireTool(skill, ok){ var node = skill ? byKey[skill] : null; if (node){ node.lit = 1; if (!ok) node.err = 1; } if (!REDUCE) packets.push({ node: node, t: 0, err: !ok }); else { corePulse = 1; } }
 
@@ -564,6 +567,7 @@ const OPS_SCENE_SCRIPT = `<script data-cfasync="false">(function(){
     g.addColorStop(0, rgba(BRIGHT, 0.9)); g.addColorStop(0.4, rgba(ACCENT, 0.5)); g.addColorStop(1, rgba(ACCENT, 0));
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(CX,CY,pr*2.4,0,Math.PI*2); ctx.fill();
     ctx.fillStyle = rgba(BRIGHT, 0.95); ctx.beginPath(); ctx.arc(CX,CY,pr*0.55,0,Math.PI*2); ctx.fill();
+    eyes(CX, CY - pr*0.04, pr*0.55, 1);
     ctx.fillStyle = rgba(WHITE, 0.85); ctx.font = "600 11px ui-monospace, SFMono-Regular, monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(model || "LLM", CX, CY + pr*0.55 + 15);
   }
@@ -578,11 +582,33 @@ const OPS_SCENE_SCRIPT = `<script data-cfasync="false">(function(){
   function drawWire(nn){ var p = project(nn.base + spin); var mx = (p.x+CX)/2, my = (p.y+CY)/2 - 8; ctx.strokeStyle = rgba(nn.err>0?DANGER:ACCENT, 0.08 + p.depth*0.2 + nn.lit*0.5); ctx.lineWidth = 1 + p.depth*0.6; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.quadraticCurveTo(mx,my,CX,CY); ctx.stroke(); }
   function drawPacket(pk){ var from = pk.node ? project(pk.node.base + spin) : { x: CX, y: CY - R }; var mx = (from.x+CX)/2, my = (from.y+CY)/2 - 8, t = pk.t; var x = (1-t)*(1-t)*from.x + 2*(1-t)*t*mx + t*t*CX; var y = (1-t)*(1-t)*from.y + 2*(1-t)*t*my + t*t*CY; var col = pk.err ? DANGER : BRIGHT; var gg = ctx.createRadialGradient(x,y,0,x,y,8); gg.addColorStop(0, rgba(col,0.95)); gg.addColorStop(1, rgba(col,0)); ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2); ctx.fill(); ctx.fillStyle = rgba(col,1); ctx.beginPath(); ctx.arc(x,y,2.4,0,Math.PI*2); ctx.fill(); }
   function drawRipple(rp){ var rad = Math.min(W,H)*0.12 + rp.t*Math.min(W,H)*0.24; ctx.strokeStyle = rgba(BRIGHT, 0.5*(1-rp.t)); ctx.lineWidth = 2*(1-rp.t) + 0.4; ctx.beginPath(); ctx.arc(CX,CY,rad,0,Math.PI*2); ctx.stroke(); }
+  // A spawned sub-agent: a mini face on an inner arc, wired back to the core.
+  function drawSat(s, idx, n){
+    var ang = Math.PI*0.5 + (idx - (n-1)/2) * 0.55;
+    var Rs = Math.min(W*0.7, H*1.3) * 0.34;
+    var sx = CX + Math.cos(ang)*Rs;
+    var sy = CY + Math.sin(ang)*Rs + (REDUCE ? 0 : Math.sin(T*1.4 + idx)*3);
+    var a = s.alpha;
+    var running = !s.done;
+    var col = s.done ? (s.ok ? [120,200,140] : DANGER) : BRIGHT;
+    var mx = (sx+CX)/2, my = (sy+CY)/2;
+    ctx.strokeStyle = rgba(col, 0.5*a); ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(sx,sy); ctx.quadraticCurveTo(mx,my,CX,CY); ctx.stroke();
+    if (running && !REDUCE){ var tt = (T*0.8 + idx*0.3) % 1; var px = (1-tt)*(1-tt)*sx + 2*(1-tt)*tt*mx + tt*tt*CX; var py = (1-tt)*(1-tt)*sy + 2*(1-tt)*tt*my + tt*tt*CY; ctx.fillStyle = rgba(col, 0.9*a); ctx.beginPath(); ctx.arc(px,py,2,0,Math.PI*2); ctx.fill(); }
+    var rs = 11 + (running && !REDUCE ? Math.sin(T*3 + idx)*1.4 : 0);
+    var gg = ctx.createRadialGradient(sx,sy,0,sx,sy,rs*2.4); gg.addColorStop(0, rgba(col, 0.5*a)); gg.addColorStop(1, rgba(col,0)); ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(sx,sy,rs*2.4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = rgba(col, 0.92*a); ctx.beginPath(); ctx.arc(sx,sy,rs,0,Math.PI*2); ctx.fill();
+    eyes(sx, sy, rs, a);
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillStyle = rgba(WHITE, 0.85*a); ctx.font = "600 10px ui-monospace, SFMono-Regular, monospace"; ctx.fillText(clip(s.name, 18), sx, sy + rs + 4);
+    if (s.task){ ctx.fillStyle = rgba(WHITE, 0.4*a); ctx.font = "9px ui-monospace, SFMono-Regular, monospace"; ctx.fillText(clip(s.task, 24), sx, sy + rs + 16); }
+  }
 
   var last = 0;
   function frame(ts){
     if (!last) last = ts;
     var dt = Math.min(0.05, (ts - last)/1000); last = ts;
+    T += dt;
+    if (T > nextBlink){ blinkUntil = T + 0.12; nextBlink = T + 2.5 + Math.random()*3; }
     if (!REDUCE) spin += dt*0.12;
     R = Math.min(W*0.82, H*1.5)*0.4;
     ctx.clearRect(0,0,W,H);
@@ -592,6 +618,10 @@ const OPS_SCENE_SCRIPT = `<script data-cfasync="false">(function(){
     for (var w=0; w<order.length; w++) drawWire(order[w]);
     drawCore();
     for (var n2=0; n2<order.length; n2++) drawNode(order[n2]);
+    var sl = [];
+    for (var sid in sats){ var sv = sats[sid]; if (sv.removing){ sv.alpha -= dt*2; if (sv.alpha <= 0){ delete sats[sid]; continue; } } else { sv.alpha = Math.min(1, sv.alpha + dt*3); } sl.push(sv); }
+    sl.sort(function(a,b){ return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+    for (var s2=0; s2<sl.length; s2++) drawSat(sl[s2], s2, sl.length);
     for (var k=packets.length-1;k>=0;k--){ var pk = packets[k]; pk.t += dt/0.85; if (pk.t >= 1){ corePulse = 1; ripples.push({ t: 0 }); packets.splice(k,1); continue; } drawPacket(pk); }
     for (var r2=ripples.length-1;r2>=0;r2--){ ripples[r2].t += dt/0.9; if (ripples[r2].t >= 1){ ripples.splice(r2,1); continue; } drawRipple(ripples[r2]); }
     requestAnimationFrame(frame);
@@ -609,7 +639,10 @@ const OPS_SCENE_SCRIPT = `<script data-cfasync="false">(function(){
       if (elStatus) elStatus.className = working ? "ops-dot on" : "ops-dot";
       var tools = d.tools || [];
       if (first){ first = false; } else { for (var i=0;i<tools.length;i++){ fireTool(tools[i].skill, tools[i].ok); addTicker(tools[i]); } }
-      delay = working ? 1300 : 2400;
+      var agents = d.agents || [], liveIds = {};
+      for (var ai=0; ai<agents.length; ai++){ var ag = agents[ai]; liveIds[ag.id] = true; if (!sats[ag.id]) sats[ag.id] = { id: ag.id, name: ag.name, task: ag.task, alpha: 0, removing: false }; var sv = sats[ag.id]; sv.task = ag.task; sv.done = ag.done; sv.ok = ag.ok; sv.removing = false; }
+      for (var rid in sats){ if (!liveIds[rid]) sats[rid].removing = true; }
+      delay = (working || agents.length) ? 1300 : 2400;
     }).catch(function(){}).then(function(){ setTimeout(poll, delay); });
   }
   poll();

@@ -118,6 +118,16 @@ describe("dashboard ops-scene inline script", () => {
 			model: "m",
 			tools: [{ id: 5, tool: "canvas_list", skill: "canvas", ok: true }],
 			turns: [],
+			agents: [
+				{
+					id: "agent-1",
+					name: "copy-writer",
+					task: "draft the headline",
+					done: false,
+					ok: true,
+					ageMs: 100,
+				},
+			],
 		};
 		const fetchStub = () =>
 			Promise.resolve({ json: () => Promise.resolve(payload) });
@@ -149,5 +159,9 @@ describe("dashboard ops-scene inline script", () => {
 		// the live model into the HUD (catches ReferenceErrors in the poll body).
 		await new Promise((r) => setTimeout(r, 10));
 		expect(elModel.textContent).toBe("m");
+
+		// A frame after the poll resolves exercises the satellite (sub-agent face)
+		// draw path now that the fake `agents` payload has populated it.
+		expect(() => frames[frames.length - 1](50)).not.toThrow();
 	});
 });
