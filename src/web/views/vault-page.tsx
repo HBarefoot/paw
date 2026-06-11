@@ -59,7 +59,7 @@ export const VaultPage: FC<VaultPageProps> = ({ enabled, secrets, slots }) => {
 					<div class="card mb-md">
 						<h3>Add / rotate a secret</h3>
 						<div
-							style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end"
+							style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;max-width:820px"
 							id="vault-add"
 						>
 							<label style="flex:1;min-width:160px">
