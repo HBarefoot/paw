@@ -175,5 +175,6 @@ export interface PawConfig {
 		webhookSecret: string;
 		baseUrl: string;
 		repoAllowlist: string[];
+		autoInvestigateCi: boolean;
 	};
 }

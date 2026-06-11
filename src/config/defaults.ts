@@ -142,5 +142,6 @@ export const defaults: PawConfig = {
 		webhookSecret: "",
 		baseUrl: "https://api.github.com",
 		repoAllowlist: [],
+		autoInvestigateCi: true,
 	},
 };
