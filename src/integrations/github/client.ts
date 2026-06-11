@@ -1,3 +1,4 @@
+import { createPrivateKey } from "node:crypto";
 import { App, Octokit } from "octokit";
 import {
 	type BranchSummary,
@@ -14,6 +15,37 @@ import {
 	type ReviewSummary,
 	type WorkflowRunSummary,
 } from "./types.js";
+
+/**
+ * Repair a GitHub App private key that may have been mangled on paste — the most
+ * common failure is a multi-line PEM whose newlines were stripped (e.g. pasted
+ * into a single-line field), which makes Web Crypto throw "Data provided to an
+ * operation does not meet requirements". We un-escape literal `\n`, re-wrap the
+ * base64 body into a canonical PEM, and normalize PKCS#1 → PKCS#8 (the format
+ * the App JWT signer needs). Returns the input unchanged if it can't be parsed,
+ * so the caller still surfaces a clear auth error.
+ */
+export function normalizePrivateKey(raw: string): string {
+	let key = (raw ?? "").trim();
+	if (!key) return key;
+	if (key.includes("\\n")) key = key.replace(/\\n/g, "\n");
+	const m = key.match(
+		/-----BEGIN ([A-Z0-9 ]+?)-----([\s\S]*?)-----END \1-----/,
+	);
+	if (m) {
+		const label = m[1].trim();
+		const body = (m[2] || "").replace(/[^A-Za-z0-9+/=]/g, "");
+		const wrapped = body.match(/.{1,64}/g)?.join("\n") ?? body;
+		key = `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
+	}
+	try {
+		return createPrivateKey(key)
+			.export({ type: "pkcs8", format: "pem" })
+			.toString();
+	} catch {
+		return key;
+	}
+}
 
 /**
  * GitHubClient — a house-style wrapper around Octokit's GitHub App auth.
@@ -62,7 +94,7 @@ export class GitHubClient {
 
 		this.app = new App({
 			appId,
-			privateKey: config.privateKey,
+			privateKey: normalizePrivateKey(config.privateKey),
 			webhooks: { secret: config.webhookSecret || "unset" },
 			Octokit: OctokitWithBase,
 		});
