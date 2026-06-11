@@ -158,11 +158,11 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 							key={a.id}
 							class="gh-pending-item"
 							data-id={a.id}
-							style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid var(--border,#333);border-radius:8px;margin-bottom:8px"
+							style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid var(--border-primary);border-radius:9px;margin-bottom:8px"
 						>
 							<div>
 								<div>
-									<span class="badge">{a.action}</span>{" "}
+									<span class="badge neutral">{a.action}</span>{" "}
 									<strong>{a.summary}</strong>
 								</div>
 								<div class="text-sm text-muted">
@@ -417,8 +417,8 @@ function ghRenderPending(items) {
     return;
   }
   list.innerHTML = items.map(function(a) {
-    return '<div class="gh-pending-item" data-id="' + ghEsc(a.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid var(--border,#333);border-radius:8px;margin-bottom:8px">'
-      + '<div><div><span class="badge">' + ghEsc(a.action) + '</span> <strong>' + ghEsc(a.summary) + '</strong></div>'
+    return '<div class="gh-pending-item" data-id="' + ghEsc(a.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid var(--border-primary);border-radius:9px;margin-bottom:8px">'
+      + '<div><div><span class="badge neutral">' + ghEsc(a.action) + '</span> <strong>' + ghEsc(a.summary) + '</strong></div>'
       + '<div class="text-sm text-muted">' + ghEsc(a.repo) + ' · requested ' + ghEsc(a.created_at) + '</div></div>'
       + '<div style="display:flex;gap:6px;flex-shrink:0">'
       + '<button type="button" class="btn btn-primary" data-id="' + ghEsc(a.id) + '" onclick="ghApprove(this.dataset.id)">Approve</button>'
@@ -472,19 +472,23 @@ async function ghLoadOverview() {
       reposEl.innerHTML = repos.length === 0
         ? "No repositories. Add an allowlisted repo and install the App on it."
         : repos.map(function(r){
-            return '<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border,#262626)">'
-              + '<a href="' + ghEsc(r.url) + '" target="_blank" rel="noopener"><strong>' + ghEsc(r.fullName) + '</strong></a>'
-              + '<span class="text-muted">' + (r.private ? "private" : "public") + ' · ' + ghEsc(r.defaultBranch) + '</span></div>';
+            return '<div class="gh-row">'
+              + '<a class="link" href="' + ghEsc(r.url) + '" target="_blank" rel="noopener" style="font-weight:600">' + ghEsc(r.fullName) + '</a>'
+              + '<span style="display:inline-flex;align-items:center;gap:8px">'
+              + '<span class="badge ' + (r.private ? "accent" : "neutral") + '">' + (r.private ? "private" : "public") + '</span>'
+              + '<code class="text-muted text-sm">' + ghEsc(r.defaultBranch) + '</code></span></div>';
           }).join("");
     }
     if (prsEl) {
       prsEl.innerHTML = prs.length === 0
         ? "No open pull requests."
         : prs.map(function(p){
-            return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border,#262626)">'
-              + '<div><a href="' + ghEsc(p.url) + '" target="_blank" rel="noopener"><strong>#' + p.number + '</strong> ' + ghEsc(p.title) + '</a>'
-              + '<div class="text-muted text-sm">' + ghEsc(p.repo) + ' · ' + ghEsc(p.head) + ' → ' + ghEsc(p.base) + (p.draft ? " · draft" : "") + '</div></div>'
-              + '<button type="button" class="btn btn-secondary" data-repo="' + ghEsc(p.repo) + '" data-num="' + p.number + '" onclick="ghShowDiff(this.dataset.repo, this.dataset.num)">View diff</button>'
+            return '<div class="gh-row">'
+              + '<div style="min-width:0">'
+              + '<div><a class="link" href="' + ghEsc(p.url) + '" target="_blank" rel="noopener" style="font-weight:600">#' + p.number + ' ' + ghEsc(p.title) + '</a>'
+              + (p.draft ? ' <span class="badge neutral">draft</span>' : '') + '</div>'
+              + '<div class="text-muted text-sm" style="margin-top:3px">' + ghEsc(p.repo) + ' · ' + ghEsc(p.head) + ' → ' + ghEsc(p.base) + '</div></div>'
+              + '<button type="button" class="btn btn-secondary btn-sm" data-repo="' + ghEsc(p.repo) + '" data-num="' + p.number + '" onclick="ghShowDiff(this.dataset.repo, this.dataset.num)" style="flex-shrink:0">View diff</button>'
               + '</div>'
               + '<div class="gh-diff-wrap" id="gh-diff-' + ghEsc(p.repo).replace(/[^a-zA-Z0-9]/g,"_") + '-' + p.number + '" style="display:none"></div>';
           }).join("");
@@ -528,7 +532,7 @@ function ghPushActivity(ev) {
   ghActivity.unshift(label);
   if (ghActivity.length > 30) ghActivity.pop();
   var el = document.getElementById("gh-activity");
-  if (el) el.innerHTML = ghActivity.map(function(s){ return '<div style="padding:3px 0;border-bottom:1px solid var(--border,#262626)">' + s + '</div>'; }).join("");
+  if (el) el.innerHTML = ghActivity.map(function(s){ return '<div style="padding:4px 0;border-bottom:1px solid var(--border-primary)">' + s + '</div>'; }).join("");
 }
 
 // Poll the live event feed; refresh inbox/overview/activity on change.
@@ -557,12 +561,14 @@ function ghPushActivity(ev) {
 })();
 </script>
 <style>
-.gh-diff{max-height:420px;overflow:auto;background:var(--bg-secondary,#0d0d0d);border:1px solid var(--border,#262626);border-radius:8px;padding:10px;margin-top:8px;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.5;white-space:pre}
-.gh-diff .gh-add{color:#3fb950;display:block}
-.gh-diff .gh-del{color:#f85149;display:block}
-.gh-diff .gh-hunk{color:#58a6ff;display:block}
-.gh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
-.gh-dot-ok{background:#3fb950}.gh-dot-bad{background:#f85149}.gh-dot-run{background:#d29922}
+.gh-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-primary)}
+.gh-row:last-child{border-bottom:none}
+.gh-diff{max-height:420px;overflow:auto;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:var(--radius-md,9px);padding:10px;margin-top:8px;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.5;white-space:pre}
+.gh-diff .gh-add{color:var(--success);display:block}
+.gh-diff .gh-del{color:var(--error);display:block}
+.gh-diff .gh-hunk{color:var(--accent);display:block}
+.gh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;flex:none}
+.gh-dot-ok{background:var(--success)}.gh-dot-bad{background:var(--error)}.gh-dot-run{background:var(--warning)}
 </style>`)}
 		</Layout>
 	);
