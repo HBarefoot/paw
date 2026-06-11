@@ -1445,18 +1445,49 @@ export function getChatScript(): string {
       }
     } catch (e) {}
   }
+  // The avatar "speaks" a fresh notification via a soft speech bubble.
+  function notifyPortraitSpeak(n) {
+    try {
+      for (var i = 0; i < canvasTabs.length; i++) {
+        var t = canvasTabs[i];
+        if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        t.iframeEl.contentWindow.postMessage({ type: "paw:notify", id: n.id, title: n.title, level: n.level, url: n.url || "" }, "*");
+      }
+    } catch (e) {}
+  }
+  var __lastNotifiedId = null;
+  var __ambientFirstPoll = true;
   function pollAmbient() {
     Promise.all([
       fetch("/api/notifications").then(function(r){ return r.json(); }).catch(function(){ return {}; }),
       fetch("/api/github/pending").then(function(r){ return r.json(); }).catch(function(){ return {}; })
     ]).then(function(res){
-      var unread = (res[0] && res[0].unread) || 0;
+      var notif = res[0] || {};
+      var unread = notif.unread || 0;
       var pending = (res[1] && res[1].pending && res[1].pending.length) || 0;
       notifyPortraitAmbient(unread, pending);
+      // Find the newest unread; let the avatar speak it once (skip stale ones on
+      // first poll so it doesn't announce everything on page load).
+      var list = notif.notifications || [];
+      var newest = null;
+      for (var i = 0; i < list.length; i++) { if (!list[i].read) { newest = list[i]; break; } }
+      if (newest && newest.id !== __lastNotifiedId) {
+        __lastNotifiedId = newest.id;
+        if (!__ambientFirstPoll) notifyPortraitSpeak(newest);
+      }
+      __ambientFirstPoll = false;
     }).catch(function(){});
   }
   setInterval(pollAmbient, 20000);
   setTimeout(pollAmbient, 1500);
+  // The portrait (sandboxed iframe) asks the parent to open a notification link.
+  window.addEventListener("message", function(e){
+    var m = e.data;
+    if (m && m.type === "paw:notify-open") {
+      if (m.url) window.open(m.url, "_blank", "noopener");
+      else window.location.href = "/notifications";
+    }
+  });
 
   function createCanvasTab(path) {
     var id = ++canvasTabIdSeq;

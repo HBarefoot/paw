@@ -21,27 +21,47 @@ export interface NotificationRow {
 	created_at: string;
 }
 
+/** Full payload handed to the onAdd callback on every new notification. */
+export interface NotificationEvent {
+	id: string;
+	kind: string;
+	title: string;
+	body?: string;
+	url?: string;
+	level: NotificationLevel;
+}
+
 /**
  * NotificationStore — the agent's durable "I have something for you" inbox.
  * Backs the nav badge + the canvas portrait "attentive" state so proactive
  * messages (GitHub events, CI investigations) aren't lost when the user is away.
+ *
+ * `onAdd` (wired to the EventBus by the kernel) fires for EVERY notification, so
+ * out-of-band senders (Slack, the avatar) get a single, central hook regardless
+ * of who calls `add()`.
  */
 export class NotificationStore {
-	constructor(private readonly db: Database) {}
+	constructor(
+		private readonly db: Database,
+		private readonly onAdd?: (n: NotificationEvent) => void,
+	) {}
 
 	add(input: NotificationInput): string {
 		const id = crypto.randomUUID();
+		const kind = input.kind ?? "system";
+		const level = input.level ?? "info";
 		this.db.run(
 			`INSERT INTO notifications (id, kind, title, body, url, level) VALUES (?, ?, ?, ?, ?, ?)`,
-			[
-				id,
-				input.kind ?? "system",
-				input.title,
-				input.body ?? null,
-				input.url ?? null,
-				input.level ?? "info",
-			],
+			[id, kind, input.title, input.body ?? null, input.url ?? null, level],
 		);
+		this.onAdd?.({
+			id,
+			kind,
+			title: input.title,
+			body: input.body,
+			url: input.url,
+			level,
+		});
 		return id;
 	}
 

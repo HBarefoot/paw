@@ -90,6 +90,7 @@ export const defaults: PawConfig = {
 		botToken: "",
 		appToken: "",
 		signingSecret: "",
+		notifyChannel: "",
 	},
 	webPilot: {
 		headless: true,

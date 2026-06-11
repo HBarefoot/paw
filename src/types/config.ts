@@ -91,6 +91,7 @@ export interface PawConfig {
 		botToken: string;
 		appToken: string;
 		signingSecret: string;
+		notifyChannel: string;
 	};
 	webPilot: {
 		headless: boolean;
