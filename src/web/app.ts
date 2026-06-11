@@ -47,6 +47,8 @@ import { CANVAS_TEMPLATES } from "./canvas-templates.js";
 import { parseUploadedFiles } from "./file-parser.js";
 import { createAuthMiddleware } from "./middleware/auth.js";
 import { createSecurityHeaders } from "./middleware/security-headers.js";
+import { canvasContentType, injectCanvasRuntime } from "./canvas-serve.js";
+import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
 import { BrandPage } from "./views/brand-page.js";
 import { ConfigPage } from "./views/config-page.js";
@@ -470,13 +472,19 @@ export function createWebApp(
 		allowedOrigins.add(`https://localhost:${config.web.port}`);
 	}
 
+	// Canvas workspace root — resolved early because the security-headers
+	// middleware (below) reads per-space CSP overrides from app manifests under it.
+	const canvasRoot = resolveProjectPath(
+		config.web.canvas?.root ?? "./data/canvas",
+	);
+
 	// --- Middleware Stack ---
 
 	// Request logging
 	app.use("*", honoLogger());
 
 	// Security headers
-	app.use("*", createSecurityHeaders(config.web.tls.enabled));
+	app.use("*", createSecurityHeaders(config.web.tls.enabled, { canvasRoot }));
 
 	// Body size limit (5MB)
 	app.use("*", bodyLimit({ maxSize: 5 * 1024 * 1024 }));
@@ -1938,9 +1946,6 @@ export function createWebApp(
 
 	// --- Canvas ---
 
-	const canvasRoot = resolveProjectPath(
-		config.web.canvas?.root ?? "./data/canvas",
-	);
 	// Brand assets live next to the canvas workspace (same volume → persists).
 	const brandRoot = resolve(dirname(canvasRoot), "brand");
 
@@ -2657,10 +2662,8 @@ export function createWebApp(
 	});
 
 	app.post("/api/canvas/clear", (c) => {
-		if (existsSync(canvasRoot)) {
-			rmSync(canvasRoot, { recursive: true, force: true });
-			mkdirSync(canvasRoot, { recursive: true });
-		}
+		// Preserves protected app spaces — see clearCanvasPreservingApps.
+		clearCanvasPreservingApps(canvasRoot);
 		// Clear all event buffers
 		canvasEvents.clear();
 		return c.json({ cleared: true });
@@ -2764,11 +2767,8 @@ export function createWebApp(
 		const template = CANVAS_TEMPLATES.find((t) => t.name === body.name);
 		if (!template) return c.json({ error: "Template not found" }, 404);
 
-		// Clear existing canvas files
-		if (existsSync(canvasRoot)) {
-			rmSync(canvasRoot, { recursive: true, force: true });
-		}
-		mkdirSync(canvasRoot, { recursive: true });
+		// Clear existing canvas files (preserving protected app spaces)
+		clearCanvasPreservingApps(canvasRoot);
 
 		// Write template files
 		for (const [filePath, content] of Object.entries(template.files)) {
@@ -3541,50 +3541,84 @@ export function createWebApp(
 		}
 
 		const ext = extname(fullPath).toLowerCase();
-		const mimeMap: Record<string, string> = {
-			".html": "text/html",
-			".htm": "text/html",
-			".css": "text/css",
-			".js": "application/javascript",
-			".json": "application/json",
-			".png": "image/png",
-			".jpg": "image/jpeg",
-			".jpeg": "image/jpeg",
-			".gif": "image/gif",
-			".svg": "image/svg+xml",
-			".ico": "image/x-icon",
-			".woff": "font/woff",
-			".woff2": "font/woff2",
-			".ttf": "font/ttf",
-		};
-		const contentType = mimeMap[ext] || "application/octet-stream";
+		const contentType = canvasContentType(ext);
 
 		const file = Bun.file(fullPath);
 
-		// B2: Inject error overlay script into HTML files at serve time
+		// B2: Inject error overlay + runtime shim into HTML files at serve time.
 		if (ext === ".html" || ext === ".htm") {
-			let html = await file.text();
-			const errorOverlay = `<script>(function(){var d=document,o=null;function show(msg){if(o)o.remove();o=d.createElement("div");o.style.cssText="position:fixed;bottom:0;left:0;right:0;background:#fef2f2;border-top:2px solid #ef4444;color:#991b1b;font:13px/1.5 ui-monospace,monospace;padding:12px 16px;z-index:99999;max-height:40vh;overflow:auto";o.innerHTML='<div style="display:flex;justify-content:space-between;align-items:start"><pre style="margin:0;white-space:pre-wrap">'+msg.replace(/</g,"&lt;")+'</pre><button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:#991b1b;padding:0 4px">&times;</button></div>';d.body.appendChild(o)}window.onerror=function(m,f,l,c){show(m+"\\n  at "+(f||"?")+":"+(l||"?"));};window.onunhandledrejection=function(e){show("Unhandled rejection: "+(e.reason&&e.reason.message||e.reason||e))};})();</script>`;
-			// Canvas runtime: the preview iframe is sandboxed (allow-scripts,
-			// allow-forms) with a NULL origin for safety (AI-generated content
-			// must not reach the parent's origin/session). That blocks native
-			// in-page anchor navigation and native form submits as "unsafe URL
-			// loads". This shim makes them work without navigating: same-page
-			// anchors smooth-scroll, and forms posting to /api/forms/* submit
-			// via fetch (the public form receiver allows Origin: null + CORS).
-			const canvasRuntime = `<script>(function(){document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(!a)return;e.preventDefault();var id=a.getAttribute("href").slice(1);if(!id){window.scrollTo({top:0,behavior:"smooth"});return;}var el=document.getElementById(id)||document.querySelector('[name="'+id+'"]');if(el)el.scrollIntoView({behavior:"smooth"});},true);document.addEventListener("submit",function(e){var f=e.target;if(!f||f.tagName!=="FORM")return;var action=f.getAttribute("action")||"";if(action.indexOf("/api/forms/")!==0)return;e.preventDefault();var body={};new FormData(f).forEach(function(v,k){body[k]=v;});var btn=f.querySelector('button,[type=submit]');if(btn)btn.disabled=true;fetch(action,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json().catch(function(){return{ok:r.ok};});}).then(function(d){var ok=d&&d.ok;var m=document.createElement("div");m.textContent=ok?"\\u2713 Thanks! Your submission was received.":"Submission failed. Please try again.";m.style.cssText="margin-top:12px;padding:10px 14px;border-radius:8px;font:14px/1.4 system-ui,sans-serif;background:"+(ok?"#ecfdf5;color:#065f46":"#fef2f2;color:#991b1b");f.appendChild(m);if(ok)f.reset();if(btn)btn.disabled=false;}).catch(function(){if(btn)btn.disabled=false;});},true);})();</script>`;
-			const inject = errorOverlay + canvasRuntime;
-			// Inject before </body> if present, otherwise append
-			if (html.includes("</body>")) {
-				html = html.replace("</body>", inject + "</body>");
-			} else {
-				html += inject;
-			}
+			const html = injectCanvasRuntime(await file.text());
 			c.header("Content-Type", contentType);
 			c.header("Cache-Control", "no-cache");
 			return c.body(html);
 		}
 
+		c.header("Content-Type", contentType);
+		c.header("Cache-Control", "no-cache");
+		return c.body(await file.arrayBuffer());
+	});
+
+	// --- App spaces ---
+	// Authed serving for production app surfaces under `apps/<space>/`. Unlike
+	// `/api/canvas/preview/*` (public sketch surface), this route sits AFTER the
+	// auth middleware and is NOT in PUBLIC_PREFIXES, so it requires a session by
+	// default. Reuses the same canvas files, MIME map, traversal/symlink guards,
+	// and runtime shim; adds directory-index resolution (folder/ → index.html)
+	// and a strict per-space CSP (see security-headers.ts).
+	app.get("/api/app/:space/*", async (c) => {
+		const space = c.req.param("space");
+		// Strip "/api/app/<space>/" → subpath within the space.
+		const prefix = `/api/app/${space}/`;
+		const sub = c.req.path.startsWith(prefix)
+			? c.req.path.slice(prefix.length)
+			: "";
+		let decoded: string;
+		try {
+			decoded = decodeURIComponent(sub.replace(/^\/+/, "")) || "index.html";
+		} catch {
+			return c.text("Bad Request", 400);
+		}
+		// All app files live under apps/<space>/ in the canvas root.
+		const spaceRoot = resolve(canvasRoot, APP_NAMESPACE, space);
+		let fullPath = resolve(spaceRoot, decoded);
+
+		// Path traversal check (logical path) — must stay within the space.
+		if (
+			relative(spaceRoot, fullPath).startsWith("..") ||
+			fullPath.includes("\0")
+		) {
+			return c.text("Forbidden", 403);
+		}
+
+		// Directory-index resolution: a directory (or trailing slash) serves its
+		// index.html — file-based routing the preview surface lacks.
+		if (existsSync(fullPath) && statSync(fullPath).isDirectory()) {
+			fullPath = resolve(fullPath, "index.html");
+		}
+
+		// Symlink check: resolve real path and verify it's still within the space.
+		if (existsSync(fullPath)) {
+			try {
+				if (relative(spaceRoot, realpathSync(fullPath)).startsWith("..")) {
+					return c.text("Forbidden", 403);
+				}
+			} catch {
+				return c.text("Forbidden", 403);
+			}
+		} else {
+			return c.text("Not found", 404);
+		}
+
+		const ext = extname(fullPath).toLowerCase();
+		const contentType = canvasContentType(ext);
+		const file = Bun.file(fullPath);
+
+		if (ext === ".html" || ext === ".htm") {
+			const html = injectCanvasRuntime(await file.text());
+			c.header("Content-Type", contentType);
+			c.header("Cache-Control", "no-cache");
+			return c.body(html);
+		}
 		c.header("Content-Type", contentType);
 		c.header("Cache-Control", "no-cache");
 		return c.body(await file.arrayBuffer());

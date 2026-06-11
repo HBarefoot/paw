@@ -1,9 +1,45 @@
-import { secureHeaders } from "hono/secure-headers";
 import type { MiddlewareHandler } from "hono";
+import { secureHeaders } from "hono/secure-headers";
+import {
+	buildAppCsp,
+	readAppManifest,
+	spaceFromAppPath,
+} from "../app-spaces.js";
 
-export function createSecurityHeaders(tlsEnabled = false): MiddlewareHandler {
+export interface SecurityHeaderOptions {
+	/** Canvas root, needed to read per-space CSP overrides for /api/app/ pages. */
+	canvasRoot?: string;
+}
+
+export function createSecurityHeaders(
+	tlsEnabled = false,
+	opts: SecurityHeaderOptions = {},
+): MiddlewareHandler {
 	return async (c, next) => {
 		const path = c.req.path;
+
+		// App spaces serve PRODUCTION app surfaces (financials, PII). Strict CSP:
+		// no 'unsafe-eval' (pages ship precompiled — no in-browser Babel), no
+		// `img-src *`; same-origin only. Optional per-space overrides from the
+		// app manifest (apps/<space>/.app.json `csp`) are merged in.
+		if (path.startsWith("/api/app/")) {
+			const space = opts.canvasRoot ? spaceFromAppPath(path) : null;
+			const override =
+				space && opts.canvasRoot
+					? readAppManifest(opts.canvasRoot, space).csp
+					: undefined;
+			c.header("X-Content-Type-Options", "nosniff");
+			c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+			c.header("X-Frame-Options", "SAMEORIGIN");
+			c.header("Content-Security-Policy", buildAppCsp(override));
+			if (tlsEnabled) {
+				c.header(
+					"Strict-Transport-Security",
+					"max-age=31536000; includeSubDomains",
+				);
+			}
+			return next();
+		}
 
 		// Canvas preview serves user-generated content inside an iframe — use
 		// a permissive policy so arbitrary HTML/CSS/JS works, but keep it
