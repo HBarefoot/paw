@@ -68,7 +68,7 @@ export const PromptsPage: FC<PromptsPageProps> = ({ prompts }) => {
 		<Layout title="Prompt Library" currentPath="/prompts">
 			<div class="card mb-md">
 				<h3>New prompt</h3>
-				<div class="flex-col gap-sm">
+				<div class="flex-col gap-sm max-w-form">
 					<input
 						type="text"
 						id="new-title"
@@ -117,7 +117,7 @@ export const PromptsPage: FC<PromptsPageProps> = ({ prompts }) => {
 										used {p.use_count}× · {p.updated_at}
 									</span>
 								</summary>
-								<div class="flex-col gap-sm" style="padding-top: 8px">
+								<div class="flex-col gap-sm max-w-form" style="padding-top: 8px">
 									<input
 										type="text"
 										id={`edit-title-${p.id}`}

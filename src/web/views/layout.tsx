@@ -437,10 +437,14 @@ const cssDesignSystem = `
 
   .content {
     padding: 28px 32px;
-    max-width: 1200px;
+    /* Fill the available width (left-aligned, so it stays aligned with the
+       page title in the full-width topbar). Single-column forms cap their own
+       width via .max-w-form so their inputs don't stretch across the screen. */
+    max-width: none;
     flex: 1;
   }
-  /* Chat page needs full width for canvas split */
+  /* Chat sets this for the canvas split; now redundant since .content fills,
+     but kept so chat.tsx needs no change. */
   .content.content-full { max-width: none; }
 
   /* ===== CARDS ===== */
@@ -1467,7 +1471,7 @@ const cssDesignSystem = `
   .font-bold { font-weight: 700; }
   .flex-1 { flex: 1; min-width: 0; }
   .self-start { align-self: flex-start; }
-  .max-w-form { max-width: 500px; }
+  .max-w-form { max-width: 640px; }
 
   /* ===== MODAL ===== */
   .paw-modal-overlay {
