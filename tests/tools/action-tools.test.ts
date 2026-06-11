@@ -11,6 +11,7 @@ function freshDb(): Database {
       field_map_json TEXT NOT NULL DEFAULT '{}', redirect_url TEXT,
       honeypot_field TEXT, secret TEXT, active INTEGER NOT NULL DEFAULT 1,
       submit_count INTEGER NOT NULL DEFAULT 0, created_by TEXT,
+      require_auth INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -68,6 +69,68 @@ describe("canvas action tools", () => {
 			fieldMap: {},
 		});
 		expect(empty.is_error).toBe(true);
+	});
+
+	test("tool action requires config.tool and defaults to require_auth", async () => {
+		const missing = await get("canvas_action_create").handler({
+			name: "x",
+			type: "tool",
+			fieldMap: { a: "a" },
+		});
+		expect(missing.is_error).toBe(true);
+
+		const res = await get("canvas_action_create").handler({
+			name: "Create job",
+			type: "tool",
+			config: { tool: "job_create" },
+			fieldMap: { title: "title" },
+		});
+		expect(res.is_error).toBeUndefined();
+		const out = JSON.parse(res.content);
+		const row = db
+			.query("SELECT type, config_json, require_auth FROM canvas_actions WHERE id = ?")
+			.get(out.actionId) as {
+			type: string;
+			config_json: string;
+			require_auth: number;
+		};
+		expect(row.type).toBe("tool");
+		expect(JSON.parse(row.config_json).tool).toBe("job_create");
+		// tool actions are authed by default
+		expect(row.require_auth).toBe(1);
+	});
+
+	test("strapi/hubspot default to public; requireAuth override honored", async () => {
+		const hs = JSON.parse(
+			(
+				await get("canvas_action_create").handler({
+					name: "HS",
+					type: "hubspot",
+					fieldMap: { email: "email" },
+				})
+			).content,
+		);
+		const hsRow = db
+			.query("SELECT require_auth FROM canvas_actions WHERE id = ?")
+			.get(hs.actionId) as { require_auth: number };
+		expect(hsRow.require_auth).toBe(0);
+
+		// explicitly make a tool action public
+		const pub = JSON.parse(
+			(
+				await get("canvas_action_create").handler({
+					name: "newsletter",
+					type: "tool",
+					config: { tool: "subscribe" },
+					fieldMap: { email: "email" },
+					requireAuth: false,
+				})
+			).content,
+		);
+		const pubRow = db
+			.query("SELECT require_auth FROM canvas_actions WHERE id = ?")
+			.get(pub.actionId) as { require_auth: number };
+		expect(pubRow.require_auth).toBe(0);
 	});
 
 	test("list then delete", async () => {
