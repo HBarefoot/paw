@@ -18,6 +18,7 @@ import type {
 import type { ToolDefinition } from "../types/message.js";
 import { compileBrandBrief, getActiveBrand } from "../store/brands.js";
 import { getDb, closeDb } from "../store/db.js";
+import { NotificationStore } from "../store/notifications.js";
 import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
 import { appendMessage, getSessionMessages } from "../store/messages.js";
 import { MemoryStore } from "../memory/store.js";
@@ -96,6 +97,8 @@ export class Kernel {
 	private githubApprovalsInstance:
 		| import("../integrations/github/approvals.js").GitHubApprovals
 		| null = null;
+	private notificationStoreInstance!: NotificationStore;
+	private githubReactorUnsub: (() => void) | null = null;
 	private skillManager: SkillManager;
 	private agentRegistry: AgentRegistry;
 	private agentDepths = new Map<string, number>();
@@ -177,6 +180,9 @@ export class Kernel {
 				? `Vault: enabled (${this.vaultManager.count()} encrypted secret(s))`
 				: "Vault: disabled (PAW_VAULT_KEY unset — using env/credentials fallback)",
 		);
+
+		// Durable proactive-notification inbox (nav badge + canvas portrait).
+		this.notificationStoreInstance = new NotificationStore(this.db);
 
 		// H-NEW-4: register a built-in "kernel" manifest so the sandbox
 		// can enforce permissions on built-in tools. Previously the
@@ -550,6 +556,17 @@ export class Kernel {
 				this.toolRegistry.register(
 					createGitHubTools(client, { audit: ghAuditFn, approvals }),
 				);
+				// Reactor: webhook events → durable notifications (the agent
+				// "has something for you"). Phase B adds CI auto-investigation.
+				const { startGitHubReactor } = await import(
+					"../integrations/github/reactor.js"
+				);
+				this.githubReactorUnsub = startGitHubReactor({
+					bus: this.bus,
+					notifications: this.notificationStoreInstance,
+					client,
+					logger: this.logger,
+				});
 				this.logger.info("GitHub integration initialized", {
 					repoAllowlist: gh.repoAllowlist.length,
 				});
@@ -2047,6 +2064,11 @@ export class Kernel {
 		| import("../integrations/github/approvals.js").GitHubApprovals
 		| null {
 		return this.githubApprovalsInstance;
+	}
+
+	/** Durable proactive-notification inbox (nav badge + canvas portrait). */
+	get notifications(): NotificationStore {
+		return this.notificationStoreInstance;
 	}
 
 	cancelSession(sessionId: string): boolean {

@@ -28,6 +28,7 @@ function navIcon(name: string): string {
 		brand: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>`,
 		vault: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
 		github: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.3 4.3 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.3 4.3 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>`,
+		bell: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>`,
 	};
 	return icons[name] ?? "";
 }
@@ -377,6 +378,27 @@ const cssDesignSystem = `
   .nav-label {
     white-space: nowrap;
     overflow: hidden;
+  }
+  .nav-badge {
+    margin-left: auto;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-size: 11px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+  html.sidebar-collapsed .nav-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    margin: 0;
   }
 
   .sidebar-footer {
@@ -1817,6 +1839,7 @@ const navItems = [
 	{ path: "/search", label: "Search", icon: "search" },
 	{ path: "/prompts", label: "Prompts", icon: "prompts" },
 	{ path: "/submissions", label: "Submissions", icon: "submissions" },
+	{ path: "/notifications", label: "Notifications", icon: "bell" },
 	{ path: "/chat", label: "Chat", icon: "chat" },
 ];
 
@@ -1894,6 +1917,11 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 			{raw(`<link rel="stylesheet" href="/api/brand/theme.css">`)}
 			{raw(`<script>${brandIdentityScript()}</script>`)}
 			{raw(`<script>${modalScript}</script>`)}
+			{raw(`<script>(function(){
+  function paint(n){var b=document.getElementById("nav-notif-badge");window.__pawNotifUnread=n;if(!b)return;if(n>0){b.textContent=n>99?"99+":String(n);b.style.display="inline-flex";}else{b.style.display="none";}}
+  function poll(){fetch("/api/notifications").then(function(r){return r.json();}).then(function(d){paint((d&&d.unread)||0);}).catch(function(){});}
+  document.addEventListener("DOMContentLoaded",function(){poll();setInterval(poll,20000);});
+})()</script>`)}
 		</head>
 		<body>
 			<div class="app-layout">
@@ -1920,6 +1948,9 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 							>
 								{raw(`<span class="nav-icon">${navIcon(item.icon)}</span>`)}
 								<span class="nav-label">{item.label}</span>
+								{item.path === "/notifications" && (
+									<span id="nav-notif-badge" class="nav-badge" style="display:none" />
+								)}
 							</a>
 						))}
 						{(() => {
