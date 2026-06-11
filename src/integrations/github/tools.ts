@@ -397,6 +397,120 @@ export function createGitHubTools(
 		},
 	};
 
+	// --- CI feedback (read-only) ---
+
+	const getChecks: ToolDefinition = {
+		name: "github_get_checks",
+		description:
+			"Get CI check-run status for a ref (branch, tag, or commit SHA). Use this to see whether checks are passing on a branch or PR head.",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				ref: {
+					type: "string",
+					description: "Branch name, tag, or commit SHA to check.",
+				},
+			},
+			required: ["repo", "ref"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			try {
+				const res = await client.getChecks(
+					input.repo as string,
+					input.ref as string,
+				);
+				return { content: JSON.stringify(res) };
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const getWorkflowRuns: ToolDefinition = {
+		name: "github_get_workflow_runs",
+		description:
+			"List recent GitHub Actions workflow runs for a repo (optionally filtered to a branch), with status and conclusion. Use this to find a failing run to inspect.",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				branch: {
+					type: "string",
+					description: "Optional branch to filter runs by.",
+				},
+				limit: { type: "number", description: "Max runs (default 15)." },
+			},
+			required: ["repo"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			try {
+				const runs = await client.getWorkflowRuns(
+					input.repo as string,
+					input.branch as string | undefined,
+					(input.limit as number) ?? 15,
+				);
+				return { content: JSON.stringify({ runs }) };
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const getRunLogs: ToolDefinition = {
+		name: "github_get_run_logs",
+		description:
+			"Inspect a workflow run: per-job status, the names of failing steps, and truncated log excerpts for failing jobs. Use this to diagnose why CI is red so you can push a fix.",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				run_id: { type: "number", description: "Workflow run id." },
+			},
+			required: ["repo", "run_id"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			try {
+				const res = await client.getRunLogs(
+					input.repo as string,
+					input.run_id as number,
+				);
+				return { content: JSON.stringify(res) };
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const getPrReviews: ToolDefinition = {
+		name: "github_get_pr_reviews",
+		description:
+			"Get a pull request's reviews and inline review comments (approvals, change requests, line comments). Use this to act on reviewer feedback.",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				number: { type: "number", description: "Pull request number." },
+			},
+			required: ["repo", "number"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			try {
+				const res = await client.getPrReviews(
+					input.repo as string,
+					input.number as number,
+				);
+				return { content: JSON.stringify(res) };
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
 	// --- Gated actions: enqueue for human approval, do NOT execute ---
 
 	const queueUnavailable: ToolResult = {
@@ -584,6 +698,10 @@ export function createGitHubTools(
 		openPr,
 		updatePr,
 		comment,
+		getChecks,
+		getWorkflowRuns,
+		getRunLogs,
+		getPrReviews,
 		mergePr,
 		deleteBranch,
 		closeIssue,
