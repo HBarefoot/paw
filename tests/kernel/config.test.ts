@@ -1,5 +1,24 @@
-import { describe, test, expect } from "bun:test";
+import { afterAll, beforeAll, describe, test, expect } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { loadConfig } from "../../src/config/loader.js";
+import { scrubPawEnv } from "../helpers/env.js";
+
+// loadConfig's cascade reads PAW_* env AND ~/.paw/config.json. Scrub the env and
+// point PAW_CONFIG_DIR at an empty temp dir so "loads defaults" is hermetic
+// regardless of the developer's real env / ~/.paw/config.json.
+let restorePawEnv: () => void;
+let tmpConfigDir: string;
+beforeAll(() => {
+	restorePawEnv = scrubPawEnv();
+	tmpConfigDir = mkdtempSync(resolve(tmpdir(), "paw-cfg-"));
+	process.env.PAW_CONFIG_DIR = tmpConfigDir;
+});
+afterAll(() => {
+	restorePawEnv();
+	rmSync(tmpConfigDir, { recursive: true, force: true });
+});
 
 describe("Config Loader", () => {
 	test("loads defaults when no env vars set", () => {

@@ -1,6 +1,22 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	test,
+} from "bun:test";
 import { Database } from "bun:sqlite";
 import { VaultManager } from "../../src/security/vault.js";
+import { scrubPawEnv } from "../helpers/env.js";
+
+// VaultManager falls back to process.env.PAW_VAULT_KEY when no key is passed;
+// a developer with PAW_VAULT_KEY set locally would break the "no key" cases.
+let restorePawEnv: () => void;
+beforeAll(() => {
+	restorePawEnv = scrubPawEnv();
+});
+afterAll(() => restorePawEnv());
 
 function freshDb(): Database {
 	const db = new Database(":memory:");

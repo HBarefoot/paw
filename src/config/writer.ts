@@ -10,9 +10,16 @@ import { homedir } from "node:os";
 import { configSchema } from "./schema.js";
 
 // PAW_CONFIG_DIR relocates config + credentials (e.g. onto a persistent volume
-// like /data/.paw on Railway). Defaults to ~/.paw.
-const CONFIG_DIR = process.env.PAW_CONFIG_DIR || join(homedir(), ".paw");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+// like /data/.paw on Railway). Defaults to ~/.paw. Resolved at call time (not
+// module load) so tests can redirect it to a temp dir and stay hermetic against
+// a developer's real ~/.paw/config.json; in production PAW_CONFIG_DIR is fixed
+// for the process, so behavior is identical.
+function configDir(): string {
+	return process.env.PAW_CONFIG_DIR || join(homedir(), ".paw");
+}
+function configFile(): string {
+	return join(configDir(), "config.json");
+}
 
 /** In-memory config cache, keyed on file mtime so external edits are caught. */
 let configCache: Record<string, unknown> | null = null;
@@ -20,10 +27,11 @@ let configCacheMtimeMs = -1;
 const EMPTY: Record<string, unknown> = Object.freeze({});
 
 export function getConfigOverridesPath(): string {
-	return CONFIG_FILE;
+	return configFile();
 }
 
 export function readConfigOverrides(): Record<string, unknown> {
+	const CONFIG_FILE = configFile();
 	if (!existsSync(CONFIG_FILE)) {
 		configCache = null;
 		configCacheMtimeMs = -1;
@@ -66,7 +74,8 @@ export function saveConfigOverrides(overrides: Record<string, unknown>): void {
 		if (Object.keys(store).length === 0) delete merged.store;
 	}
 
-	mkdirSync(CONFIG_DIR, { recursive: true });
+	const CONFIG_FILE = configFile();
+	mkdirSync(configDir(), { recursive: true });
 	writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
 	try {
 		configCacheMtimeMs = statSync(CONFIG_FILE).mtimeMs;
