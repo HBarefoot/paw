@@ -242,9 +242,39 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 						)}
 					</li>
 				</ul>
-				<p class="text-sm text-muted">
-					Add or rotate these on the <a href="/vault">Vault</a> page (paste the
-					PEM as the value). Restart for changes to take effect.
+				{vaultEnabled && (
+					<div style="margin-top:10px;max-width:620px">
+						<div class="text-sm text-muted">
+							Paste the App private key (the full <code>.pem</code> incl.
+							BEGIN/END). It's normalized and stored encrypted — never shown
+							again.
+						</div>
+						<textarea
+							id="gh-pk"
+							rows={6}
+							placeholder={
+								"-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----"
+							}
+							style="width:100%;font-family:var(--font-mono,monospace);font-size:12px"
+						/>
+						<div style="margin-top:6px">
+							<button
+								type="button"
+								class="btn btn-primary"
+								onclick="ghSavePrivateKey()"
+							>
+								Save private key
+							</button>
+							<span class="text-sm text-muted" style="margin-left:8px">
+								Restart required to apply.
+							</span>
+						</div>
+					</div>
+				)}
+				<p class="text-sm text-muted" style="margin-top:10px">
+					The webhook secret is added on the <a href="/vault">Vault</a> page
+					(slot <code>github.webhookSecret</code>). Restart for changes to take
+					effect.
 				</p>
 			</div>
 
@@ -354,6 +384,22 @@ async function ghSaveSettings() {
     }
     pawModal.alert("Saved", "GitHub settings stored. Restart Paw for the change to take effect.");
     setTimeout(function(){ window.location.reload(); }, 500);
+  } catch (e) { pawModal.alert("Save failed", String(e)); }
+}
+async function ghSavePrivateKey() {
+  var key = (document.getElementById("gh-pk").value || "").trim();
+  if (!key) { pawModal.alert("Missing key", "Paste the .pem private key."); return; }
+  try {
+    var res = await fetch("/api/github/private-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: key })
+    });
+    var data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) { pawModal.alert("Save failed", data.error || ("HTTP " + res.status)); return; }
+    document.getElementById("gh-pk").value = "";
+    pawModal.alert("Saved", "Private key stored (encrypted). Restart Paw for it to take effect.");
+    setTimeout(function(){ window.location.reload(); }, 600);
   } catch (e) { pawModal.alert("Save failed", String(e)); }
 }
 

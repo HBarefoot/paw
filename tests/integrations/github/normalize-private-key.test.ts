@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createPrivateKey, generateKeyPairSync } from "node:crypto";
-import { normalizePrivateKey } from "../../../src/integrations/github/client.js";
+import { normalizePrivateKey } from "../../../src/integrations/github/private-key.js";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const pkcs8 = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
