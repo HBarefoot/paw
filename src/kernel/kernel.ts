@@ -10,6 +10,8 @@ import { OpenAIProvider } from "../ai/openai-provider.js";
 import { GeminiProvider } from "../ai/gemini-provider.js";
 import { ToolRegistry } from "../ai/tools.js";
 import { buildSystemPrompt } from "../ai/system-prompt.js";
+import { runSchemaDrift } from "../ai/mcp-schema-drift.js";
+import { AuditLogger } from "../security/audit-log.js";
 import type {
 	AIProvider,
 	ChatMessage,
@@ -2219,5 +2221,45 @@ export class Kernel {
 		if (accepted.length > 0) {
 			this.toolRegistry.register(accepted);
 		}
+
+		// Trust boundary: snapshot + diff each MCP server's tool schemas. Grouped
+		// here because every (re)discovery path — boot + every reconnect endpoint —
+		// funnels through registerTools, so detection rides along with no extra
+		// wiring. Uses the full discovered batch (`tools`), not the
+		// collision-filtered `accepted`. Never throws (runSchemaDrift wraps it).
+		// Caveat: a server returning ZERO tools is skipped by callers' length
+		// guard, so a full-server disappearance isn't flagged until it serves a
+		// tool again; individual tool removals (server still serving others) are.
+		for (const plugin of seen) {
+			this.detectMcpSchemaDrift(
+				plugin.slice(4), // strip "mcp:"
+				tools.filter((t) => t.plugin === plugin),
+			);
+		}
+	}
+
+	/**
+	 * Snapshot + diff an MCP server's tool schemas. Drift surfaces as an event +
+	 * audit entry + notification. Wrapped (runSchemaDrift) so a detection failure
+	 * can never block an MCP connect.
+	 */
+	private detectMcpSchemaDrift(
+		serverName: string,
+		tools: ToolDefinition[],
+	): void {
+		const audit = new AuditLogger(this.db);
+		runSchemaDrift(this.db, serverName, tools, {
+			notify: (n) =>
+				this.notificationStoreInstance?.add({
+					kind: "mcp",
+					title: n.title,
+					body: n.body,
+					url: n.url,
+					level: n.level,
+				}),
+			audit: (action, details) => audit.log(action, null, details),
+			emit: (event) => void this.bus.emit("mcp:schema-drift", event),
+			log: (message, meta) => this.logger.warn(message, meta),
+		});
 	}
 }
