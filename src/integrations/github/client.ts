@@ -415,13 +415,17 @@ export class GitHubClient {
 			});
 			const baseTreeSha = baseCommit.data.tree.sha;
 
-			// Create blobs, then a tree layered on the base tree.
+			// Create blobs, then a tree layered on the base tree. Binary files are
+			// committed by passing base64 through as-is; text is base64-wrapped.
 			const treeItems = await Promise.all(
 				files.map(async (f) => {
+					const isBase64 = f.encoding === "base64";
 					const blob = await octokit.rest.git.createBlob({
 						owner,
 						repo,
-						content: Buffer.from(f.content, "utf-8").toString("base64"),
+						content: isBase64
+							? f.content
+							: Buffer.from(f.content, "utf-8").toString("base64"),
 						encoding: "base64",
 					});
 					return {
