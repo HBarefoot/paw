@@ -2873,11 +2873,14 @@ export function createWebApp(
             transition: left .55s cubic-bezier(.45,.05,.2,1), top .55s cubic-bezier(.45,.05,.2,1), transform .55s ease; }
           /* ===== workbench: pills reflow to a left column + wires to the agent ===== */
           .wires { position:absolute; inset:0; pointer-events:none; z-index:1; overflow:visible; }
-          .wire { fill:none; stroke: var(--accent); stroke-width:2; stroke-linecap:round; opacity:.5;
+          .wire { fill:none; stroke: var(--accent); stroke-width:1.6; stroke-linecap:round; opacity:.4;
             filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 55%, transparent)); }
-          .wire.live { stroke-width:2.5; opacity:.9; animation: wirepulse 1.1s ease-in-out infinite; }
+          .wire.live { stroke-width:2; opacity:.85; animation: wirepulse 1.1s ease-in-out infinite; }
+          .wire.flow { stroke-dasharray: 6 10; animation: wireflow 1s linear infinite, wirepulse 1.4s ease-in-out infinite; }
+          .wire-packet { fill: var(--accent-bright); filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 75%, transparent)); }
           .wires.fade { opacity:0; transition: opacity .7s ease; }
           @keyframes wirepulse { 0%,100%{ opacity:.5; } 50%{ opacity:.95; } }
+          @keyframes wireflow { to { stroke-dashoffset: -32; } }
           /* ===== thinking indicator ===== */
           .think { position:absolute; top:-28px; left:50%; transform:translateX(-50%); display:none; gap:6px; align-items:center; z-index:3; }
           .think.show { display:flex; }
@@ -3001,7 +3004,7 @@ export function createWebApp(
           @keyframes popin { 0%{transform:scale(.2); opacity:0;} 100%{transform:scale(1); opacity:1;} }
           @keyframes bob { 0%,100%{margin-top:0;} 50%{margin-top:-6px;} }
           @media (prefers-reduced-motion: reduce) {
-            .face, .face-wrap, .chip, .face.working, .face.thinking, .think span, .wire.live, .subagent, .subagent.run .mini, .node.active .chip .ndot, .face.working .spark, .feed-row.run .fdot { animation: none !important; }
+            .face, .face-wrap, .chip, .face.working, .face.thinking, .think span, .wire.live, .wire.flow, .wire-packet, .subagent, .subagent.run .mini, .node.active .chip .ndot, .face.working .spark, .feed-row.run .fdot { animation: none !important; }
             .pupil, .mouth, .eye, .node, .subagent { transition: none !important; }
           }
           @media (max-width: 460px) { .stage { transform: scale(.8); } }
@@ -3072,6 +3075,30 @@ export function createWebApp(
           }
           function restoreRing(){ if(!ringSaved)return; document.querySelectorAll(".node").forEach(function(n){ if(n.dataset.rl!==undefined){ n.style.left=n.dataset.rl; n.style.top=n.dataset.rt; } n.style.transform=""; }); var st=document.querySelector(".stage"); if(st) st.classList.remove("col"); }
           function wireStart(n){ var x=parseFloat(n.style.left)||0, y=parseFloat(n.style.top)||0; if(document.querySelector(".stage.col")){ var chip=n.querySelector(".chip"); var w=chip?chip.offsetWidth:60; return {x:x+w+3,y:y}; } return {x:x,y:y}; }
+          var REDUCE=false; try{ REDUCE=!!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }catch(e){}
+          var WSVG="http://www.w3.org/2000/svg";
+          // Reveal a wire, then make it "flow": marching dashes toward the agent + a
+          // bright data packet travelling the path (SMIL animateMotion). The packet is
+          // stashed on the path so endWire/removeSubWire can stop the flow.
+          function animateWire(path, d){
+            if(!path) return;
+            try{
+              var len=path.getTotalLength();
+              path.style.strokeDasharray=len; path.style.strokeDashoffset=len;
+              path.getBoundingClientRect();
+              path.style.transition="stroke-dashoffset .5s ease"; path.style.strokeDashoffset="0";
+              if(!REDUCE) setTimeout(function(){ if(!path.isConnected) return; path.style.transition=""; path.style.strokeDasharray=""; path.style.strokeDashoffset=""; path.classList.add("flow"); }, 520);
+            }catch(e){}
+            if(REDUCE||!wiresEl) return;
+            try{
+              var dot=document.createElementNS(WSVG,"circle");
+              dot.setAttribute("r","2.4"); dot.setAttribute("class","wire-packet");
+              var am=document.createElementNS(WSVG,"animateMotion");
+              am.setAttribute("dur","1.1s"); am.setAttribute("repeatCount","indefinite"); am.setAttribute("path",d); am.setAttribute("rotate","auto");
+              dot.appendChild(am); wiresEl.appendChild(dot); path._packet=dot;
+            }catch(e){}
+          }
+          function removePacket(path){ if(path&&path._packet){ if(path._packet.parentNode) path._packet.parentNode.removeChild(path._packet); path._packet=null; } }
           function drawWire(key){
             if(!key||!wiresEl) return; var ns=nodesFor(key); if(!ns.length) return;
             if(drawnWires[key]){ drawnWires[key].classList.add("live"); return; }
@@ -3079,10 +3106,10 @@ export function createWebApp(
             var d="M "+p.x.toFixed(1)+" "+p.y.toFixed(1)+" C "+mx.toFixed(1)+" "+p.y.toFixed(1)+" "+mx.toFixed(1)+" "+CENTER+" "+CENTER+" "+CENTER;
             var path=document.createElementNS("http://www.w3.org/2000/svg","path");
             path.setAttribute("d",d); path.setAttribute("class","wire live"); wiresEl.classList.remove("fade"); wiresEl.appendChild(path);
-            try{ var len=path.getTotalLength(); path.style.strokeDasharray=len; path.style.strokeDashoffset=len; path.getBoundingClientRect(); path.style.transition="stroke-dashoffset .5s ease"; path.style.strokeDashoffset="0"; }catch(e){}
+            animateWire(path, d);
             drawnWires[key]=path;
           }
-          function endWire(key){ if(drawnWires[key]) drawnWires[key].classList.remove("live"); }
+          function endWire(key){ var w=drawnWires[key]; if(w){ w.classList.remove("live"); w.classList.remove("flow"); removePacket(w); } }
           function clearWires(){ if(!wiresEl) return; wiresEl.classList.add("fade"); setTimeout(function(){ if(!busy && wiresEl){ wiresEl.innerHTML=""; drawnWires={}; wiresEl.classList.remove("fade"); } }, 700); }
           // ===== sub-agent satellites (spawned agents get their own mini face) =====
           var subOrbs={}, subByName={};
@@ -3098,9 +3125,9 @@ export function createWebApp(
             var path=document.createElementNS("http://www.w3.org/2000/svg","path");
             path.setAttribute("d",d); path.setAttribute("class","wire live"); path.setAttribute("data-sa",name);
             wiresEl.classList.remove("fade"); wiresEl.appendChild(path);
-            try{ var len=path.getTotalLength(); path.style.strokeDasharray=len; path.style.strokeDashoffset=len; path.getBoundingClientRect(); path.style.transition="stroke-dashoffset .5s ease"; path.style.strokeDashoffset="0"; }catch(e){}
+            animateWire(path, d);
           }
-          function removeSubWire(name){ if(!wiresEl) return; var p=wiresEl.querySelector('.wire[data-sa="'+String(name).replace(/["\\\\]/g,"")+'"]'); if(p&&p.parentNode) p.parentNode.removeChild(p); }
+          function removeSubWire(name){ if(!wiresEl) return; var p=wiresEl.querySelector('.wire[data-sa="'+String(name).replace(/["\\\\]/g,"")+'"]'); if(p){ removePacket(p); if(p.parentNode) p.parentNode.removeChild(p); } }
           function createSubOrb(toolId, name, task){
             var wrap=document.getElementById("subagents"); if(!wrap||!name||subByName[name]) return;
             var el=document.createElement("div"); el.className="subagent run"; el.title=task||name;
