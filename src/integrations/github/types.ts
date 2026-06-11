@@ -55,6 +55,38 @@ export interface CommitFileInput {
 	content: string;
 }
 
+export interface CheckRunSummary {
+	name: string;
+	status: string; // queued | in_progress | completed
+	conclusion: string | null; // success | failure | cancelled | ...
+	url?: string;
+}
+
+export interface WorkflowRunSummary {
+	id: number;
+	name: string;
+	event: string;
+	status: string;
+	conclusion: string | null;
+	branch: string;
+	url: string;
+	createdAt: string;
+}
+
+export interface ReviewCommentSummary {
+	author?: string;
+	body: string;
+	path?: string;
+	line?: number | null;
+}
+
+export interface ReviewSummary {
+	author?: string;
+	state: string; // APPROVED | CHANGES_REQUESTED | COMMENTED
+	body: string;
+	submittedAt?: string;
+}
+
 export interface RateLimitInfo {
 	limit: number;
 	remaining: number;

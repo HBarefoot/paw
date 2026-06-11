@@ -1,6 +1,7 @@
 import { App, Octokit } from "octokit";
 import {
 	type BranchSummary,
+	type CheckRunSummary,
 	type CommitFileInput,
 	type ConnectionStatus,
 	GITHUB_DEFAULT_BASE_URL,
@@ -9,6 +10,9 @@ import {
 	GitHubForbiddenError,
 	type PrSummary,
 	type RepoSummary,
+	type ReviewCommentSummary,
+	type ReviewSummary,
+	type WorkflowRunSummary,
 } from "./types.js";
 
 /**
@@ -657,6 +661,196 @@ export class GitHubClient {
 		} catch (err) {
 			throw this.toError(
 				`GitHub createWorkflowDispatch ${fullName} (${workflowId}) failed`,
+				err,
+			);
+		}
+	}
+
+	// --- Phase 4: CI feedback (read-only) ---
+
+	/** Check runs (CI status) for a ref — a branch name, tag, or commit SHA. */
+	async getChecks(
+		fullName: string,
+		ref: string,
+	): Promise<{ ref: string; checks: CheckRunSummary[] }> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			const runs = await octokit.paginate(octokit.rest.checks.listForRef, {
+				owner,
+				repo,
+				ref,
+				per_page: 100,
+			});
+			return {
+				ref,
+				checks: runs.map((c) => ({
+					name: c.name,
+					status: c.status,
+					conclusion: c.conclusion,
+					url: c.html_url ?? undefined,
+				})),
+			};
+		} catch (err) {
+			throw this.toError(
+				`GitHub checks.listForRef ${fullName}@${ref} failed`,
+				err,
+			);
+		}
+	}
+
+	/** Recent GitHub Actions workflow runs, optionally filtered to a branch. */
+	async getWorkflowRuns(
+		fullName: string,
+		branch?: string,
+		limit = 15,
+	): Promise<WorkflowRunSummary[]> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			const res = await octokit.rest.actions.listWorkflowRunsForRepo({
+				owner,
+				repo,
+				per_page: Math.min(limit, 50),
+				...(branch ? { branch } : {}),
+			});
+			return res.data.workflow_runs.map((r) => ({
+				id: r.id,
+				name: r.name ?? r.display_title ?? "",
+				event: r.event,
+				status: r.status ?? "",
+				conclusion: r.conclusion,
+				branch: r.head_branch ?? "",
+				url: r.html_url,
+				createdAt: r.created_at,
+			}));
+		} catch (err) {
+			throw this.toError(`GitHub listWorkflowRuns ${fullName} failed`, err);
+		}
+	}
+
+	/**
+	 * Jobs + step outcomes for a workflow run, with truncated log excerpts for
+	 * failing jobs — enough for the agent to diagnose and fix a red CI run.
+	 */
+	async getRunLogs(
+		fullName: string,
+		runId: number,
+		maxLogChars = 8000,
+	): Promise<{
+		runId: number;
+		conclusion: string | null;
+		jobs: Array<{
+			name: string;
+			status: string;
+			conclusion: string | null;
+			failedSteps: string[];
+			log?: string;
+		}>;
+	}> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			const run = await octokit.rest.actions.getWorkflowRun({
+				owner,
+				repo,
+				run_id: runId,
+			});
+			const jobsRes = await octokit.paginate(
+				octokit.rest.actions.listJobsForWorkflowRun,
+				{ owner, repo, run_id: runId, per_page: 50 },
+			);
+			const jobs = await Promise.all(
+				jobsRes.map(async (j) => {
+					const failedSteps = (j.steps ?? [])
+						.filter((s) => s.conclusion === "failure")
+						.map((s) => s.name);
+					let log: string | undefined;
+					if (j.conclusion === "failure") {
+						log = await this.fetchJobLog(owner, repo, j.id, maxLogChars);
+					}
+					return {
+						name: j.name,
+						status: j.status,
+						conclusion: j.conclusion,
+						failedSteps,
+						log,
+					};
+				}),
+			);
+			return { runId, conclusion: run.data.conclusion, jobs };
+		} catch (err) {
+			throw this.toError(
+				`GitHub getRunLogs ${fullName} run ${runId} failed`,
+				err,
+			);
+		}
+	}
+
+	/** Fetch a single job's plain-text log, tail-truncated to maxChars. */
+	private async fetchJobLog(
+		owner: string,
+		repo: string,
+		jobId: number,
+		maxChars: number,
+	): Promise<string> {
+		const octokit = await this.octokit();
+		try {
+			// This endpoint 302-redirects to the raw log; Octokit follows it and
+			// returns the text body in `data`.
+			const res = await octokit.request(
+				"GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs",
+				{ owner, repo, job_id: jobId },
+			);
+			const text =
+				typeof res.data === "string" ? res.data : String(res.data ?? "");
+			return text.length > maxChars
+				? `…(truncated)\n${text.slice(-maxChars)}`
+				: text;
+		} catch (err) {
+			return `(could not fetch log: ${err instanceof Error ? err.message : String(err)})`;
+		}
+	}
+
+	/** PR reviews + review comments, so the agent can act on requested changes. */
+	async getPrReviews(
+		fullName: string,
+		number: number,
+	): Promise<{ reviews: ReviewSummary[]; comments: ReviewCommentSummary[] }> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			const [reviews, comments] = await Promise.all([
+				octokit.paginate(octokit.rest.pulls.listReviews, {
+					owner,
+					repo,
+					pull_number: number,
+					per_page: 50,
+				}),
+				octokit.paginate(octokit.rest.pulls.listReviewComments, {
+					owner,
+					repo,
+					pull_number: number,
+					per_page: 50,
+				}),
+			]);
+			return {
+				reviews: reviews.map((r) => ({
+					author: r.user?.login,
+					state: r.state,
+					body: r.body ?? "",
+					submittedAt: r.submitted_at,
+				})),
+				comments: comments.map((c) => ({
+					author: c.user?.login,
+					body: c.body,
+					path: c.path,
+					line: c.line,
+				})),
+			};
+		} catch (err) {
+			throw this.toError(
+				`GitHub getPrReviews ${fullName}#${number} failed`,
 				err,
 			);
 		}
