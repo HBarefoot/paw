@@ -58,6 +58,11 @@ export const KNOWN_SECRET_SLOTS: {
 		scope: "slack",
 		label: "Slack signing secret",
 	},
+	{
+		name: "slack.notifyChannel",
+		scope: "slack",
+		label: "Slack notify channel (e.g. #ai-operations id)",
+	},
 	{ name: "strapi.token", scope: "strapi", label: "Strapi API token" },
 	{
 		name: "hubspot.token",
@@ -267,6 +272,9 @@ export class VaultManager {
 		});
 		apply("slack.signingSecret", (v) => {
 			if (config.slack) config.slack.signingSecret = v;
+		});
+		apply("slack.notifyChannel", (v) => {
+			if (config.slack) config.slack.notifyChannel = v;
 		});
 		apply("strapi.token", (v) => {
 			if (config.strapi) config.strapi.token = v;
