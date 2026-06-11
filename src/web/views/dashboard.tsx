@@ -36,6 +36,28 @@ interface DashboardProps {
 		sessions: number;
 		messages: number;
 	} | null;
+	activity?: Array<{
+		ts: string;
+		kind: "tool" | "turn" | "note";
+		label: string;
+		sub?: string;
+		ok?: boolean;
+	}>;
+	timeline?: {
+		requests: number[];
+		tokens: number[];
+		totalRequests: number;
+		totalTokens: number;
+		peak: number;
+	};
+	recentSessions?: Array<{
+		id: string;
+		channel: string;
+		message_count: number;
+		updated_at: string;
+		snippet: string | null;
+	}>;
+	toolUsage?: Array<{ name: string; count: number; errors: number }>;
 }
 
 export const DashboardPage: FC<DashboardProps> = ({
@@ -48,6 +70,10 @@ export const DashboardPage: FC<DashboardProps> = ({
 	usage,
 	feedback,
 	totals,
+	activity,
+	timeline,
+	recentSessions,
+	toolUsage,
 }) => {
 	const uptimeStr = formatUptime(uptime);
 	const formatTokens = (n: number): string =>
@@ -77,6 +103,18 @@ export const DashboardPage: FC<DashboardProps> = ({
 				)
 			: [];
 	const sparkMax = Math.max(...sparkValues, 1);
+	const toolMax = toolUsage ? Math.max(...toolUsage.map((t) => t.count), 1) : 1;
+	const hasAgentOps = Boolean(
+		activity?.length ||
+			(timeline && timeline.totalRequests > 0) ||
+			recentSessions?.length ||
+			toolUsage?.length,
+	);
+	const kindLabel: Record<string, string> = {
+		tool: "tool",
+		turn: "turn",
+		note: "note",
+	};
 
 	return (
 		<Layout title="Dashboard" currentPath="/">
@@ -178,6 +216,153 @@ export const DashboardPage: FC<DashboardProps> = ({
 					</div>
 				)}
 			</div>
+
+			{/* Agent operations */}
+			{hasAgentOps && (
+				<>
+					<div class="flex items-center gap-sm mt-md mb-md">
+						<span class="label-xs">Agent operations</span>
+						<span class="badge badge-accent">live</span>
+					</div>
+
+					<div class="dash-split">
+						{/* Live activity feed */}
+						<div class="card">
+							<div class="flex justify-between items-center mb-md">
+								<span class="label-xs">Activity</span>
+								{activity && activity.length > 0 && (
+									<span class="badge badge-neutral mono">
+										{activity.length}
+									</span>
+								)}
+							</div>
+							{activity && activity.length > 0 ? (
+								<div class="flex-col gap-sm">
+									{activity.map((a) => (
+										<div class="act-row" key={`${a.kind}-${a.ts}-${a.label}`}>
+											<span
+												class={`act-kind act-${a.kind}`}
+												style={a.ok === false ? "background:var(--danger)" : ""}
+											/>
+											<span class="act-tag mono">{kindLabel[a.kind]}</span>
+											<span class="act-label mono">{a.label}</span>
+											{a.sub && <span class="act-sub mono">{a.sub}</span>}
+											<span class="act-time mono">{ago(a.ts)}</span>
+										</div>
+									))}
+								</div>
+							) : (
+								<div class="empty-state">
+									<p>No agent activity yet</p>
+								</div>
+							)}
+						</div>
+
+						{/* Activity timeline */}
+						<div class="card">
+							<div class="flex justify-between items-center mb-md">
+								<span class="label-xs">Requests · 24h</span>
+								<span class="badge badge-accent">24h</span>
+							</div>
+							{timeline && timeline.totalRequests > 0 ? (
+								<>
+									<div class="spark" style="height:90px">
+										{timeline.requests.map((v) => (
+											<span
+												class={v === timeline.peak && v > 0 ? "hi" : ""}
+												style={`height:${Math.max(4, Math.round((v / Math.max(timeline.peak, 1)) * 100))}%`}
+											/>
+										))}
+									</div>
+									<div class="flex flex-wrap gap-sm mt-sm">
+										<span class="text-xs text-muted mono">
+											{timeline.totalRequests} calls
+										</span>
+										<span class="text-xs text-muted mono">
+											{formatTokens(timeline.totalTokens)} tok
+										</span>
+										<span class="text-xs text-muted mono">
+											peak {timeline.peak}/h
+										</span>
+									</div>
+								</>
+							) : (
+								<div class="empty-state">
+									<p>No model calls in the last 24h</p>
+								</div>
+							)}
+						</div>
+					</div>
+
+					<div class="dash-split">
+						{/* Recent conversations */}
+						<div class="card">
+							<span class="label-xs">Recent conversations</span>
+							<div class="flex-col gap-sm mt-sm">
+								{recentSessions && recentSessions.length > 0 ? (
+									recentSessions.map((s) => (
+										<div class="sess-row" key={s.id}>
+											<div class="flex items-center gap-sm justify-between">
+												<span class="flex items-center gap-sm">
+													<span class="badge badge-neutral">{s.channel}</span>
+													<span class="text-xs text-muted mono">
+														{s.message_count} msg
+													</span>
+												</span>
+												<span class="text-xs text-muted mono">
+													{ago(s.updated_at)}
+												</span>
+											</div>
+											{s.snippet && (
+												<span class="sess-snippet">
+													{truncate(s.snippet, 96)}
+												</span>
+											)}
+										</div>
+									))
+								) : (
+									<div class="empty-state">
+										<p>No conversations yet</p>
+									</div>
+								)}
+							</div>
+						</div>
+
+						{/* Tool usage */}
+						<div class="card">
+							<div class="flex justify-between items-center mb-md">
+								<span class="label-xs">Tool usage</span>
+								<span class="badge badge-accent">7d</span>
+							</div>
+							{toolUsage && toolUsage.length > 0 ? (
+								<div class="flex-col gap-sm">
+									{toolUsage.map((t) => (
+										<div class="tool-row" key={t.name}>
+											<span class="tool-name mono">{t.name}</span>
+											<span class="tool-bar">
+												<span
+													class="tool-bar-fill"
+													style={`width:${Math.max(6, Math.round((t.count / toolMax) * 100))}%`}
+												/>
+											</span>
+											<span class="tool-count mono">
+												{t.count}
+												{t.errors > 0 && (
+													<span class="tool-err"> · {t.errors} err</span>
+												)}
+											</span>
+										</div>
+									))}
+								</div>
+							) : (
+								<div class="empty-state">
+									<p>No tool calls recorded yet</p>
+								</div>
+							)}
+						</div>
+					</div>
+				</>
+			)}
 
 			{/* Distribution + health feed */}
 			<div class="dash-split">
@@ -312,4 +497,22 @@ function formatUptime(ms: number): string {
 	if (h > 0) return `${h}h ${m % 60}m`;
 	if (m > 0) return `${m}m ${s % 60}s`;
 	return `${s}s`;
+}
+
+/** Compact relative time from a SQLite "YYYY-MM-DD HH:MM:SS" (UTC) timestamp. */
+function ago(ts: string): string {
+	const t = Date.parse(ts.includes("T") ? ts : `${ts.replace(" ", "T")}Z`);
+	if (Number.isNaN(t)) return "";
+	const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m`;
+	const h = Math.floor(m / 60);
+	if (h < 24) return `${h}h`;
+	return `${Math.floor(h / 24)}d`;
+}
+
+function truncate(s: string, n: number): string {
+	const clean = s.replace(/\s+/g, " ").trim();
+	return clean.length > n ? `${clean.slice(0, n - 1)}…` : clean;
 }

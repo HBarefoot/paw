@@ -63,6 +63,34 @@ export function listRecentSessions(db: Database, limit = 50): SessionSummary[] {
 		.all(limit);
 }
 
+export interface SessionActivity {
+	id: string;
+	channel: string;
+	message_count: number;
+	updated_at: string;
+	snippet: string | null;
+}
+
+/** Recent sessions with a one-line snippet of the latest user/assistant message —
+ * powers the Dashboard "recent conversations" panel. */
+export function recentSessionActivity(
+	db: Database,
+	limit = 6,
+): SessionActivity[] {
+	return db
+		.query<SessionActivity, [number]>(
+			`SELECT s.id, s.channel, s.updated_at,
+              (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) as message_count,
+              (SELECT m2.content FROM messages m2
+                 WHERE m2.session_id = s.id AND m2.role IN ('user','assistant')
+                 ORDER BY m2.created_at DESC LIMIT 1) as snippet
+       FROM sessions s
+       ORDER BY s.updated_at DESC
+       LIMIT ?`,
+		)
+		.all(Math.min(Math.max(limit, 1), 50));
+}
+
 export function listRecentSessionsForUser(
 	db: Database,
 	userId: string,

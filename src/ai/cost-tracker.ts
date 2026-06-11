@@ -93,9 +93,7 @@ export class CostTracker {
 			{ inputTokens: number; outputTokens: number; costUsd: number }
 		>;
 	} {
-		const whereClause = opts?.since
-			? "WHERE created_at >= ?"
-			: "";
+		const whereClause = opts?.since ? "WHERE created_at >= ?" : "";
 		const params = opts?.since ? [opts.since] : [];
 
 		const total = this.db
@@ -146,6 +144,25 @@ export class CostTracker {
 			estimatedCostUsd: total?.total_cost ?? 0,
 			byProvider,
 		};
+	}
+
+	/** Hourly activity buckets (model calls + tokens) for the Dashboard timeline.
+	 * Sparse — only hours with activity are returned; callers fill the gaps. */
+	getTimeline(opts?: {
+		since?: string;
+	}): Array<{ bucket: string; requests: number; tokens: number }> {
+		const whereClause = opts?.since ? "WHERE created_at >= ?" : "";
+		const params = opts?.since ? [opts.since] : [];
+		return this.db
+			.prepare<{ bucket: string; requests: number; tokens: number }, string[]>(
+				`SELECT strftime('%Y-%m-%d %H:00', created_at) as bucket,
+                COUNT(*) as requests,
+                COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
+         FROM usage_log ${whereClause}
+         GROUP BY bucket
+         ORDER BY bucket ASC`,
+			)
+			.all(...params);
 	}
 
 	static estimateCost(

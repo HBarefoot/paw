@@ -23,9 +23,7 @@ function preview(value: unknown): string {
 	} catch {
 		s = String(value);
 	}
-	return s.length > MAX_PREVIEW_LEN
-		? `${s.slice(0, MAX_PREVIEW_LEN)}…`
-		: s;
+	return s.length > MAX_PREVIEW_LEN ? `${s.slice(0, MAX_PREVIEW_LEN)}…` : s;
 }
 
 export class ToolLog {
@@ -93,6 +91,33 @@ export class ToolLog {
                 duration_ms, created_at
            FROM tool_log ${whereClause}
           ORDER BY id DESC
+          LIMIT ?`,
+			)
+			.all(...params);
+	}
+
+	/** Usage breakdown by tool name (most-used first) within an optional window —
+	 * powers the Dashboard "tool usage" panel. */
+	usageCounts(opts?: {
+		since?: string;
+		limit?: number;
+	}): Array<{ name: string; count: number; errors: number }> {
+		const limit = Math.min(Math.max(opts?.limit ?? 8, 1), 50);
+		const where = opts?.since ? "WHERE created_at >= ?" : "";
+		const params: (string | number)[] = opts?.since
+			? [opts.since, limit]
+			: [limit];
+		return this.db
+			.prepare<
+				{ name: string; count: number; errors: number },
+				(string | number)[]
+			>(
+				`SELECT tool_name AS name,
+                COUNT(*) AS count,
+                COALESCE(SUM(is_error), 0) AS errors
+           FROM tool_log ${where}
+          GROUP BY tool_name
+          ORDER BY count DESC
           LIMIT ?`,
 			)
 			.all(...params);

@@ -37,6 +37,7 @@ import {
 	getSessionWithMessages,
 	listRecentSessions,
 	listRecentSessionsForUser,
+	recentSessionActivity,
 	updateSessionTitle,
 	updateSessionTitleOwnedBy,
 } from "../store/sessions.js";
@@ -211,6 +212,113 @@ function readTotals(db: import("bun:sqlite").Database): {
 	} catch {
 		return { sessions: 0, messages: 0 };
 	}
+}
+
+interface AgentActivityItem {
+	ts: string;
+	kind: "tool" | "turn" | "note";
+	label: string;
+	sub?: string;
+	ok?: boolean;
+}
+
+function shortSession(id: string): string {
+	return id.length > 14 ? `${id.slice(0, 14)}…` : id;
+}
+
+/** Merge recent tool calls, model turns, and notifications into one time-sorted
+ * "what the agent did" stream for the Dashboard live feed. */
+function buildAgentActivity(kernel: Kernel, limit: number): AgentActivityItem[] {
+	const db = kernel.database;
+	const items: AgentActivityItem[] = [];
+	try {
+		for (const t of kernel.tools?.query({ limit: 10 }) ?? []) {
+			items.push({
+				ts: t.created_at,
+				kind: "tool",
+				label: t.tool_name,
+				sub: t.session_id ? shortSession(t.session_id) : undefined,
+				ok: t.is_error === 0,
+			});
+		}
+	} catch {
+		/* ignore */
+	}
+	try {
+		const turns = db
+			.query<
+				{
+					session_id: string;
+					model: string;
+					input_tokens: number;
+					output_tokens: number;
+					created_at: string;
+				},
+				[number]
+			>(
+				"SELECT session_id, model, input_tokens, output_tokens, created_at FROM usage_log ORDER BY id DESC LIMIT ?",
+			)
+			.all(8);
+		for (const u of turns) {
+			items.push({
+				ts: u.created_at,
+				kind: "turn",
+				label: u.model,
+				sub: `${u.input_tokens + u.output_tokens} tok · ${shortSession(u.session_id)}`,
+			});
+		}
+	} catch {
+		/* ignore */
+	}
+	try {
+		for (const n of kernel.notifications.listRecent(6)) {
+			items.push({
+				ts: n.created_at,
+				kind: "note",
+				label: n.title,
+				sub: n.level,
+			});
+		}
+	} catch {
+		/* ignore */
+	}
+	items.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+	return items.slice(0, limit);
+}
+
+interface TimelineBuckets {
+	requests: number[];
+	tokens: number[];
+	totalRequests: number;
+	totalTokens: number;
+	peak: number;
+}
+
+/** Expand sparse hourly usage rows into a fixed-width (last `hours`) series,
+ * filling empty hours with 0 so the Dashboard timeline reads as a real chart. */
+function hourlyBuckets(
+	rows: Array<{ bucket: string; requests: number; tokens: number }>,
+	hours: number,
+): TimelineBuckets {
+	const map = new Map(rows.map((r) => [r.bucket, r]));
+	const pad = (n: number) => String(n).padStart(2, "0");
+	const requests: number[] = [];
+	const tokens: number[] = [];
+	const now = Date.now();
+	for (let i = hours - 1; i >= 0; i--) {
+		const d = new Date(now - i * 3_600_000);
+		const key = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:00`;
+		const row = map.get(key);
+		requests.push(row?.requests ?? 0);
+		tokens.push(row?.tokens ?? 0);
+	}
+	return {
+		requests,
+		tokens,
+		totalRequests: requests.reduce((a, b) => a + b, 0),
+		totalTokens: tokens.reduce((a, b) => a + b, 0),
+		peak: Math.max(...requests, 0),
+	};
 }
 
 /**
@@ -871,6 +979,21 @@ export function createWebApp(
 		const feedbackStats = kernel.feedback?.getFeedbackStats() ?? null;
 		const totals = readTotals(kernel.database);
 
+		// ── Agent operations ────────────────────────────────────────────────
+		const db = kernel.database;
+		const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
+			.toISOString()
+			.replace("T", " ")
+			.replace(/\.\d+Z$/, "");
+		const toolUsage =
+			kernel.tools?.usageCounts({ since: sevenDaysAgo, limit: 8 }) ?? [];
+		const recentSessions = recentSessionActivity(db, 6);
+		const timeline = hourlyBuckets(
+			kernel.costs?.getTimeline({ since: dayAgo }) ?? [],
+			24,
+		);
+		const activity = buildAgentActivity(kernel, 14);
+
 		return c.html(
 			DashboardPage({
 				health,
@@ -882,6 +1005,10 @@ export function createWebApp(
 				usage,
 				feedback: feedbackStats,
 				totals,
+				activity,
+				timeline,
+				recentSessions,
+				toolUsage,
 			}),
 		);
 	});
