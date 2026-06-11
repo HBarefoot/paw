@@ -211,6 +211,22 @@ export const configSchema = z.object({
 				.default([]),
 		})
 		.default({}),
+	github: z
+		.object({
+			enabled: z.boolean().default(false),
+			// GitHub App ID (numeric, kept as string).
+			appId: z.string().default(""),
+			// Installation ID the App is installed under.
+			installationId: z.string().default(""),
+			// PEM private key — overlaid from vault slot `github.appPrivateKey`.
+			privateKey: z.string().default(""),
+			// Webhook signing secret — overlaid from vault slot `github.webhookSecret`.
+			webhookSecret: z.string().default(""),
+			baseUrl: z.string().default("https://api.github.com"),
+			// Allowlist of `owner/repo` the agent may touch. Empty = none allowed.
+			repoAllowlist: z.array(z.string()).default([]),
+		})
+		.default({}),
 });
 
 export type ConfigSchema = z.infer<typeof configSchema>;

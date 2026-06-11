@@ -134,4 +134,13 @@ export const defaults: PawConfig = {
 		transport: "sse",
 		endpoints: [],
 	},
+	github: {
+		enabled: false,
+		appId: "",
+		installationId: "",
+		privateKey: "",
+		webhookSecret: "",
+		baseUrl: "https://api.github.com",
+		repoAllowlist: [],
+	},
 };

@@ -24,6 +24,7 @@ const SCOPES: VaultScope[] = [
 	"hubspot",
 	"mcp",
 	"n8n",
+	"github",
 ];
 
 export const VaultPage: FC<VaultPageProps> = ({ enabled, secrets, slots }) => {
