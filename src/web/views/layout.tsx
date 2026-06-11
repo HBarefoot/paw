@@ -1,5 +1,5 @@
-import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
+import type { FC } from "hono/jsx";
 
 interface LayoutProps {
 	title: string;
@@ -1401,6 +1401,27 @@ const cssDesignSystem = `
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
   .dash-split { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; margin-top: 16px; }
   @media (max-width: 860px) { .dash-split { grid-template-columns: 1fr; } }
+
+  /* ===== AGENT OPERATIONS (dashboard) ===== */
+  .act-row { display: flex; align-items: center; gap: 8px; min-width: 0; line-height: 1.4; }
+  .act-kind { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--accent); }
+  .act-kind.act-turn { background: var(--accent-bright); }
+  .act-kind.act-note { background: var(--warning, #d9a441); }
+  .act-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-tertiary); flex: none; width: 30px; }
+  .act-label { font-size: 12px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .act-sub { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+  .act-time { font-size: 11px; color: var(--text-tertiary); flex: none; margin-left: auto; }
+
+  .sess-row { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,.05)); }
+  .sess-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .sess-snippet { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .tool-row { display: flex; align-items: center; gap: 10px; }
+  .tool-name { font-size: 12px; color: var(--text-primary); flex: none; width: 38%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool-bar { flex: 1 1 auto; height: 6px; background: var(--accent-line, rgba(255,255,255,.06)); border-radius: 3px; overflow: hidden; }
+  .tool-bar-fill { display: block; height: 100%; background: var(--accent-bright); border-radius: 3px; }
+  .tool-count { font-size: 11px; color: var(--text-tertiary); flex: none; }
+  .tool-err { color: var(--danger); }
   .flex { display: flex; }
   .flex-col { display: flex; flex-direction: column; }
   .flex-wrap { flex-wrap: wrap; }
@@ -1948,7 +1969,11 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 								{raw(`<span class="nav-icon">${navIcon(item.icon)}</span>`)}
 								<span class="nav-label">{item.label}</span>
 								{item.path === "/notifications" && (
-									<span id="nav-notif-badge" class="nav-badge" style="display:none" />
+									<span
+										id="nav-notif-badge"
+										class="nav-badge"
+										style="display:none"
+									/>
 								)}
 							</a>
 						))}
