@@ -523,6 +523,22 @@ function runMigrations(db: Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_github_pending_status ON github_pending_actions(status, created_at DESC);
+
+    -- Proactive notifications: the agent's durable "I have something for you"
+    -- inbox (GitHub events, CI investigations, etc.). Surfaced as a nav badge +
+    -- the canvas portrait "attentive" state so nothing is missed when away.
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'system',       -- github | system | ...
+      title TEXT NOT NULL,
+      body TEXT,
+      url TEXT,                                   -- deep link (PR/issue/run)
+      level TEXT NOT NULL DEFAULT 'info',         -- info | success | warning | error
+      read INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read, created_at DESC);
   `);
 
 	// Brand kit: a library of brand profiles. One is `active` at a time and its

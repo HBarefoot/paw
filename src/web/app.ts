@@ -51,6 +51,7 @@ import { BrandPage } from "./views/brand-page.js";
 import { ConfigPage } from "./views/config-page.js";
 import { VaultPage, type VaultSlotStatus } from "./views/vault-page.js";
 import { GitHubPage } from "./views/github-page.js";
+import { NotificationsPage } from "./views/notifications-page.js";
 import { KNOWN_SECRET_SLOTS, type VaultScope } from "../security/vault.js";
 // canvas-page.tsx removed — canvas is now merged into chat
 import { CronPage } from "./views/cron-page.js";
@@ -1299,7 +1300,48 @@ export function createWebApp(
 		}
 		const summary = summarizeGithubWebhook(eventType, payload);
 		if (summary) pushGithubEvent("webhook", { type: eventType, ...summary });
+
+		// Hand the event to the kernel so the agent can react (notify / portrait /
+		// auto-investigate). Fire-and-forget — the webhook response shouldn't wait.
+		const repository = payload.repository as { full_name?: string } | undefined;
+		const sender = payload.sender as { login?: string } | undefined;
+		void kernel.eventBus.emit("github:event", {
+			eventType,
+			action: typeof payload.action === "string" ? payload.action : undefined,
+			repo: repository?.full_name,
+			summary: (summary?.summary as string | undefined) ?? undefined,
+			url: (summary?.url as string | undefined) ?? undefined,
+			sender: sender?.login,
+			payload,
+			timestamp: new Date().toISOString(),
+		});
 		return c.json({ ok: true });
+	});
+
+	// --- Proactive notifications (durable inbox + nav badge + portrait) ---
+	app.get("/notifications", (c) => {
+		return c.html(
+			NotificationsPage({
+				notifications: kernel.notifications.listRecent(50),
+				unread: kernel.notifications.unreadCount(),
+			}),
+		);
+	});
+
+	app.get("/api/notifications", (c) => {
+		return c.json({
+			notifications: kernel.notifications.listRecent(50),
+			unread: kernel.notifications.unreadCount(),
+		});
+	});
+
+	app.post("/api/notifications/read", async (c) => {
+		const body = await c.req
+			.json<{ id?: string }>()
+			.catch(() => ({}) as { id?: string });
+		if (body.id) kernel.notifications.markRead(body.id);
+		else kernel.notifications.markAllRead();
+		return c.json({ ok: true, unread: kernel.notifications.unreadCount() });
 	});
 
 	// One-time migration: copy current effective secrets (env + credentials.json
@@ -2884,6 +2926,12 @@ export function createWebApp(
             box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent); animation: ndotpulse 1s ease-in-out infinite; }
           .node.done .chip { border-color: var(--accent); box-shadow: 0 0 14px -2px var(--accent); }
           .node.errored .chip { border-color: #f87171; box-shadow: 0 0 14px -2px #f87171; }
+          .node.has-alert { position: absolute; }
+          .node.has-alert .chip { border-color: #f59e0b; box-shadow: 0 0 0 1px #f59e0b, 0 0 16px -2px #f59e0b; animation: ambientglow 2s ease-in-out infinite; }
+          .ambient-badge { position:absolute; top:-7px; right:-7px; min-width:17px; height:17px; padding:0 4px; border-radius:999px; background:#f59e0b; color:#1f2937; font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; line-height:1; z-index:4; }
+          @keyframes ambientglow { 0%,100%{ box-shadow: 0 0 0 1px #f59e0b, 0 0 14px -2px #f59e0b; } 50%{ box-shadow: 0 0 0 1px #f59e0b, 0 0 22px 0 #f59e0b; } }
+          .face.attentive { animation: attentivebob 2.4s ease-in-out infinite; }
+          @keyframes attentivebob { 0%,100%{ transform: translateY(0); } 50%{ transform: translateY(-3px); } }
           .face.working { animation: workbob 1.2s ease-in-out infinite !important; }
           .face.working .mouth { width: 22px; height: 8px; border-radius: 0 0 22px 22px; }
           .spark { position:absolute; inset:-8px; border-radius:inherit; pointer-events:none; opacity:0;
@@ -2978,8 +3026,29 @@ export function createWebApp(
               if(feed && feed.children.length){ feed.classList.add("idle"); clearTimer=setTimeout(function(){ if(!busy && feed) feed.innerHTML=""; }, FEED_CLEAR_MS); }
             }, CALM_MS);
           }
+          // Ambient "you have something for you" state: light the GitHub node
+          // with a count badge + make the face attentive, even when idle.
+          function applyAmbient(count){
+            var gh=document.querySelector('.node[data-key="github"]');
+            if(gh){
+              var chip=gh.querySelector(".chip");
+              var badge=gh.querySelector(".ambient-badge");
+              if(count>0){
+                gh.classList.add("has-alert");
+                if(!badge){ badge=document.createElement("span"); badge.className="ambient-badge"; (chip||gh).appendChild(badge); }
+                badge.textContent=count>99?"99+":String(count);
+              } else {
+                gh.classList.remove("has-alert");
+                if(badge) badge.remove();
+              }
+            }
+            var face=document.querySelector(".face");
+            if(face){ if(count>0) face.classList.add("attentive"); else face.classList.remove("attentive"); }
+          }
           window.addEventListener("message", function(e){
-            var m=e.data; if(!m || m.type!=="paw:tool") return;
+            var m=e.data; if(!m) return;
+            if(m.type==="paw:ambient"){ applyAmbient((m.unread||0)+(m.pendingApprovals||0)); return; }
+            if(m.type!=="paw:tool") return;
             if(m.phase==="done"){
               // Authoritative turn-end reset: the parent says the turn is over, so
               // clear every pill (even ones whose tool_end never arrived) and let the

@@ -1433,6 +1433,31 @@ export function getChatScript(): string {
     } catch (e) {}
   }
 
+  // Relay ambient "you have something for you" state (unread notifications +
+  // pending GitHub approvals) into the portrait so the face/GitHub node reacts
+  // even when the agent isn't actively streaming.
+  function notifyPortraitAmbient(unread, pendingApprovals) {
+    try {
+      for (var i = 0; i < canvasTabs.length; i++) {
+        var t = canvasTabs[i];
+        if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        t.iframeEl.contentWindow.postMessage({ type: "paw:ambient", unread: unread, pendingApprovals: pendingApprovals }, "*");
+      }
+    } catch (e) {}
+  }
+  function pollAmbient() {
+    Promise.all([
+      fetch("/api/notifications").then(function(r){ return r.json(); }).catch(function(){ return {}; }),
+      fetch("/api/github/pending").then(function(r){ return r.json(); }).catch(function(){ return {}; })
+    ]).then(function(res){
+      var unread = (res[0] && res[0].unread) || 0;
+      var pending = (res[1] && res[1].pending && res[1].pending.length) || 0;
+      notifyPortraitAmbient(unread, pending);
+    }).catch(function(){});
+  }
+  setInterval(pollAmbient, 20000);
+  setTimeout(pollAmbient, 1500);
+
   function createCanvasTab(path) {
     var id = ++canvasTabIdSeq;
     var iframe = document.createElement("iframe");

@@ -50,6 +50,22 @@ export interface EventMap {
 		timestamp: string;
 	};
 	"webhook:error": { webhookId: string; slug: string; error: string };
+	"github:event": {
+		eventType: string;
+		action?: string;
+		repo?: string;
+		summary?: string;
+		url?: string;
+		sender?: string;
+		payload: Record<string, unknown>;
+		timestamp: string;
+	};
+	"notification:created": {
+		id: string;
+		kind: string;
+		title: string;
+		level: string;
+	};
 }
 
 export type EventName = keyof EventMap;
