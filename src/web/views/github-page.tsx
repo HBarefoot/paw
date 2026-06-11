@@ -229,7 +229,7 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 
 			{/* Secrets status */}
 			<div class="card mb-md">
-				<details class="gh-collapse" open={!privateKeyInVault}>
+				<details class="gh-collapse">
 					<summary class="gh-summary">
 						<span>Secrets (Vault)</span>
 						<svg
@@ -310,7 +310,7 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 
 			{/* Settings */}
 			<div class="card mb-md">
-				<details class="gh-collapse" open={!status?.ok}>
+				<details class="gh-collapse">
 					<summary class="gh-summary">
 						<span>App settings</span>
 						<svg
