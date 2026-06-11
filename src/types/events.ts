@@ -68,6 +68,15 @@ export interface EventMap {
 		url?: string;
 		level: string;
 	};
+	"mcp:schema-drift": {
+		server: string;
+		tool: string;
+		reason: "changed" | "removed";
+		added: string[];
+		removed: string[];
+		typeChanged: string[];
+		requiredChanged: boolean;
+	};
 }
 
 export type EventName = keyof EventMap;

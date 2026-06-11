@@ -550,6 +550,25 @@ function runMigrations(db: Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read, created_at DESC);
+
+    -- MCP schema-drift snapshots: one row per (server, tool). On every connect/
+    -- refresh the current input schema is canonicalized + hashed and compared
+    -- against schema_hash; a change/removal raises a drift notification. MCP is
+    -- a trust boundary, so an upstream schema change shouldn't surface only as
+    -- an opaque tool failure.
+    CREATE TABLE IF NOT EXISTS mcp_tool_schemas (
+      id TEXT PRIMARY KEY,
+      server_name TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      schema_hash TEXT NOT NULL,
+      schema_json TEXT NOT NULL,
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_changed TEXT,
+      UNIQUE(server_name, tool_name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mcp_tool_schemas_server ON mcp_tool_schemas(server_name);
   `);
 
 	// Brand kit: a library of brand profiles. One is `active` at a time and its
