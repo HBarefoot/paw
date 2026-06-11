@@ -321,6 +321,57 @@ function hourlyBuckets(
 	};
 }
 
+export interface SceneNode {
+	key: string;
+	label: string;
+	kind: "skill" | "service";
+}
+
+function prettifyName(s: string): string {
+	return s.replace(/[-_]+/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+/** The skill / MCP / service node set for the Dashboard agent-ops scene — the
+ * same source the canvas portrait uses (app.ts portrait `rawNodes`). */
+function agentSceneNodes(kernel: Kernel): SceneNode[] {
+	const nodes: SceneNode[] = [];
+	const seen = new Set<string>();
+	const add = (n: SceneNode) => {
+		const k = n.key.toLowerCase();
+		if (seen.has(k)) return;
+		seen.add(k);
+		nodes.push(n);
+	};
+	try {
+		for (const name of kernel.skills.skillNames ?? [])
+			add({ key: name, label: prettifyName(name), kind: "skill" });
+		for (const s of kernel.mcpManager.getServerInfo().filter((s) => s.connected))
+			add({ key: `mcp:${s.name}`, label: prettifyName(s.name), kind: "service" });
+		if (kernel.strapi) add({ key: "strapi", label: "Strapi", kind: "service" });
+	} catch {
+		/* fresh DB / not-ready subsystems → render what we have */
+	}
+	return nodes.slice(0, 14);
+}
+
+/** Map a tool-log row to a scene node key (mirrors the portrait's enrichChunk):
+ * skill grouping first, then plugin-based mcp/strapi fallback. */
+function skillKeyForToolRow(
+	kernel: Kernel,
+	row: { tool_name: string; plugin: string | null },
+): string | null {
+	const clean = row.tool_name.replace(/^\[[^\]]+\]\s*/, "");
+	try {
+		const skill = kernel.skills.skillNameForTool(clean);
+		if (skill) return skill;
+	} catch {
+		/* ignore */
+	}
+	if (row.plugin === "strapi") return "strapi";
+	if (row.plugin) return `mcp:${row.plugin}`;
+	return null;
+}
+
 /**
  * Condense a GitHub webhook payload into a short feed item for the /github UI.
  * Returns null for events we don't surface (keeps the feed signal-dense).
@@ -993,6 +1044,21 @@ export function createWebApp(
 			24,
 		);
 		const activity = buildAgentActivity(kernel, 14);
+		const nodes = agentSceneNodes(kernel);
+		const latestTurn = db
+			.query<{ model: string }, []>(
+				"SELECT model FROM usage_log ORDER BY id DESC LIMIT 1",
+			)
+			.get();
+		const cfgModel =
+			config.provider === "ollama"
+				? config.ollama.model
+				: config.provider === "openai"
+					? config.openai.model
+					: config.provider === "gemini"
+						? config.gemini.model
+						: config.ai.model;
+		const sceneModel = latestTurn?.model ?? cfgModel;
 
 		return c.html(
 			DashboardPage({
@@ -1009,8 +1075,58 @@ export function createWebApp(
 				timeline,
 				recentSessions,
 				toolUsage,
+				nodes,
+				sceneModel,
 			}),
 		);
+	});
+
+	// Live feed for the Dashboard agent-ops scene. Returns tool calls newer than
+	// ?since=<id> (enriched with a scene-node key), recent turns, and whether the
+	// agent is actively working — polled by the canvas every ~2s.
+	app.get("/api/agent-ops", (c) => {
+		const since = Number.parseInt(c.req.query("since") ?? "0", 10) || 0;
+		const rows = kernel.tools?.query({ limit: 40 }) ?? [];
+		const fresh = rows.filter((r) => r.id > since);
+		const tools = fresh
+			.slice(0, 30)
+			.reverse()
+			.map((r) => ({
+				id: r.id,
+				tool: r.tool_name.replace(/^\[[^\]]+\]\s*/, ""),
+				skill: skillKeyForToolRow(kernel, r),
+				ok: r.is_error === 0,
+				ts: r.created_at,
+			}));
+		let working = false;
+		let model = "";
+		const turns: Array<{ model: string; tokens: number; ts: string }> = [];
+		try {
+			const recent = kernel.database
+				.query<
+					{ model: string; tokens: number; created_at: string },
+					[number]
+				>(
+					"SELECT model, (input_tokens + output_tokens) AS tokens, created_at FROM usage_log ORDER BY id DESC LIMIT ?",
+				)
+				.all(5);
+			for (const t of recent)
+				turns.push({ model: t.model, tokens: t.tokens, ts: t.created_at });
+			model = recent[0]?.model ?? "";
+			const newest = [rows[0]?.created_at, recent[0]?.created_at]
+				.filter(Boolean)
+				.sort()
+				.pop();
+			if (newest) {
+				const age =
+					Date.now() - Date.parse(`${newest.replace(" ", "T")}Z`);
+				working = Number.isFinite(age) && age < 12_000;
+			}
+		} catch {
+			/* best-effort */
+		}
+		const newestId = rows.length ? rows[0].id : since;
+		return c.json({ now: Date.now(), cursor: newestId, working, model, tools, turns });
 	});
 
 	app.post("/api/credentials/:service", async (c) => {

@@ -1422,6 +1422,25 @@ const cssDesignSystem = `
   .tool-bar-fill { display: block; height: 100%; background: var(--accent-bright); border-radius: 3px; }
   .tool-count { font-size: 11px; color: var(--text-tertiary); flex: none; }
   .tool-err { color: var(--danger); }
+
+  /* live agent-ops scene (canvas constellation) */
+  .ops-card { overflow: hidden; }
+  .ops-hud { display: inline-flex; align-items: center; gap: 8px; }
+  .ops-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-tertiary); flex: none; transition: background .3s; }
+  .ops-dot.on { background: var(--accent-bright); box-shadow: 0 0 8px var(--accent-bright); animation: ops-pulse 1.3s ease-in-out infinite; }
+  @keyframes ops-pulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+  .ops-stage { position: relative; width: 100%; height: 300px; }
+  @media (max-width: 640px) { .ops-stage { height: 230px; } }
+  .ops-scene { display: block; width: 100%; height: 100%; }
+  .ops-ticker { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+  .ops-ticker:empty { display: none; }
+  .tk-row { display: flex; align-items: center; gap: 8px; font-size: 11px; line-height: 1.7; opacity: .85; }
+  .tk-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+  .tk-dot.err { background: var(--danger); }
+  .tk-name { color: var(--text-primary); white-space: nowrap; }
+  .tk-skill { color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @media (prefers-reduced-motion: reduce) { .ops-dot.on { animation: none !important; } }
+
   .flex { display: flex; }
   .flex-col { display: flex; flex-direction: column; }
   .flex-wrap { flex-wrap: wrap; }
