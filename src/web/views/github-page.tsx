@@ -121,16 +121,28 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 			{/* Repositories */}
 			<div class="card mb-md">
 				<h3>Repositories</h3>
+				<p class="text-sm text-muted">
+					Repos the App is installed on and you've allowlisted — the only repos
+					the agent is allowed to touch.
+				</p>
 				<div id="gh-repos" class="text-sm text-muted">
-					{enabled ? "Loading…" : "Enable and configure the App to list repos."}
+					{enabled
+						? "Loading…"
+						: "Not configured yet. Once the App is enabled and installed on an allowlisted repo, your repositories appear here with their visibility and default branch."}
 				</div>
 			</div>
 
 			{/* Open pull requests + diff viewer */}
 			<div class="card mb-md">
 				<h3>Open pull requests</h3>
+				<p class="text-sm text-muted">
+					Open PRs across your allowlisted repos — including ones the agent
+					opens. Use <strong>View diff</strong> to inspect the changes inline.
+				</p>
 				<div id="gh-prs" class="text-sm text-muted">
-					{enabled ? "Loading…" : "—"}
+					{enabled
+						? "Loading…"
+						: "Nothing to show yet. When the agent opens a pull request (or you have open PRs on an allowlisted repo), they'll appear here with a one-click diff viewer."}
 				</div>
 			</div>
 
@@ -217,132 +229,171 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 
 			{/* Secrets status */}
 			<div class="card mb-md">
-				<h3>Secrets (Vault)</h3>
-				{!vaultEnabled && (
-					<div class="alert alert-error">
-						The Vault is disabled (<code>PAW_VAULT_KEY</code> unset). Set it and
-						restart to store the GitHub App key securely.
-					</div>
-				)}
-				<ul class="text-sm" style="line-height:1.9">
-					<li>
-						App private key (<code>github.appPrivateKey</code>):{" "}
-						{privateKeyInVault ? (
-							<span style="color:var(--success,#16a34a)">stored ✓</span>
-						) : (
-							<span style="color:var(--error,#dc2626)">missing</span>
-						)}
-					</li>
-					<li>
-						Webhook secret (<code>github.webhookSecret</code>):{" "}
-						{webhookSecretInVault ? (
-							<span style="color:var(--success,#16a34a)">stored ✓</span>
-						) : (
-							<span class="text-muted">not set (optional until Phase 3)</span>
-						)}
-					</li>
-				</ul>
-				{vaultEnabled && (
-					<div style="margin-top:10px;max-width:620px">
-						<div class="text-sm text-muted">
-							Paste the App private key (the full <code>.pem</code> incl.
-							BEGIN/END). It's normalized and stored encrypted — never shown
-							again.
+				<details class="gh-collapse" open={!privateKeyInVault}>
+					<summary class="gh-summary">
+						<span>Secrets (Vault)</span>
+						<svg
+							class="gh-chevron"
+							aria-hidden="true"
+							width="14"
+							height="14"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.5"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<polyline points="9 6 15 12 9 18" />
+						</svg>
+					</summary>
+					{!vaultEnabled && (
+						<div class="alert alert-error">
+							The Vault is disabled (<code>PAW_VAULT_KEY</code> unset). Set it
+							and restart to store the GitHub App key securely.
 						</div>
-						<textarea
-							id="gh-pk"
-							rows={6}
-							placeholder={
-								"-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----"
-							}
-							style="width:100%;font-family:var(--font-mono,monospace);font-size:12px"
-						/>
-						<div style="margin-top:6px">
+					)}
+					<ul class="text-sm" style="line-height:1.9">
+						<li>
+							App private key (<code>github.appPrivateKey</code>):{" "}
+							{privateKeyInVault ? (
+								<span style="color:var(--success,#16a34a)">stored ✓</span>
+							) : (
+								<span style="color:var(--error,#dc2626)">missing</span>
+							)}
+						</li>
+						<li>
+							Webhook secret (<code>github.webhookSecret</code>):{" "}
+							{webhookSecretInVault ? (
+								<span style="color:var(--success,#16a34a)">stored ✓</span>
+							) : (
+								<span class="text-muted">not set (optional until Phase 3)</span>
+							)}
+						</li>
+					</ul>
+					{vaultEnabled && (
+						<div style="margin-top:10px;max-width:620px">
+							<div class="text-sm text-muted">
+								Paste the App private key (the full <code>.pem</code> incl.
+								BEGIN/END). It's normalized and stored encrypted — never shown
+								again.
+							</div>
+							<textarea
+								id="gh-pk"
+								rows={6}
+								placeholder={
+									"-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----"
+								}
+								style="width:100%;font-family:var(--font-mono,monospace);font-size:12px"
+							/>
+							<div style="margin-top:6px">
+								<button
+									type="button"
+									class="btn btn-primary"
+									onclick="ghSavePrivateKey()"
+								>
+									Save private key
+								</button>
+								<span class="text-sm text-muted" style="margin-left:8px">
+									Restart required to apply.
+								</span>
+							</div>
+						</div>
+					)}
+					<p class="text-sm text-muted" style="margin-top:10px">
+						The webhook secret is added on the <a href="/vault">Vault</a> page
+						(slot <code>github.webhookSecret</code>). Restart for changes to
+						take effect.
+					</p>
+				</details>
+			</div>
+
+			{/* Settings */}
+			<div class="card mb-md">
+				<details class="gh-collapse" open={!status?.ok}>
+					<summary class="gh-summary">
+						<span>App settings</span>
+						<svg
+							class="gh-chevron"
+							aria-hidden="true"
+							width="14"
+							height="14"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.5"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<polyline points="9 6 15 12 9 18" />
+						</svg>
+					</summary>
+					<form
+						id="gh-settings"
+						style="display:grid;gap:12px;max-width:560px;margin-top:8px"
+					>
+						<label style="display:flex;align-items:center;gap:8px">
+							<input type="checkbox" id="gh-enabled" checked={enabled} />
+							<span>Enabled</span>
+						</label>
+						<label>
+							<div class="text-sm text-muted">App ID</div>
+							<input
+								id="gh-appId"
+								type="text"
+								value={appId}
+								placeholder="e.g. 123456"
+								style="width:100%"
+							/>
+						</label>
+						<label>
+							<div class="text-sm text-muted">Installation ID</div>
+							<input
+								id="gh-installationId"
+								type="text"
+								value={installationId}
+								placeholder="e.g. 78901234"
+								style="width:100%"
+							/>
+						</label>
+						<label>
+							<div class="text-sm text-muted">API base URL</div>
+							<input
+								id="gh-baseUrl"
+								type="text"
+								value={baseUrl}
+								placeholder="https://api.github.com"
+								style="width:100%"
+							/>
+						</label>
+						<label>
+							<div class="text-sm text-muted">
+								Repo allowlist (one <code>owner/repo</code> per line) — the
+								agent can only touch these
+							</div>
+							<textarea
+								id="gh-allowlist"
+								rows={4}
+								placeholder={"HBarefoot/paw\nHBarefoot/another-repo"}
+								style="width:100%;font-family:var(--font-mono,monospace)"
+							>
+								{repoAllowlist.join("\n")}
+							</textarea>
+						</label>
+						<div>
 							<button
 								type="button"
 								class="btn btn-primary"
-								onclick="ghSavePrivateKey()"
+								onclick="ghSaveSettings()"
 							>
-								Save private key
+								Save settings
 							</button>
 							<span class="text-sm text-muted" style="margin-left:8px">
 								Restart required to apply.
 							</span>
 						</div>
-					</div>
-				)}
-				<p class="text-sm text-muted" style="margin-top:10px">
-					The webhook secret is added on the <a href="/vault">Vault</a> page
-					(slot <code>github.webhookSecret</code>). Restart for changes to take
-					effect.
-				</p>
-			</div>
-
-			{/* Settings */}
-			<div class="card mb-md">
-				<h3>App settings</h3>
-				<form id="gh-settings" style="display:grid;gap:12px;max-width:560px">
-					<label style="display:flex;align-items:center;gap:8px">
-						<input type="checkbox" id="gh-enabled" checked={enabled} />
-						<span>Enabled</span>
-					</label>
-					<label>
-						<div class="text-sm text-muted">App ID</div>
-						<input
-							id="gh-appId"
-							type="text"
-							value={appId}
-							placeholder="e.g. 123456"
-							style="width:100%"
-						/>
-					</label>
-					<label>
-						<div class="text-sm text-muted">Installation ID</div>
-						<input
-							id="gh-installationId"
-							type="text"
-							value={installationId}
-							placeholder="e.g. 78901234"
-							style="width:100%"
-						/>
-					</label>
-					<label>
-						<div class="text-sm text-muted">API base URL</div>
-						<input
-							id="gh-baseUrl"
-							type="text"
-							value={baseUrl}
-							placeholder="https://api.github.com"
-							style="width:100%"
-						/>
-					</label>
-					<label>
-						<div class="text-sm text-muted">
-							Repo allowlist (one <code>owner/repo</code> per line) — the agent
-							can only touch these
-						</div>
-						<textarea
-							id="gh-allowlist"
-							rows={4}
-							placeholder={"HBarefoot/paw\nHBarefoot/another-repo"}
-							style="width:100%;font-family:var(--font-mono,monospace)"
-						>
-							{repoAllowlist.join("\n")}
-						</textarea>
-					</label>
-					<div>
-						<button
-							type="button"
-							class="btn btn-primary"
-							onclick="ghSaveSettings()"
-						>
-							Save settings
-						</button>
-						<span class="text-sm text-muted" style="margin-left:8px">
-							Restart required to apply.
-						</span>
-					</div>
-				</form>
+					</form>
+				</details>
 			</div>
 
 			{raw(`<script>
@@ -470,7 +521,7 @@ async function ghLoadOverview() {
     var prs = data.prs || [];
     if (reposEl) {
       reposEl.innerHTML = repos.length === 0
-        ? "No repositories. Add an allowlisted repo and install the App on it."
+        ? "No repositories yet. Install the GitHub App on a repo, then add it to the allowlist in App settings below — it'll show here with its visibility and default branch."
         : repos.map(function(r){
             return '<div class="gh-row">'
               + '<a class="link" href="' + ghEsc(r.url) + '" target="_blank" rel="noopener" style="font-weight:600">' + ghEsc(r.fullName) + '</a>'
@@ -481,7 +532,7 @@ async function ghLoadOverview() {
     }
     if (prsEl) {
       prsEl.innerHTML = prs.length === 0
-        ? "No open pull requests."
+        ? "No open pull requests. When the agent opens one (or you have open PRs on an allowlisted repo), they'll appear here with a one-click diff viewer."
         : prs.map(function(p){
             return '<div class="gh-row">'
               + '<div style="min-width:0">'
@@ -561,6 +612,11 @@ function ghPushActivity(ev) {
 })();
 </script>
 <style>
+.gh-collapse>summary.gh-summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.1em;font-weight:500}
+.gh-collapse>summary.gh-summary::-webkit-details-marker{display:none}
+.gh-collapse>summary.gh-summary:hover{color:var(--text-secondary)}
+.gh-collapse .gh-chevron{transition:transform .15s ease;flex:none}
+.gh-collapse[open]>summary.gh-summary .gh-chevron{transform:rotate(90deg)}
 .gh-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-primary)}
 .gh-row:last-child{border-bottom:none}
 .gh-diff{max-height:420px;overflow:auto;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:var(--radius-md,9px);padding:10px;margin-top:8px;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.5;white-space:pre}
