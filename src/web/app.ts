@@ -3225,6 +3225,10 @@ export function createWebApp(
             keepAlive();
             if(m.phase==="work"){ if(m.kind==="thinking" && activeCount===0) faceThinking(); return; } // heartbeat / thinking
             var key=m.skillKey, label=String(m.summary||m.toolName||"working");
+            // Wrap the reactive body: one bad field must never kill ALL portrait
+            // reactivity (an undeclared-var ReferenceError here once silently broke
+            // every wire + pill pulse in production).
+            try{
             if(m.phase==="start"){
               // a fresh burst after the feed had dimmed → clear the stale rows
               if(wasIdle && feed){ feed.innerHTML=""; }
@@ -3239,7 +3243,7 @@ export function createWebApp(
               if(spawnName){ createSubOrb(m.toolId, spawnName, m.task); }
               if(prefixName){ updateSubOrb(prefixName, saClean(m.summary||m.toolName)); }
               faceWorking();
-              if(!prefix) drawWire(key); // skip main wires for sub-agent tools — their mini-orb shows the work
+              if(!prefixName) drawWire(key); // skip main wires for sub-agent tools — their mini-orb shows the work
               var ns=nodesFor(key), ang=null;
               for(var i=0;i<ns.length;i++){ ns[i].classList.add("active"); ns[i].classList.remove("done","errored"); activeAt[ns[i].getAttribute("data-key")]=Date.now(); if(ang===null) ang=parseFloat(ns[i].getAttribute("data-angle")); }
               lookToward(ang);
@@ -3257,6 +3261,7 @@ export function createWebApp(
               if(feed){ var r2=feed.querySelector('.feed-row[data-tid="'+String(m.toolId||"").replace(/["\\\\]/g,"")+'"]'); if(r2){ r2.classList.remove("run"); if(m.isError) r2.classList.add("err"); } }
               calmCheck();
             }
+            }catch(err){ try{ console.warn("portrait handler error", err); }catch(e2){} }
           });
           // Note: no in-iframe self-reload — a null-origin sandboxed iframe can't
           // navigate/reload itself ("Unsafe attempt to load URL"). Capability
