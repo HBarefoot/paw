@@ -48,6 +48,32 @@ describe("Per-admin isolation (C-NEW-1)", () => {
 		expect(bobIds).toEqual(["s-b-1"]);
 	});
 
+	test("shared channels (slack/cron/system) are visible to every admin, web stays isolated", () => {
+		// A Slack thread is owned by a Slack user id, not a web admin.
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id) VALUES (?, ?, ?)",
+			["s-slack-1", "slack", "U12345678"],
+		);
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id) VALUES (?, ?, ?)",
+			["s-cron-1", "cron", "system"],
+		);
+
+		const aliceIds = listRecentSessionsForUser(db, "web-1").map((s) => s.id);
+		const bobIds = listRecentSessionsForUser(db, "web-2").map((s) => s.id);
+
+		// Both admins see the shared Slack + cron sessions.
+		expect(aliceIds).toContain("s-slack-1");
+		expect(aliceIds).toContain("s-cron-1");
+		expect(bobIds).toContain("s-slack-1");
+		expect(bobIds).toContain("s-cron-1");
+
+		// But web/canvas sessions stay per-admin scoped.
+		expect(aliceIds).toContain("s-a-1"); // alice's own web session
+		expect(aliceIds).not.toContain("s-b-1"); // bob's web session hidden from alice
+		expect(bobIds).not.toContain("s-a-1"); // alice's web session hidden from bob
+	});
+
 	test("getSessionOwnedBy returns null for other users", () => {
 		const alice = getSessionOwnedBy(db, "s-a-1", "web-1");
 		const bob = getSessionOwnedBy(db, "s-a-1", "web-2");

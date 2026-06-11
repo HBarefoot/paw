@@ -91,21 +91,30 @@ export function recentSessionActivity(
 		.all(Math.min(Math.max(limit, 1), 50));
 }
 
+// Channels that are NOT owned by a single web admin — Slack threads, cron, and
+// system runs are shared/operational conversations. They have no per-admin
+// owner (their user_id is a Slack user id / "system"), so they're surfaced to
+// every admin alongside that admin's own web/canvas sessions. Web/canvas
+// sessions stay scoped by user_id so one admin can't see another's private
+// conversations (the C-NEW-1 per-admin isolation guarantee).
+const SHARED_SESSION_CHANNELS = ["slack", "cron", "system"] as const;
+
 export function listRecentSessionsForUser(
 	db: Database,
 	userId: string,
 	limit = 50,
 ): SessionSummary[] {
+	const placeholders = SHARED_SESSION_CHANNELS.map(() => "?").join(", ");
 	return db
-		.query<SessionSummary, [string, number]>(
+		.query<SessionSummary, [string, ...string[], number]>(
 			`SELECT s.id, s.channel, s.user_id, s.title, s.created_at, s.updated_at,
             (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) as message_count
      FROM sessions s
-     WHERE s.user_id = ?
+     WHERE s.user_id = ? OR s.channel IN (${placeholders})
      ORDER BY s.updated_at DESC
      LIMIT ?`,
 		)
-		.all(userId, limit);
+		.all(userId, ...SHARED_SESSION_CHANNELS, limit);
 }
 
 /** Total session rows regardless of owner — used to diagnose whether an empty
