@@ -118,6 +118,22 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 				</div>
 			</div>
 
+			{/* Repositories */}
+			<div class="card mb-md">
+				<h3>Repositories</h3>
+				<div id="gh-repos" class="text-sm text-muted">
+					{enabled ? "Loading…" : "Enable and configure the App to list repos."}
+				</div>
+			</div>
+
+			{/* Open pull requests + diff viewer */}
+			<div class="card mb-md">
+				<h3>Open pull requests</h3>
+				<div id="gh-prs" class="text-sm text-muted">
+					{enabled ? "Loading…" : "—"}
+				</div>
+			</div>
+
 			{/* Approvals inbox — the "with control" surface */}
 			<div class="card mb-md">
 				<h3 style="display:flex;align-items:center;gap:8px">
@@ -188,6 +204,15 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 						</ul>
 					</details>
 				)}
+			</div>
+
+			{/* Live activity feed (webhooks + approvals) */}
+			<div class="card mb-md">
+				<h3>Activity</h3>
+				<div id="gh-activity" class="text-sm text-muted">
+					Live updates (PRs, CI, approvals) appear here when the webhook is
+					configured.
+				</div>
 			</div>
 
 			{/* Secrets status */}
@@ -382,7 +407,85 @@ async function ghReject(id) {
     ghRefreshPending();
   } catch (e) { pawModal.alert("Reject failed", String(e)); }
 }
-// Poll the live event feed; refresh the inbox whenever something changes.
+// --- Repos + open PRs overview ---
+function ghStatusDot(conclusion, status) {
+  if (status && status !== "completed") return '<span class="gh-dot gh-dot-run" title="' + ghEsc(status) + '"></span>';
+  if (conclusion === "success") return '<span class="gh-dot gh-dot-ok" title="success"></span>';
+  if (conclusion === "failure") return '<span class="gh-dot gh-dot-bad" title="failure"></span>';
+  return "";
+}
+async function ghLoadOverview() {
+  try {
+    var res = await fetch("/api/github/overview");
+    var data = await res.json().catch(function(){ return {}; });
+    var reposEl = document.getElementById("gh-repos");
+    var prsEl = document.getElementById("gh-prs");
+    var repos = data.repos || [];
+    var prs = data.prs || [];
+    if (reposEl) {
+      reposEl.innerHTML = repos.length === 0
+        ? "No repositories. Add an allowlisted repo and install the App on it."
+        : repos.map(function(r){
+            return '<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border,#262626)">'
+              + '<a href="' + ghEsc(r.url) + '" target="_blank" rel="noopener"><strong>' + ghEsc(r.fullName) + '</strong></a>'
+              + '<span class="text-muted">' + (r.private ? "private" : "public") + ' · ' + ghEsc(r.defaultBranch) + '</span></div>';
+          }).join("");
+    }
+    if (prsEl) {
+      prsEl.innerHTML = prs.length === 0
+        ? "No open pull requests."
+        : prs.map(function(p){
+            return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border,#262626)">'
+              + '<div><a href="' + ghEsc(p.url) + '" target="_blank" rel="noopener"><strong>#' + p.number + '</strong> ' + ghEsc(p.title) + '</a>'
+              + '<div class="text-muted text-sm">' + ghEsc(p.repo) + ' · ' + ghEsc(p.head) + ' → ' + ghEsc(p.base) + (p.draft ? " · draft" : "") + '</div></div>'
+              + '<button type="button" class="btn btn-secondary" data-repo="' + ghEsc(p.repo) + '" data-num="' + p.number + '" onclick="ghShowDiff(this.dataset.repo, this.dataset.num)">View diff</button>'
+              + '</div>'
+              + '<div class="gh-diff-wrap" id="gh-diff-' + ghEsc(p.repo).replace(/[^a-zA-Z0-9]/g,"_") + '-' + p.number + '" style="display:none"></div>';
+          }).join("");
+    }
+  } catch (e) { /* ignore */ }
+}
+function ghRenderDiff(text) {
+  var lines = String(text || "").split("\\n");
+  var out = "";
+  for (var i = 0; i < lines.length; i++) {
+    var ln = lines[i], cls = "";
+    if (ln.indexOf("@@") === 0) cls = "gh-hunk";
+    else if (ln.indexOf("+") === 0 && ln.indexOf("+++") !== 0) cls = "gh-add";
+    else if (ln.indexOf("-") === 0 && ln.indexOf("---") !== 0) cls = "gh-del";
+    out += '<span class="' + cls + '">' + ghEsc(ln) + '</span>\\n';
+  }
+  return out;
+}
+async function ghShowDiff(repo, num) {
+  var id = "gh-diff-" + repo.replace(/[^a-zA-Z0-9]/g,"_") + "-" + num;
+  var el = document.getElementById(id);
+  if (!el) return;
+  if (el.style.display !== "none") { el.style.display = "none"; return; }
+  el.style.display = "block";
+  el.innerHTML = '<pre class="gh-diff">loading…</pre>';
+  try {
+    var res = await fetch("/api/github/diff?repo=" + encodeURIComponent(repo) + "&number=" + encodeURIComponent(num));
+    var data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) { el.innerHTML = '<pre class="gh-diff">' + ghEsc(data.error || ("HTTP " + res.status)) + '</pre>'; return; }
+    el.innerHTML = '<pre class="gh-diff">' + ghRenderDiff(data.diff) + '</pre>';
+  } catch (e) { el.innerHTML = '<pre class="gh-diff">' + ghEsc(String(e)) + '</pre>'; }
+}
+
+// --- Activity feed ---
+var ghActivity = [];
+function ghPushActivity(ev) {
+  var d = ev.data || {};
+  var label = ev.event === "approval"
+    ? ("approval · " + ghEsc(d.action || "") + " " + ghEsc(d.status || ""))
+    : (ghEsc((d.type || "event")) + " · " + ghEsc(d.summary || ""));
+  ghActivity.unshift(label);
+  if (ghActivity.length > 30) ghActivity.pop();
+  var el = document.getElementById("gh-activity");
+  if (el) el.innerHTML = ghActivity.map(function(s){ return '<div style="padding:3px 0;border-bottom:1px solid var(--border,#262626)">' + s + '</div>'; }).join("");
+}
+
+// Poll the live event feed; refresh inbox/overview/activity on change.
 (function ghPoll() {
   var since = 0;
   async function tick() {
@@ -392,14 +495,29 @@ async function ghReject(id) {
       var events = (data && data.events) || [];
       if (events.length > 0) {
         since = events[events.length - 1].id;
+        var reload = false;
+        for (var i = 0; i < events.length; i++) {
+          ghPushActivity(events[i]);
+          if (events[i].event === "webhook") reload = true;
+        }
         ghRefreshPending();
+        if (reload) ghLoadOverview();
       }
     } catch (e) { /* ignore */ }
     setTimeout(tick, 5000);
   }
+  ghLoadOverview();
   setTimeout(tick, 5000);
 })();
-</script>`)}
+</script>
+<style>
+.gh-diff{max-height:420px;overflow:auto;background:var(--bg-secondary,#0d0d0d);border:1px solid var(--border,#262626);border-radius:8px;padding:10px;margin-top:8px;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.5;white-space:pre}
+.gh-diff .gh-add{color:#3fb950;display:block}
+.gh-diff .gh-del{color:#f85149;display:block}
+.gh-diff .gh-hunk{color:#58a6ff;display:block}
+.gh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.gh-dot-ok{background:#3fb950}.gh-dot-bad{background:#f85149}.gh-dot-run{background:#d29922}
+</style>`)}
 		</Layout>
 	);
 };
