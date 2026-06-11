@@ -1619,10 +1619,9 @@ const cssDesignSystem = `
   :root.dark .canvas-iframe { background: var(--bg-primary); }
 
   .canvas-status {
-    display: flex; align-items: center; gap: 6px; font-size: 11px;
-    color: var(--text-tertiary); padding: 6px 12px;
-    border-top: 1px solid var(--border-secondary); background: var(--bg-secondary);
-    overflow-x: auto; white-space: nowrap;
+    /* Hidden: the file strip was noise; the canvas body (flex:1) reclaims the
+       space. JS still updates the (hidden) status/file nodes — no ref breakage. */
+    display: none !important;
   }
   .canvas-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); flex-shrink: 0; }
   .canvas-status .dot.connected { background: var(--success); }
