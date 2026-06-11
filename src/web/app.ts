@@ -2888,6 +2888,24 @@ export function createWebApp(
           .face.thinking { animation: thinkbob 2.6s ease-in-out infinite !important; }
           .face.thinking .mouth { width:15px; height:6px; }
           @keyframes thinkbob { 0%,100%{ transform: translateY(0) rotate(-1.5deg); } 50%{ transform: translateY(-3px) rotate(1.5deg); } }
+          /* ===== sub-agent satellites (mini faces for spawned agents) ===== */
+          .subagents { position:absolute; right:-150px; top:50%; transform:translateY(-50%); display:flex; flex-direction:column; gap:10px; z-index:4; pointer-events:none; }
+          .subagent { display:flex; align-items:center; gap:8px; pointer-events:auto; cursor:default; animation: sain .4s cubic-bezier(.34,1.56,.64,1) both; transition: opacity .5s ease, transform .5s ease; }
+          .subagent.out { opacity:0; transform:translateX(10px) scale(.85); }
+          .subagent .mini { position:relative; width:34px; height:34px; border-radius:48%; flex:none;
+            background: linear-gradient(150deg, var(--accent-bright), var(--accent) 60%, var(--accent-press));
+            box-shadow: 0 8px 20px -8px var(--soft), inset 0 2px 0 rgba(255,255,255,.28);
+            display:flex; align-items:center; justify-content:center; gap:5px; }
+          .subagent.run .mini { animation: workbob 1.2s ease-in-out infinite; }
+          .subagent .mini .me { width:7px; height:8px; background:#fff; border-radius:50%; position:relative; }
+          .subagent .mini .me::after { content:""; position:absolute; width:3.5px; height:3.5px; background:#11131d; border-radius:50%; left:1.6px; top:2.4px; }
+          .subagent.done .mini { box-shadow: 0 0 0 1px var(--accent), 0 0 14px -2px var(--accent); }
+          .subagent.err .mini { background: linear-gradient(150deg,#fca5a5,#f87171); }
+          .subagent .salbl { display:flex; flex-direction:column; line-height:1.15; max-width:160px; }
+          .subagent .saname { font-size:11px; font-weight:700; color:var(--title); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+          .subagent .satask { font-size:10px; color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+          .subagent.expand .satask { white-space:normal; }
+          @keyframes sain { 0%{ transform:scale(.4) translateX(14px); opacity:0; } 100%{ transform:scale(1) translateX(0); opacity:1; } }
           .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px 5px 8px; border-radius: 999px;
             font-size: 11px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; max-width: 124px;
             color: var(--title); background: color-mix(in srgb, var(--bg) 72%, var(--accent) 8%);
@@ -2983,8 +3001,8 @@ export function createWebApp(
           @keyframes popin { 0%{transform:scale(.2); opacity:0;} 100%{transform:scale(1); opacity:1;} }
           @keyframes bob { 0%,100%{margin-top:0;} 50%{margin-top:-6px;} }
           @media (prefers-reduced-motion: reduce) {
-            .face, .face-wrap, .chip, .face.working, .face.thinking, .think span, .wire.live, .node.active .chip .ndot, .face.working .spark, .feed-row.run .fdot { animation: none !important; }
-            .pupil, .mouth, .eye, .node { transition: none !important; }
+            .face, .face-wrap, .chip, .face.working, .face.thinking, .think span, .wire.live, .subagent, .subagent.run .mini, .node.active .chip .ndot, .face.working .spark, .feed-row.run .fdot { animation: none !important; }
+            .pupil, .mouth, .eye, .node, .subagent { transition: none !important; }
           }
           @media (max-width: 460px) { .stage { transform: scale(.8); } }
         </style></head><body><div class="placeholder">
@@ -2995,7 +3013,7 @@ export function createWebApp(
           <span class="cheek l"></span><span class="cheek r"></span>
           <div class="eyes"><div class="eye"><div class="pupil"></div></div><div class="eye"><div class="pupil"></div></div></div>
           <div class="mouth"></div>
-        </div></div><div class="speech" id="speech" role="status"></div></div>
+        </div></div><div class="speech" id="speech" role="status"></div><div class="subagents" id="subagents"></div></div>
         <div class="title">Hi — I'm ${brandName}</div>
         <p>Ask me to build something and it'll show up right here.</p>
         <div class="badges">${badgesHtml}</div>
@@ -3066,23 +3084,61 @@ export function createWebApp(
           }
           function endWire(key){ if(drawnWires[key]) drawnWires[key].classList.remove("live"); }
           function clearWires(){ if(!wiresEl) return; wiresEl.classList.add("fade"); setTimeout(function(){ if(!busy && wiresEl){ wiresEl.innerHTML=""; drawnWires={}; wiresEl.classList.remove("fade"); } }, 700); }
+          // ===== sub-agent satellites (spawned agents get their own mini face) =====
+          var subOrbs={}, subByName={};
+          function saClean(s){ return String(s||"").replace(/^\[[^\]]+\]\s*/, ""); }
+          function drawSubWire(name, el){
+            if(!wiresEl) return; var stage=document.querySelector(".stage"); if(!stage) return;
+            var sr=stage.getBoundingClientRect(), mr=el.querySelector(".mini").getBoundingClientRect();
+            var x=mr.left+mr.width/2-sr.left, y=mr.top+mr.height/2-sr.top, mx=(CENTER+x)/2;
+            var d="M "+CENTER+" "+CENTER+" C "+mx.toFixed(1)+" "+CENTER+" "+mx.toFixed(1)+" "+y.toFixed(1)+" "+x.toFixed(1)+" "+y.toFixed(1);
+            var path=document.createElementNS("http://www.w3.org/2000/svg","path");
+            path.setAttribute("d",d); path.setAttribute("class","wire live"); path.setAttribute("data-sa",name);
+            wiresEl.classList.remove("fade"); wiresEl.appendChild(path);
+            try{ var len=path.getTotalLength(); path.style.strokeDasharray=len; path.style.strokeDashoffset=len; path.getBoundingClientRect(); path.style.transition="stroke-dashoffset .5s ease"; path.style.strokeDashoffset="0"; }catch(e){}
+          }
+          function removeSubWire(name){ if(!wiresEl) return; var p=wiresEl.querySelector('.wire[data-sa="'+String(name).replace(/["\\\\]/g,"")+'"]'); if(p&&p.parentNode) p.parentNode.removeChild(p); }
+          function createSubOrb(toolId, name, task){
+            var wrap=document.getElementById("subagents"); if(!wrap||!name||subByName[name]) return;
+            var el=document.createElement("div"); el.className="subagent run"; el.title=task||name;
+            el.innerHTML='<div class="mini"><span class="me"></span><span class="me"></span></div><div class="salbl"><span class="saname"></span><span class="satask"></span></div>';
+            el.querySelector(".saname").textContent=name; el.querySelector(".satask").textContent=task||"working…";
+            el.onclick=function(){ el.classList.toggle("expand"); };
+            wrap.appendChild(el); subOrbs[toolId]={el:el,name:name}; subByName[name]=toolId;
+            drawSubWire(name, el);
+          }
+          function updateSubOrb(name, action){ var tid=subByName[name]; if(!tid||!subOrbs[tid]) return; var el=subOrbs[tid].el; el.classList.add("run"); var t=el.querySelector(".satask"); if(t&&action) t.textContent=action; }
+          function finishSubOrb(toolId, isError){
+            var o=subOrbs[toolId]; if(!o) return; o.el.classList.remove("run"); o.el.classList.add(isError?"err":"done"); removeSubWire(o.name);
+            (function(el){ setTimeout(function(){ el.classList.add("out"); setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); },500); },1200); })(o.el);
+            delete subByName[o.name]; delete subOrbs[toolId];
+          }
+          function clearSubOrbs(){ for(var k in subOrbs){ (function(el){ el.classList.add("out"); setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); },500); })(subOrbs[k].el); removeSubWire(subOrbs[k].name); } subOrbs={}; subByName={}; }
+          // ===== full wind-down (shared by calm grace + the hard watchdog) =====
+          function windDown(){
+            document.querySelectorAll(".node.active").forEach(function(n){ n.classList.remove("active"); });
+            busy=false; document.body.classList.remove("busy"); faceIdle(); setPupils(0,0);
+            restoreRing(); clearWires(); clearSubOrbs(); activeCount=0;
+            if(feed && feed.children.length){ feed.classList.add("idle"); clearTimer=setTimeout(function(){ if(!busy && feed) feed.innerHTML=""; }, FEED_CLEAR_MS); }
+          }
+          var watchdog=null;
           function keepAlive(){
             var wasBusy=busy;
             if(idleTimer){ clearTimeout(idleTimer); idleTimer=null; }
             if(clearTimer){ clearTimeout(clearTimer); clearTimer=null; }
             busy=true; document.body.classList.add("busy"); if(feed) feed.classList.remove("idle");
             if(!wasBusy) reflowLeft(); // first activity of a turn → pills slide to the left column
+            // Hard watchdog: if NOTHING happens for a long stretch, force a reset even
+            // if activeCount drifted (missed tool_end / lost "done"). Backstop only.
+            if(watchdog) clearTimeout(watchdog);
+            watchdog=setTimeout(function(){ windDown(); }, 45000);
           }
           function calmCheck(){
             if(idleTimer) clearTimeout(idleTimer);
             idleTimer=setTimeout(function(){
-              if(activeCount>0) return;
-              // Defensive: a missed tool_end can strand a pill .active — sweep any leftovers.
-              document.querySelectorAll(".node.active").forEach(function(n){ n.classList.remove("active"); });
-              busy=false; document.body.classList.remove("busy"); faceIdle(); setPupils(0,0);
-              restoreRing(); clearWires(); // pills float back to the ring; wires fade out
-              // keep the feed visible but dimmed so the run can be read, then clear after a long idle
-              if(feed && feed.children.length){ feed.classList.add("idle"); clearTimer=setTimeout(function(){ if(!busy && feed) feed.innerHTML=""; }, FEED_CLEAR_MS); }
+              if(activeCount>0) return; // a tool is genuinely still running — the watchdog covers stuck counts
+              if(watchdog){ clearTimeout(watchdog); watchdog=null; }
+              windDown();
             }, CALM_MS);
           }
           // Ambient "you have something for you" state: light the GitHub node
@@ -3127,7 +3183,7 @@ export function createWebApp(
               // clear every pill (even ones whose tool_end never arrived) and let the
               // face wind down via the normal calm grace. Without this, an unpaired
               // tool_start leaves a pill stuck .active and activeCount stuck > 0.
-              activeCount=0; showThink(false);
+              activeCount=0; showThink(false); clearSubOrbs();
               document.querySelectorAll(".node.active").forEach(function(n){
                 n.classList.remove("active"); n.classList.add("done");
                 setTimeout(function(){ n.classList.remove("done","errored"); }, GLOW_MS);
@@ -3143,7 +3199,14 @@ export function createWebApp(
               // a fresh burst after the feed had dimmed → clear the stale rows
               if(wasIdle && feed){ feed.innerHTML=""; }
               activeCount++;
-              faceWorking(); drawWire(key); // the agent reaches for the skill it's using
+              // Sub-agents: a spawn creates a satellite mini-orb; the sub-agent's own
+              // tool chunks (prefixed "[name] ") update that orb's current action.
+              var spawnName = (m.summary && m.summary.indexOf("Spawning agent")===0) ? m.summary.replace(/^Spawning agent:\s*/,"").trim() : null;
+              var prefix = (m.toolName||"").match(/^\[([^\]]+)\]/);
+              if(spawnName){ createSubOrb(m.toolId, spawnName, m.task); }
+              if(prefix){ updateSubOrb(prefix[1], saClean(m.summary||m.toolName)); }
+              faceWorking();
+              if(!prefix) drawWire(key); // skip main wires for sub-agent tools — their mini-orb shows the work
               var ns=nodesFor(key), ang=null;
               for(var i=0;i<ns.length;i++){ ns[i].classList.add("active"); ns[i].classList.remove("done","errored"); activeAt[ns[i].getAttribute("data-key")]=Date.now(); if(ang===null) ang=parseFloat(ns[i].getAttribute("data-angle")); }
               lookToward(ang);
@@ -3151,6 +3214,7 @@ export function createWebApp(
             } else if(m.phase==="end"){
               activeCount=Math.max(0, activeCount-1);
               endWire(key);
+              if(subOrbs[m.toolId]) finishSubOrb(m.toolId, m.isError); // a spawned agent finished
               var ns2=nodesFor(key);
               for(var j=0;j<ns2.length;j++){ (function(n){
                 var since=Date.now()-(activeAt[n.getAttribute("data-key")]||0);

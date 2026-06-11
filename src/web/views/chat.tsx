@@ -1416,6 +1416,7 @@ export function getChatScript(): string {
           skillKey: chunk.skillKey,
           isError: !!chunk.toolIsError,
           toolId: chunk.toolId,
+          task: chunk.toolInput && chunk.toolInput.task ? String(chunk.toolInput.task) : "",
         }, "*");
       }
     } catch (e) {}
@@ -2779,6 +2780,7 @@ export function getChatScript(): string {
                 }
               }
               hideCanvasThinking();
+              notifyPortraitDone(); // authoritative portrait reset (canvas turn ended)
               canvasStreamBubble = null;
               canvasStreamFullText = "";
               canvasWaitingForResponse = false;
