@@ -2964,6 +2964,7 @@ export function createWebApp(
           .feed:not(:empty) { display:flex; }
           .feed.idle { opacity:.42; }
           body.busy .stage { transform: scale(.9) translateY(-4px); }
+          .stage.col { transform: none !important; } /* column mode: keep 1:1 coords for far-left anchoring + wires */
           .placeholder:has(.feed:not(:empty)) > p { display:none; }
           .feed-row { display:flex; align-items:center; gap:8px; padding:7px 11px; border-radius:10px; text-align:left;
             font-size:12px; color: var(--title); background: color-mix(in srgb, var(--bg) 66%, var(--accent) 7%);
@@ -3043,9 +3044,13 @@ export function createWebApp(
           function saveRing(){ if(ringSaved)return; document.querySelectorAll(".node").forEach(function(n){ n.dataset.rl=n.style.left; n.dataset.rt=n.style.top; }); ringSaved=true; }
           function reflowLeft(){
             var nodes=document.querySelectorAll(".node"); if(!nodes.length) return; saveRing();
-            var N=nodes.length, pad=28, span=STAGEPX-pad*2, gap=N>1?span/(N-1):0;
-            for(var i=0;i<N;i++){ nodes[i].style.left="16px"; nodes[i].style.top=(N>1?(pad+gap*i):STAGEPX/2).toFixed(1)+"px"; nodes[i].style.transform="translate(0,-50%)"; }
-            var st=document.querySelector(".stage"); if(st) st.classList.add("col");
+            var st=document.querySelector(".stage"); if(st) st.classList.add("col"); // also neutralizes the busy scale so coords are 1:1
+            // Anchor the column near the CANVAS left edge (not the stage's), so the
+            // pills sit far left regardless of panel width.
+            var sr = st ? st.getBoundingClientRect() : { left: 0 };
+            var leftPx = Math.round(20 - sr.left); // node.left (stage-relative) → viewport x ≈ 20
+            var N=nodes.length, pad=24, span=STAGEPX-pad*2, gap=N>1?span/(N-1):0;
+            for(var i=0;i<N;i++){ nodes[i].style.left=leftPx+"px"; nodes[i].style.top=(N>1?(pad+gap*i):STAGEPX/2).toFixed(1)+"px"; nodes[i].style.transform="translate(0,-50%)"; }
           }
           function restoreRing(){ if(!ringSaved)return; document.querySelectorAll(".node").forEach(function(n){ if(n.dataset.rl!==undefined){ n.style.left=n.dataset.rl; n.style.top=n.dataset.rt; } n.style.transform=""; }); var st=document.querySelector(".stage"); if(st) st.classList.remove("col"); }
           function wireStart(n){ var x=parseFloat(n.style.left)||0, y=parseFloat(n.style.top)||0; if(document.querySelector(".stage.col")){ var chip=n.querySelector(".chip"); var w=chip?chip.offsetWidth:60; return {x:x+w+3,y:y}; } return {x:x,y:y}; }
