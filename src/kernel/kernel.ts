@@ -102,6 +102,19 @@ export class Kernel {
 	private skillManager: SkillManager;
 	private agentRegistry: AgentRegistry;
 	private agentDepths = new Map<string, number>();
+	/** In-flight (and just-finished) spawned agents, keyed by agentSessionId —
+	 * powers the Dashboard ops-scene satellite faces. */
+	private activeAgentsMap = new Map<
+		string,
+		{
+			name: string;
+			task: string;
+			startedAt: number;
+			done?: boolean;
+			ok?: boolean;
+			finishedAt?: number;
+		}
+	>();
 	private readonly maxAgentDepth = 3;
 	private logger = createLogger("kernel");
 
@@ -399,6 +412,23 @@ export class Kernel {
 		this.mcpClientManager = new MCPClientManager(createLogger("mcp"));
 
 		this.bus.on("message:inbound", (msg) => this.handleInbound(msg));
+
+		// Track spawned agents so the Dashboard ops-scene can render satellite faces.
+		this.bus.on("agent:delegated", (e) => {
+			this.activeAgentsMap.set(e.agentSessionId, {
+				name: e.agentName,
+				task: e.task,
+				startedAt: Date.now(),
+			});
+		});
+		this.bus.on("agent:completed", (e) => {
+			const a = this.activeAgentsMap.get(e.agentSessionId);
+			if (a) {
+				a.done = true;
+				a.ok = e.ok;
+				a.finishedAt = Date.now();
+			}
+		});
 	}
 
 	async boot(pluginsDir = "./plugins"): Promise<void> {
@@ -2047,6 +2077,43 @@ export class Kernel {
 
 	get tools(): ToolLog | null {
 		return this.toolLog;
+	}
+
+	/** Snapshot of spawned agents (running + finished within the linger window),
+	 * for the Dashboard ops-scene. Lazily prunes entries that have lingered. */
+	get activeAgents(): Array<{
+		id: string;
+		name: string;
+		task: string;
+		done: boolean;
+		ok: boolean;
+		ageMs: number;
+	}> {
+		const now = Date.now();
+		const LINGER = 5000;
+		const out: Array<{
+			id: string;
+			name: string;
+			task: string;
+			done: boolean;
+			ok: boolean;
+			ageMs: number;
+		}> = [];
+		for (const [id, a] of this.activeAgentsMap) {
+			if (a.done && a.finishedAt && now - a.finishedAt > LINGER) {
+				this.activeAgentsMap.delete(id);
+				continue;
+			}
+			out.push({
+				id,
+				name: a.name,
+				task: a.task,
+				done: !!a.done,
+				ok: a.ok !== false,
+				ageMs: now - a.startedAt,
+			});
+		}
+		return out;
 	}
 
 	/** Read-only access to the tool registry (H-NEW-2: cron tool validation). */

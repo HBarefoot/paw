@@ -1038,7 +1038,22 @@ export function createWebApp(
 			.replace(/\.\d+Z$/, "");
 		const toolUsage =
 			kernel.tools?.usageCounts({ since: sevenDaysAgo, limit: 8 }) ?? [];
-		const recentSessions = recentSessionActivity(db, 6);
+		// Channel-diverse recents: surface the latest session of each channel first
+		// (so Slack/canvas aren't crowded out by active web sessions), then fill by
+		// recency.
+		const recentPool = recentSessionActivity(db, 50);
+		const firstPerChannel: typeof recentPool = [];
+		const restSessions: typeof recentPool = [];
+		const seenChannel = new Set<string>();
+		for (const s of recentPool) {
+			if (seenChannel.has(s.channel)) {
+				restSessions.push(s);
+			} else {
+				seenChannel.add(s.channel);
+				firstPerChannel.push(s);
+			}
+		}
+		const recentSessions = [...firstPerChannel, ...restSessions].slice(0, 8);
 		const timeline = hourlyBuckets(
 			kernel.costs?.getTimeline({ since: dayAgo }) ?? [],
 			24,
@@ -1126,7 +1141,16 @@ export function createWebApp(
 			/* best-effort */
 		}
 		const newestId = rows.length ? rows[0].id : since;
-		return c.json({ now: Date.now(), cursor: newestId, working, model, tools, turns });
+		const agents = kernel.activeAgents;
+		return c.json({
+			now: Date.now(),
+			cursor: newestId,
+			working: working || agents.some((a) => !a.done),
+			model,
+			tools,
+			turns,
+			agents,
+		});
 	});
 
 	app.post("/api/credentials/:service", async (c) => {
