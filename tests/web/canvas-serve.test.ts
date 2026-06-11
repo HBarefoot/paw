@@ -68,7 +68,7 @@ describe("injectCanvasRuntime", () => {
 
 	it("cooked scripts parse and run without throwing (footgun guard)", () => {
 		const scripts = extractScripts(injectCanvasRuntime("<body></body>"));
-		expect(scripts.length).toBe(2); // error overlay + runtime shim
+		expect(scripts.length).toBe(3); // error overlay + runtime shim + refresh poller
 
 		const listeners: Record<string, (e: unknown) => void> = {};
 		const win: Record<string, unknown> = {};
@@ -79,25 +79,53 @@ describe("injectCanvasRuntime", () => {
 				},
 				createElement: () => stub(),
 				getElementById: () => null,
-				querySelector: () => null,
+				// Return a <meta name="paw-refresh" content="event"> stub so the
+				// refresh poller takes its active branch (event mode, no reload).
+				querySelector: (sel: string) =>
+					sel.includes("paw-refresh")
+						? { getAttribute: () => "event" }
+						: null,
 				body: stub(),
 			},
 			{ get: (t, p) => (p in t ? (t as never)[p] : stub()) },
 		);
+		// On an app-space path so the poller does NOT return early.
+		const loc = { pathname: "/api/app/demo/index.html", reload() {} };
+		let fetched = 0;
+		const fetchStub = () => {
+			fetched++;
+			return Promise.resolve({
+				json: () => Promise.resolve({ ok: true, events: [] }),
+			});
+		};
 
 		for (const js of scripts) {
 			expect(() => {
 				// new Function throws SyntaxError on a mis-cooked script.
-				new Function("document", "window", "FormData", "fetch", js)(
+				new Function(
+					"document",
+					"window",
+					"FormData",
+					"fetch",
+					"location",
+					"setTimeout",
+					"CustomEvent",
+					js,
+				)(
 					doc,
 					win,
 					function FormData() {
 						return { forEach() {} };
 					},
-					() => Promise.resolve({ json: () => Promise.resolve({ ok: true }) }),
+					fetchStub,
+					loc,
+					() => 0, // setTimeout no-op → poller doesn't reschedule
+					function CustomEvent() {},
 				);
 			}).not.toThrow();
 		}
+		// The poller reached its active branch and polled the events endpoint.
+		expect(fetched).toBeGreaterThan(0);
 
 		// Exercise the overlay's onerror path (uses the cooked "\n").
 		expect(typeof win.onerror).toBe("function");
