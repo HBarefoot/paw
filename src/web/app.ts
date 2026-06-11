@@ -1179,6 +1179,34 @@ export function createWebApp(
 		return c.json({ events: githubEvents.filter((e) => e.id > since) });
 	});
 
+	// Repos + open PRs for the /github page panels (live).
+	app.get("/api/github/overview", async (c) => {
+		if (!kernel.github) return c.json({ repos: [], prs: [] });
+		try {
+			const [repos, prs] = await Promise.all([
+				kernel.github.listRepos(),
+				kernel.github.getAllOpenPrs(),
+			]);
+			return c.json({ repos, prs });
+		} catch (e) {
+			return c.json({ repos: [], prs: [], error: (e as Error).message });
+		}
+	});
+
+	// Unified diff for a PR (rendered in the page's diff viewer).
+	app.get("/api/github/diff", async (c) => {
+		if (!kernel.github) return c.json({ error: "GitHub not configured" }, 400);
+		const repo = c.req.query("repo") || "";
+		const number = Number.parseInt(c.req.query("number") || "0", 10);
+		if (!repo || !number) return c.json({ error: "repo and number required" }, 400);
+		try {
+			const diff = await kernel.github.getPrDiff(repo, number);
+			return c.json({ diff });
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 400);
+		}
+	});
+
 	// Public, HMAC-verified GitHub App webhook. Reads the RAW body (GitHub signs
 	// the exact bytes — re-serializing would never match). Dedupes by delivery id.
 	app.post("/api/github/webhook", async (c) => {

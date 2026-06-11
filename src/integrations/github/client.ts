@@ -855,4 +855,53 @@ export class GitHubClient {
 			);
 		}
 	}
+
+	// --- Phase 5: UI overview helpers ---
+
+	/** The configured allowlist (lowercased owner/repo slugs). */
+	allowedRepos(): string[] {
+		return Array.from(this.allowlist);
+	}
+
+	/** Open PRs across every allowlisted repo, tagged with their repo. */
+	async getAllOpenPrs(): Promise<Array<PrSummary & { repo: string }>> {
+		const repos = this.allowedRepos();
+		const lists = await Promise.all(
+			repos.map(async (r) => {
+				try {
+					const prs = await this.listPrs(r, "open");
+					return prs.map((p) => ({ ...p, repo: r }));
+				} catch {
+					return [];
+				}
+			}),
+		);
+		return lists.flat();
+	}
+
+	/** The unified diff for a PR (raw `diff` media type), tail-capped. */
+	async getPrDiff(
+		fullName: string,
+		number: number,
+		maxChars = 60_000,
+	): Promise<string> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			const res = await octokit.rest.pulls.get({
+				owner,
+				repo,
+				pull_number: number,
+				mediaType: { format: "diff" },
+			});
+			// With the diff media type the body is the raw diff text.
+			const diff = res.data as unknown as string;
+			const text = typeof diff === "string" ? diff : String(diff);
+			return text.length > maxChars
+				? `${text.slice(0, maxChars)}\n…(diff truncated)`
+				: text;
+		} catch (err) {
+			throw this.toError(`GitHub getPrDiff ${fullName}#${number} failed`, err);
+		}
+	}
 }
