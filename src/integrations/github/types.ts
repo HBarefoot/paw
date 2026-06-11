@@ -51,8 +51,13 @@ export interface PrSummary {
 /** A file to create/update in a single atomic commit. */
 export interface CommitFileInput {
 	path: string;
-	/** UTF-8 text content. */
+	/** File content — UTF-8 text, or a base64 string when `encoding` is "base64". */
 	content: string;
+	/**
+	 * How `content` is encoded. "utf-8" (default) for text; "base64" to commit
+	 * binary files (images, fonts, etc.) by passing their base64 as-is.
+	 */
+	encoding?: "utf-8" | "base64";
 }
 
 export interface CheckRunSummary {

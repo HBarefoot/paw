@@ -239,7 +239,7 @@ export function createGitHubTools(
 	const commitFiles: ToolDefinition = {
 		name: "github_commit_files",
 		description:
-			"Commit one or more files to a feature branch as a single atomic commit. Files are created or overwritten with the given content. Refuses to commit to the default or any protected branch, and never force-pushes — always work on a feature branch and open a PR.",
+			"Commit one or more files to a feature branch as a single atomic commit. Files are created or overwritten with the given content. Supports text (default) and binary files (images, fonts, etc.) via base64 encoding. Refuses to commit to the default or any protected branch, and never force-pushes — always work on a feature branch and open a PR.",
 		plugin: "github",
 		input_schema: {
 			type: "object",
@@ -260,7 +260,14 @@ export function createGitHubTools(
 							path: { type: "string", description: "Path within the repo." },
 							content: {
 								type: "string",
-								description: "Full UTF-8 file content.",
+								description:
+									"File content: UTF-8 text, or a base64 string when encoding is 'base64'.",
+							},
+							encoding: {
+								type: "string",
+								enum: ["utf-8", "base64"],
+								description:
+									"Content encoding. Use 'base64' to commit binary files like images (pass their base64 as content); default 'utf-8' for text.",
 							},
 						},
 						required: ["path", "content"],
