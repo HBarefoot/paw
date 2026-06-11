@@ -139,6 +139,15 @@ export class ToolRegistry {
 			tool.name === "remove_proactive_trigger"
 		)
 			return "cron:create";
+		if (tool.name.startsWith("github_")) {
+			// Read = get/list/read/search/check; admin = merge/delete/dispatch/
+			// close/rerun (irreversible, approval-gated); everything else is write.
+			if (/^github_(get|list|read|search|check)/.test(tool.name))
+				return "github:read";
+			if (/^github_(merge|delete|dispatch|close|rerun)/.test(tool.name))
+				return "github:admin";
+			return "github:write";
+		}
 		if (tool.name === "spawn_agent") return "agent:spawn";
 		if (tool.name === "delegate_task") return "agent:delegate";
 		if (tool.name === "activate_skill") return "skill:activate";

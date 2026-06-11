@@ -50,6 +50,7 @@ import { ChatPage, getChatScript } from "./views/chat.js";
 import { BrandPage } from "./views/brand-page.js";
 import { ConfigPage } from "./views/config-page.js";
 import { VaultPage, type VaultSlotStatus } from "./views/vault-page.js";
+import { GitHubPage } from "./views/github-page.js";
 import { KNOWN_SECRET_SLOTS, type VaultScope } from "../security/vault.js";
 // canvas-page.tsx removed — canvas is now merged into chat
 import { CronPage } from "./views/cron-page.js";
@@ -969,6 +970,69 @@ export function createWebApp(
 			getClientIp(c),
 		);
 		return c.json({ deleted: true, name });
+	});
+
+	// --- GitHub integration ---
+	app.get("/github", async (c) => {
+		const gh = liveConfig().github;
+		const status = kernel.github ? await kernel.github.getStatus() : null;
+		return c.html(
+			GitHubPage({
+				enabled: gh.enabled,
+				appId: gh.appId,
+				installationId: gh.installationId,
+				baseUrl: gh.baseUrl,
+				repoAllowlist: gh.repoAllowlist,
+				privateKeyInVault: kernel.vault.enabled
+					? kernel.vault.has("github.appPrivateKey")
+					: false,
+				webhookSecretInVault: kernel.vault.enabled
+					? kernel.vault.has("github.webhookSecret")
+					: false,
+				vaultEnabled: kernel.vault.enabled,
+				status,
+			}),
+		);
+	});
+
+	app.get("/api/github/status", async (c) => {
+		if (!kernel.github) return c.json({ configured: false, ok: false });
+		return c.json(await kernel.github.getStatus());
+	});
+
+	app.post("/api/github/settings", async (c) => {
+		type GitHubSettingsBody = {
+			enabled?: boolean;
+			appId?: string;
+			installationId?: string;
+			baseUrl?: string;
+			repoAllowlist?: string[];
+		};
+		const body = await c.req
+			.json<GitHubSettingsBody>()
+			.catch(() => ({}) as GitHubSettingsBody);
+		const overrides = readConfigOverrides();
+		const gh = (overrides.github ?? {}) as Record<string, unknown>;
+		if (body.enabled !== undefined) gh.enabled = Boolean(body.enabled);
+		if (body.appId !== undefined) gh.appId = String(body.appId).trim();
+		if (body.installationId !== undefined)
+			gh.installationId = String(body.installationId).trim();
+		if (body.baseUrl !== undefined)
+			gh.baseUrl = String(body.baseUrl).trim() || "https://api.github.com";
+		if (Array.isArray(body.repoAllowlist))
+			gh.repoAllowlist = body.repoAllowlist
+				.map((r) => String(r).trim())
+				.filter(Boolean);
+		overrides.github = gh;
+		saveConfigOverrides(overrides);
+		const session = c.get("session") as { user_id: number } | undefined;
+		authManager.audit.log(
+			"github.settings",
+			session?.user_id ?? null,
+			{ enabled: gh.enabled, repoCount: (gh.repoAllowlist as string[])?.length },
+			getClientIp(c),
+		);
+		return c.json({ saved: true, restartRequired: true });
 	});
 
 	// One-time migration: copy current effective secrets (env + credentials.json

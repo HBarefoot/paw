@@ -90,6 +90,9 @@ export class Kernel {
 	hubspotClient:
 		| import("../integrations/hubspot/client.js").HubSpotClient
 		| null = null;
+	private githubClient:
+		| import("../integrations/github/client.js").GitHubClient
+		| null = null;
 	private skillManager: SkillManager;
 	private agentRegistry: AgentRegistry;
 	private agentDepths = new Map<string, number>();
@@ -507,6 +510,35 @@ export class Kernel {
 				this.logger.info("HubSpot integration initialized");
 			} catch (err) {
 				this.logger.warn("HubSpot init failed — degrading gracefully", {
+					error: String(err),
+				});
+			}
+		}
+
+		// Initialize GitHub integration (App-authenticated; "build, with control")
+		const gh = this.config.github;
+		if (gh?.enabled && gh.appId && gh.privateKey && gh.installationId) {
+			try {
+				const { GitHubClient } = await import(
+					"../integrations/github/client.js"
+				);
+				const { createGitHubTools } = await import(
+					"../integrations/github/tools.js"
+				);
+				const client = new GitHubClient(gh);
+				this.githubClient = client;
+				this.sandbox.registerManifest({
+					name: "github",
+					version: "1.0.0",
+					description: "GitHub App integration",
+					permissions: ["github:read", "github:write", "github:admin"],
+				});
+				this.toolRegistry.register(createGitHubTools(client));
+				this.logger.info("GitHub integration initialized", {
+					repoAllowlist: gh.repoAllowlist.length,
+				});
+			} catch (err) {
+				this.logger.warn("GitHub init failed — degrading gracefully", {
 					error: String(err),
 				});
 			}
@@ -1987,6 +2019,11 @@ export class Kernel {
 	/** Strapi client for routing canvas action submissions (null if disabled). */
 	get strapi(): import("../integrations/strapi/client.js").StrapiClient | null {
 		return this.strapiClient;
+	}
+
+	/** GitHub App client (null if disabled or not configured). */
+	get github(): import("../integrations/github/client.js").GitHubClient | null {
+		return this.githubClient;
 	}
 
 	cancelSession(sessionId: string): boolean {

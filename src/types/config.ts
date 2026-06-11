@@ -167,4 +167,13 @@ export interface PawConfig {
 		transport: "sse" | "http";
 		endpoints: Array<{ name: string; url: string }>;
 	};
+	github: {
+		enabled: boolean;
+		appId: string;
+		installationId: string;
+		privateKey: string;
+		webhookSecret: string;
+		baseUrl: string;
+		repoAllowlist: string[];
+	};
 }

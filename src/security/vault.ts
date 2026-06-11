@@ -27,6 +27,7 @@ export type VaultScope =
 	| "hubspot"
 	| "mcp"
 	| "n8n"
+	| "github"
 	| "custom";
 
 export interface VaultSecretMeta {
@@ -64,6 +65,16 @@ export const KNOWN_SECRET_SLOTS: {
 		label: "HubSpot private-app token",
 	},
 	{ name: "n8n.token", scope: "n8n", label: "n8n API token" },
+	{
+		name: "github.appPrivateKey",
+		scope: "github",
+		label: "GitHub App private key (PEM)",
+	},
+	{
+		name: "github.webhookSecret",
+		scope: "github",
+		label: "GitHub webhook signing secret",
+	},
 ];
 
 /** Secret names: letters, digits, dot, dash, underscore. Used in vault:// refs. */
@@ -265,6 +276,12 @@ export class VaultManager {
 		});
 		apply("n8n.token", (v) => {
 			if (config.n8n) config.n8n.token = v;
+		});
+		apply("github.appPrivateKey", (v) => {
+			if (config.github) config.github.privateKey = v;
+		});
+		apply("github.webhookSecret", (v) => {
+			if (config.github) config.github.webhookSecret = v;
 		});
 
 		// Per-MCP-server bearer tokens: vault name `mcp.<server>.authToken`.
