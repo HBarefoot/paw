@@ -1,3 +1,4 @@
+import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.js";
 
@@ -58,6 +59,8 @@ interface DashboardProps {
 		snippet: string | null;
 	}>;
 	toolUsage?: Array<{ name: string; count: number; errors: number }>;
+	nodes?: Array<{ key: string; label: string; kind: string }>;
+	sceneModel?: string;
 }
 
 export const DashboardPage: FC<DashboardProps> = ({
@@ -74,6 +77,8 @@ export const DashboardPage: FC<DashboardProps> = ({
 	timeline,
 	recentSessions,
 	toolUsage,
+	nodes,
+	sceneModel,
 }) => {
 	const uptimeStr = formatUptime(uptime);
 	const formatTokens = (n: number): string =>
@@ -110,11 +115,6 @@ export const DashboardPage: FC<DashboardProps> = ({
 			recentSessions?.length ||
 			toolUsage?.length,
 	);
-	const kindLabel: Record<string, string> = {
-		tool: "tool",
-		turn: "turn",
-		note: "note",
-	};
 
 	return (
 		<Layout title="Dashboard" currentPath="/">
@@ -225,39 +225,40 @@ export const DashboardPage: FC<DashboardProps> = ({
 						<span class="badge badge-accent">live</span>
 					</div>
 
-					<div class="dash-split">
-						{/* Live activity feed */}
-						<div class="card">
-							<div class="flex justify-between items-center mb-md">
-								<span class="label-xs">Activity</span>
-								{activity && activity.length > 0 && (
-									<span class="badge badge-neutral mono">
-										{activity.length}
-									</span>
-								)}
-							</div>
-							{activity && activity.length > 0 ? (
-								<div class="flex-col gap-sm">
-									{activity.map((a) => (
-										<div class="act-row" key={`${a.kind}-${a.ts}-${a.label}`}>
-											<span
-												class={`act-kind act-${a.kind}`}
-												style={a.ok === false ? "background:var(--danger)" : ""}
-											/>
-											<span class="act-tag mono">{kindLabel[a.kind]}</span>
-											<span class="act-label mono">{a.label}</span>
-											{a.sub && <span class="act-sub mono">{a.sub}</span>}
-											<span class="act-time mono">{ago(a.ts)}</span>
-										</div>
-									))}
-								</div>
-							) : (
-								<div class="empty-state">
-									<p>No agent activity yet</p>
-								</div>
-							)}
+					{/* Hero — live pseudo-3D constellation of the LLM core + skills */}
+					<div class="card ops-card">
+						<div class="flex justify-between items-center mb-md">
+							<span class="label-xs">Live operations</span>
+							<span class="ops-hud">
+								<span class="ops-dot" id="ops-status" />
+								<span class="mono text-xs" id="ops-model">
+									{sceneModel || "—"}
+								</span>
+							</span>
 						</div>
+						<div class="ops-stage">
+							<canvas
+								id="ops-canvas"
+								class="ops-scene"
+								data-nodes={JSON.stringify(nodes ?? [])}
+								data-model={sceneModel ?? ""}
+							/>
+						</div>
+						<div class="ops-ticker" id="ops-ticker">
+							{(activity ?? [])
+								.filter((a) => a.kind === "tool")
+								.slice(0, 6)
+								.map((a) => (
+									<div class="tk-row" key={`${a.ts}-${a.label}`}>
+										<span class={a.ok === false ? "tk-dot err" : "tk-dot"} />
+										<span class="tk-name mono">{a.label}</span>
+										<span class="tk-skill mono">{a.sub ?? ""}</span>
+									</div>
+								))}
+						</div>
+					</div>
 
+					<div class="dash-split">
 						{/* Activity timeline */}
 						<div class="card">
 							<div class="flex justify-between items-center mb-md">
@@ -291,41 +292,6 @@ export const DashboardPage: FC<DashboardProps> = ({
 									<p>No model calls in the last 24h</p>
 								</div>
 							)}
-						</div>
-					</div>
-
-					<div class="dash-split">
-						{/* Recent conversations */}
-						<div class="card">
-							<span class="label-xs">Recent conversations</span>
-							<div class="flex-col gap-sm mt-sm">
-								{recentSessions && recentSessions.length > 0 ? (
-									recentSessions.map((s) => (
-										<div class="sess-row" key={s.id}>
-											<div class="flex items-center gap-sm justify-between">
-												<span class="flex items-center gap-sm">
-													<span class="badge badge-neutral">{s.channel}</span>
-													<span class="text-xs text-muted mono">
-														{s.message_count} msg
-													</span>
-												</span>
-												<span class="text-xs text-muted mono">
-													{ago(s.updated_at)}
-												</span>
-											</div>
-											{s.snippet && (
-												<span class="sess-snippet">
-													{truncate(s.snippet, 96)}
-												</span>
-											)}
-										</div>
-									))
-								) : (
-									<div class="empty-state">
-										<p>No conversations yet</p>
-									</div>
-								)}
-							</div>
 						</div>
 
 						{/* Tool usage */}
@@ -361,6 +327,41 @@ export const DashboardPage: FC<DashboardProps> = ({
 							)}
 						</div>
 					</div>
+
+					{/* Recent conversations */}
+					<div class="card mt-md">
+						<span class="label-xs">Recent conversations</span>
+						<div class="flex-col gap-sm mt-sm">
+							{recentSessions && recentSessions.length > 0 ? (
+								recentSessions.map((s) => (
+									<div class="sess-row" key={s.id}>
+										<div class="flex items-center gap-sm justify-between">
+											<span class="flex items-center gap-sm">
+												<span class="badge badge-neutral">{s.channel}</span>
+												<span class="text-xs text-muted mono">
+													{s.message_count} msg
+												</span>
+											</span>
+											<span class="text-xs text-muted mono">
+												{ago(s.updated_at)}
+											</span>
+										</div>
+										{s.snippet && (
+											<span class="sess-snippet">
+												{truncate(s.snippet, 96)}
+											</span>
+										)}
+									</div>
+								))
+							) : (
+								<div class="empty-state">
+									<p>No conversations yet</p>
+								</div>
+							)}
+						</div>
+					</div>
+
+					{raw(OPS_SCENE_SCRIPT)}
 				</>
 			)}
 
@@ -516,3 +517,100 @@ function truncate(s: string, n: number): string {
 	const clean = s.replace(/\s+/g, " ").trim();
 	return clean.length > n ? `${clean.slice(0, n - 1)}…` : clean;
 }
+
+// ── Live agent-ops scene (Canvas2D pseudo-3D constellation) ─────────────────
+// Served inline. HARD RULE: no regex literals and no backslash escapes in this
+// string — it's a template literal, so the runtime "cooks" backslashes (the trap
+// that broke the canvas portrait twice). String methods + real characters only.
+const OPS_SCENE_SCRIPT = `<script data-cfasync="false">(function(){
+  var cv = document.getElementById("ops-canvas");
+  if (!cv || !cv.getContext) return;
+  var ctx = cv.getContext("2d");
+  var ticker = document.getElementById("ops-ticker");
+  var elModel = document.getElementById("ops-model");
+  var elStatus = document.getElementById("ops-status");
+  var nodes = [];
+  try { nodes = JSON.parse(cv.getAttribute("data-nodes") || "[]"); } catch (e) {}
+  var model = cv.getAttribute("data-model") || "";
+  var REDUCE = false;
+  try { REDUCE = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch (e) {}
+
+  function cssVar(n, fb){ try { var v = getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v || fb; } catch (e) { return fb; } }
+  function hexToRgb(h){ h = (h || "").trim(); if (h.charAt(0) === "#") h = h.slice(1); if (h.length === 3) h = h.charAt(0)+h.charAt(0)+h.charAt(1)+h.charAt(1)+h.charAt(2)+h.charAt(2); var num = parseInt(h, 16); if (isNaN(num)) return [116,88,245]; return [(num>>16)&255,(num>>8)&255,num&255]; }
+  var ACCENT = hexToRgb(cssVar("--accent", "#7458f5"));
+  var BRIGHT = hexToRgb(cssVar("--accent-bright", "#a78bfa"));
+  var DANGER = [239,90,90];
+  var WHITE = [255,255,255];
+  function rgba(c, a){ return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")"; }
+
+  var W=0, H=0, CX=0, CY=0, R=0, DPR=1;
+  function resize(){ DPR = Math.min(window.devicePixelRatio || 1, 2); var r = cv.getBoundingClientRect(); W = r.width || 600; H = r.height || 300; cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR); ctx.setTransform(DPR,0,0,DPR,0,0); CX = W/2; CY = H*0.46; }
+  resize();
+  window.addEventListener("resize", resize);
+
+  var N = nodes.length || 1;
+  var byKey = {};
+  for (var i=0;i<nodes.length;i++){ nodes[i].base = (i/N)*Math.PI*2; nodes[i].lit = 0; nodes[i].err = 0; byKey[nodes[i].key] = nodes[i]; }
+
+  var packets = [], ripples = [], spin = 0, working = false, corePulse = 0;
+  var TILT = 0.6;
+  function project(a){ var z = Math.sin(a); return { x: CX + Math.cos(a)*R, y: CY + z*R*TILT, depth: (z+1)/2 }; }
+
+  function fireTool(skill, ok){ var node = skill ? byKey[skill] : null; if (node){ node.lit = 1; if (!ok) node.err = 1; } if (!REDUCE) packets.push({ node: node, t: 0, err: !ok }); else { corePulse = 1; } }
+
+  function drawCore(){
+    var pr = Math.min(W,H)*0.12 * (1 + corePulse*0.18 + (working?0.06:0));
+    var g = ctx.createRadialGradient(CX,CY,0,CX,CY,pr*2.4);
+    g.addColorStop(0, rgba(BRIGHT, 0.9)); g.addColorStop(0.4, rgba(ACCENT, 0.5)); g.addColorStop(1, rgba(ACCENT, 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(CX,CY,pr*2.4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = rgba(BRIGHT, 0.95); ctx.beginPath(); ctx.arc(CX,CY,pr*0.55,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = rgba(WHITE, 0.85); ctx.font = "600 11px ui-monospace, SFMono-Regular, monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(model || "LLM", CX, CY + pr*0.55 + 15);
+  }
+  function drawNode(nn){
+    var p = project(nn.base + spin);
+    var size = 3 + p.depth*4 + nn.lit*3;
+    var col = nn.err>0 ? DANGER : (nn.lit>0 ? BRIGHT : ACCENT);
+    if (nn.lit>0){ var gg = ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,size*4.5); gg.addColorStop(0, rgba(col, 0.6*nn.lit)); gg.addColorStop(1, rgba(col,0)); ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(p.x,p.y,size*4.5,0,Math.PI*2); ctx.fill(); }
+    ctx.fillStyle = rgba(col, 0.35 + p.depth*0.5 + nn.lit*0.4); ctx.beginPath(); ctx.arc(p.x,p.y,size,0,Math.PI*2); ctx.fill();
+    if (p.depth > 0.32){ ctx.fillStyle = rgba(WHITE, 0.22 + p.depth*0.45 + nn.lit*0.3); ctx.font = (p.depth>0.7 ? "11px" : "10px") + " ui-monospace, SFMono-Regular, monospace"; ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(nn.label, p.x, p.y + size + 4); }
+  }
+  function drawWire(nn){ var p = project(nn.base + spin); var mx = (p.x+CX)/2, my = (p.y+CY)/2 - 8; ctx.strokeStyle = rgba(nn.err>0?DANGER:ACCENT, 0.08 + p.depth*0.2 + nn.lit*0.5); ctx.lineWidth = 1 + p.depth*0.6; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.quadraticCurveTo(mx,my,CX,CY); ctx.stroke(); }
+  function drawPacket(pk){ var from = pk.node ? project(pk.node.base + spin) : { x: CX, y: CY - R }; var mx = (from.x+CX)/2, my = (from.y+CY)/2 - 8, t = pk.t; var x = (1-t)*(1-t)*from.x + 2*(1-t)*t*mx + t*t*CX; var y = (1-t)*(1-t)*from.y + 2*(1-t)*t*my + t*t*CY; var col = pk.err ? DANGER : BRIGHT; var gg = ctx.createRadialGradient(x,y,0,x,y,8); gg.addColorStop(0, rgba(col,0.95)); gg.addColorStop(1, rgba(col,0)); ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2); ctx.fill(); ctx.fillStyle = rgba(col,1); ctx.beginPath(); ctx.arc(x,y,2.4,0,Math.PI*2); ctx.fill(); }
+  function drawRipple(rp){ var rad = Math.min(W,H)*0.12 + rp.t*Math.min(W,H)*0.24; ctx.strokeStyle = rgba(BRIGHT, 0.5*(1-rp.t)); ctx.lineWidth = 2*(1-rp.t) + 0.4; ctx.beginPath(); ctx.arc(CX,CY,rad,0,Math.PI*2); ctx.stroke(); }
+
+  var last = 0;
+  function frame(ts){
+    if (!last) last = ts;
+    var dt = Math.min(0.05, (ts - last)/1000); last = ts;
+    if (!REDUCE) spin += dt*0.12;
+    R = Math.min(W*0.82, H*1.5)*0.4;
+    ctx.clearRect(0,0,W,H);
+    corePulse = Math.max(0, corePulse - dt*1.6);
+    for (var i=0;i<nodes.length;i++){ nodes[i].lit = Math.max(0, nodes[i].lit - dt*0.8); nodes[i].err = Math.max(0, nodes[i].err - dt*0.8); }
+    var order = nodes.slice().sort(function(a,b){ return project(a.base+spin).depth - project(b.base+spin).depth; });
+    for (var w=0; w<order.length; w++) drawWire(order[w]);
+    drawCore();
+    for (var n2=0; n2<order.length; n2++) drawNode(order[n2]);
+    for (var k=packets.length-1;k>=0;k--){ var pk = packets[k]; pk.t += dt/0.85; if (pk.t >= 1){ corePulse = 1; ripples.push({ t: 0 }); packets.splice(k,1); continue; } drawPacket(pk); }
+    for (var r2=ripples.length-1;r2>=0;r2--){ ripples[r2].t += dt/0.9; if (ripples[r2].t >= 1){ ripples.splice(r2,1); continue; } drawRipple(ripples[r2]); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  function addTicker(t){ if (!ticker) return; var row = document.createElement("div"); row.className = "tk-row"; var dot = document.createElement("span"); dot.className = t.ok ? "tk-dot" : "tk-dot err"; var name = document.createElement("span"); name.className = "tk-name mono"; name.textContent = t.tool; var sk = document.createElement("span"); sk.className = "tk-skill mono"; sk.textContent = t.skill || ""; row.appendChild(dot); row.appendChild(name); row.appendChild(sk); ticker.insertBefore(row, ticker.firstChild); while (ticker.children.length > 6) ticker.removeChild(ticker.lastChild); }
+
+  var cursor = 0, first = true, delay = 2200;
+  function poll(){
+    fetch("/api/agent-ops?since=" + cursor).then(function(r){ return r.json(); }).then(function(d){
+      if (!d) return;
+      working = !!d.working; if (d.model) model = d.model; cursor = d.cursor || cursor;
+      if (elModel && model) elModel.textContent = model;
+      if (elStatus) elStatus.className = working ? "ops-dot on" : "ops-dot";
+      var tools = d.tools || [];
+      if (first){ first = false; } else { for (var i=0;i<tools.length;i++){ fireTool(tools[i].skill, tools[i].ok); addTicker(tools[i]); } }
+      delay = working ? 1300 : 2400;
+    }).catch(function(){}).then(function(){ setTimeout(poll, delay); });
+  }
+  poll();
+})();</script>`;
