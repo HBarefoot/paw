@@ -99,6 +99,9 @@ export interface OpsFeedDeps {
 	agents: OpsAgent[];
 	model: string;
 	now: number;
+	/** GitHub actions awaiting human approval — drives the companion's "waiting"
+	 *  face. 0 when GitHub is off / no approvals queue. */
+	pendingApprovals?: number;
 }
 
 export interface OpsFeedResponse {
@@ -111,6 +114,8 @@ export interface OpsFeedResponse {
 	agents: OpsAgent[];
 	ops: OpsOp[];
 	inflight: OpsOp[];
+	/** GitHub actions pending human approval (0 when none / GitHub off). */
+	pendingApprovals: number;
 }
 
 function cleanName(name: string): string {
@@ -261,5 +266,6 @@ export function buildOpsFeed(
 		agents: deps.agents,
 		ops,
 		inflight,
+		pendingApprovals: deps.pendingApprovals ?? 0,
 	};
 }

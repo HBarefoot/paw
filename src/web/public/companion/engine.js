@@ -14,6 +14,12 @@
 	const THINK_MS = 1500;
 	const FEED_MAX = 6;
 
+	function freshMachine() {
+		return window.CompanionExpression
+			? window.CompanionExpression.freshMachine()
+			: { listenUntil: 0, successUntil: 0, winceUntil: 0 };
+	}
+
 	function CompanionEngine() {
 		this.skills = []; // [{key,label}] from config
 		this.agents = []; // [{id,name}] from the feed
@@ -21,6 +27,14 @@
 		this.ops = []; // [{label, agentName, isError, ts, toolId}]
 		this.thinkingUntil = 0;
 		this.mainPops = 0; // bumps when the orchestrator (not a sub-agent) acts
+		// Expression inputs (real signals → the pure CompanionExpression machine).
+		this.machine = freshMachine(); // transient holds: listen/success/wince
+		this.waiting = false; // a GitHub action is pending human approval
+		this.agentFailedUntil = 0; // latched "worried" window after a sub-agent fails
+		this.lastActiveAt = 0; // for idle → sleepy decay
+		this._errAt = 0; // last tool-error time…
+		this._errRecovered = true; // …cleared once a later tool succeeds
+		this._seenFailed = {}; // sub-agent ids already counted as failed (latch once)
 		this._cursor = 0;
 		this._timer = null;
 		this._stopped = false;
@@ -29,8 +43,27 @@
 	CompanionEngine.prototype.start = function (cfg) {
 		cfg = cfg || {};
 		this.setSkills(cfg.skills || []);
+		this.lastActiveAt = Date.now(); // boot is "just active" → idle, not sleepy
 		this._stopped = false;
 		this._poll();
+	};
+
+	function noteMachine(self, event, now) {
+		if (window.CompanionExpression) {
+			window.CompanionExpression.note(self.machine, event, now);
+		}
+	}
+
+	/** Relay the chat input's focus/typing state → the "listening" face. */
+	CompanionEngine.prototype.ingestInput = function (state, now) {
+		now = now || Date.now();
+		this.lastActiveAt = now;
+		noteMachine(this, { type: "input", state: state }, now);
+	};
+
+	/** Ambient signal: GitHub actions awaiting human approval → "waiting". */
+	CompanionEngine.prototype.setWaiting = function (pending) {
+		this.waiting = pending > 0;
 	};
 
 	CompanionEngine.prototype.setSkills = function (list) {
@@ -61,13 +94,31 @@
 			});
 	};
 
-	CompanionEngine.prototype._ingestFeed = function (data) {
+	CompanionEngine.prototype._ingestFeed = function (data, now) {
+		now = now || Date.now();
 		if (typeof data.cursor === "number") this._cursor = data.cursor;
+		// Pending GitHub approvals → "waiting" (feed read-path, default 0 when off).
+		if (typeof data.pendingApprovals === "number") {
+			this.setWaiting(data.pendingApprovals);
+		}
 		if (Array.isArray(data.agents)) {
 			this.agents = data.agents.map((a) => ({
 				id: String(a.id),
 				name: String(a.name || a.id),
 			}));
+			// A sub-agent that finished NOT-ok → latch "worried" once per agent.
+			for (const a of data.agents) {
+				if (a.done === true && a.ok === false) {
+					const id = String(a.id);
+					if (!this._seenFailed[id]) {
+						this._seenFailed[id] = 1;
+						const hold = window.CompanionExpression
+							? window.CompanionExpression.GUARD.worriedHoldMs
+							: 2600;
+						this.agentFailedUntil = now + hold;
+					}
+				}
+			}
 		}
 		// Fallback: if config supplied no skills, derive them from the topology.
 		if (this.skills.length === 0 && Array.isArray(data.topology)) {
@@ -93,12 +144,20 @@
 		}
 		if (msg.phase === "work") {
 			this.thinkingUntil = now + THINK_MS;
+			this.lastActiveAt = now;
 			return;
 		}
 		const key = msg.skillKey || null;
 		const actor = msg.agentName || null;
 		if (msg.phase === "start") {
 			this.thinkingUntil = now + THINK_MS;
+			this.lastActiveAt = now;
+			// A new tool running after an unrecovered error = the agent moved on:
+			// cancel the pending wince so a transient failure never reaches the face.
+			if (this._errAt && !this._errRecovered) {
+				this._errRecovered = true;
+				noteMachine(this, { type: "recovered" }, now);
+			}
 			if (!actor) this.mainPops++;
 			if (key) {
 				this.active.set(key, {
@@ -114,12 +173,25 @@
 				toolId: msg.toolId || null,
 			});
 			if (this.ops.length > FEED_MAX) this.ops.length = FEED_MAX;
-		} else if (msg.phase === "end" && msg.isError) {
-			// A failure surfaces at end — flag the matching op's dot red.
-			for (const o of this.ops) {
-				if (msg.toolId && o.toolId === msg.toolId) {
-					o.isError = true;
-					break;
+		} else if (msg.phase === "end") {
+			this.lastActiveAt = now;
+			if (msg.isError) {
+				// A failure surfaces at end — flag the matching op's dot red and arm
+				// a wince (severity 2). A later success will mark it recovered.
+				this._errAt = now;
+				this._errRecovered = false;
+				noteMachine(this, { type: "error", severity: 2 }, now);
+				for (const o of this.ops) {
+					if (msg.toolId && o.toolId === msg.toolId) {
+						o.isError = true;
+						break;
+					}
+				}
+			} else {
+				noteMachine(this, { type: "success" }, now);
+				if (this._errAt && !this._errRecovered) {
+					this._errRecovered = true;
+					noteMachine(this, { type: "recovered" }, now);
 				}
 			}
 		}
@@ -140,13 +212,28 @@
 			gradIndex: i % 3,
 			working: working.has(a.name) || working.has(a.id),
 		}));
+		const snapshot = {
+			busy: this.active.size > 0,
+			thinking: now < this.thinkingUntil,
+			waiting: this.waiting,
+			agentFailed: now < this.agentFailedUntil,
+			lastActiveAt: this.lastActiveAt || now,
+		};
+		const expression = window.CompanionExpression
+			? window.CompanionExpression.resolve(snapshot, this.machine, now)
+			: snapshot.busy
+				? "working"
+				: "idle";
 		return {
 			skills: this.skills,
 			active: this.active,
 			agents,
 			ops: this.ops,
-			thinking: now < this.thinkingUntil,
-			busy: this.active.size > 0,
+			thinking: snapshot.thinking,
+			busy: snapshot.busy,
+			waiting: snapshot.waiting,
+			agentFailed: snapshot.agentFailed,
+			expression,
 			mainPops: this.mainPops,
 			now,
 		};

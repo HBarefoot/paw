@@ -1575,6 +1575,27 @@ export function getChatScript(): string {
       }
     } catch (e) {}
   }
+  // Relay the chat input's focus/typing state into the companion so the avatar
+  // wears its "listening" face + gazes toward the input while you type.
+  function notifyPortraitInput(state) {
+    try {
+      for (var i = 0; i < canvasTabs.length; i++) {
+        var t = canvasTabs[i];
+        if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        t.iframeEl.contentWindow.postMessage({ type: "paw:input", state: state }, "*");
+      }
+    } catch (e) {}
+  }
+  if (input) {
+    var __inputIdleTimer = null;
+    input.addEventListener("focus", function () { notifyPortraitInput("focus"); });
+    input.addEventListener("input", function () {
+      notifyPortraitInput("typing");
+      if (__inputIdleTimer) clearTimeout(__inputIdleTimer);
+      __inputIdleTimer = setTimeout(function () { notifyPortraitInput("idle"); }, 2600);
+    });
+    input.addEventListener("blur", function () { notifyPortraitInput("blur"); });
+  }
   var __lastNotifiedId = null;
   var __ambientFirstPoll = true;
   function pollAmbient() {

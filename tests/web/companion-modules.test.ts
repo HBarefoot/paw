@@ -1,11 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createSecurityHeaders } from "../../src/web/middleware/security-headers.js";
+import { buildOpsFeed } from "../../src/web/routes/ops-feed.js";
 
 const ROOT = new URL("../../src/web/public/companion/", import.meta.url);
 const read = (file: string) => readFileSync(new URL(file, ROOT), "utf8");
 
-const MODULES = ["router.js", "topology.js", "engine.js", "shell.js"];
+// Load order matters: shell + engine read CompanionExpression / CompanionSpring
+// off `window`, so those modules must be evaluated before them.
+const MODULES = [
+	"router.js",
+	"topology.js",
+	"expression.js",
+	"spring.js",
+	"engine.js",
+	"shell.js",
+];
 
 /** A minimal DOM node for the shell's build/render path. */
 // biome-ignore lint/suspicious/noExplicitAny: a permissive DOM stub is intentionally untyped
@@ -189,6 +199,206 @@ describe("companion static modules", () => {
 
 		e.ingestTool({ type: "paw:tool", phase: "done" }, t0 + 20);
 		expect(e.getState(t0 + 30).active.size).toBe(0);
+	});
+
+	// ── Reactivity core (PR A): the pure expression state machine ──
+	type Expr = {
+		PRIORITY: string[];
+		GUARD: Record<string, number>;
+		freshMachine: () => Record<string, number>;
+		note: (
+			m: Record<string, number>,
+			e: { type: string; state?: string; severity?: number },
+			now: number,
+		) => Record<string, number>;
+		resolve: (
+			s: Record<string, unknown>,
+			m: Record<string, number>,
+			now: number,
+		) => string;
+		shouldPop: (a: string, b: string) => boolean;
+	};
+	function loadExpression(): Expr {
+		const win: Record<string, unknown> = {};
+		runModule(win, {}, read("expression.js"));
+		return win.CompanionExpression as Expr;
+	}
+
+	test("expression: each state resolves from its real signal, priority-ordered", () => {
+		const X = loadExpression();
+		const m = X.freshMachine();
+		const now = 1000;
+		expect(X.resolve({ lastActiveAt: now }, m, now)).toBe("idle");
+		expect(
+			X.resolve({ lastActiveAt: now - X.GUARD.sleepyAfterMs - 1 }, m, now),
+		).toBe("sleepy");
+		expect(X.resolve({ thinking: true, lastActiveAt: now }, m, now)).toBe(
+			"thinking",
+		);
+		// working outranks thinking; waiting outranks working; worried outranks waiting
+		expect(
+			X.resolve({ thinking: true, busy: true, lastActiveAt: now }, m, now),
+		).toBe("working");
+		expect(
+			X.resolve({ busy: true, waiting: true, lastActiveAt: now }, m, now),
+		).toBe("waiting");
+		expect(
+			X.resolve(
+				{ waiting: true, agentFailed: true, lastActiveAt: now },
+				m,
+				now,
+			),
+		).toBe("worried");
+	});
+
+	test("expression: listening note holds then decays; blur clears it", () => {
+		const X = loadExpression();
+		const m = X.freshMachine();
+		X.note(m, { type: "input", state: "typing" }, 1000);
+		expect(X.resolve({ lastActiveAt: 1000 }, m, 1000)).toBe("listening");
+		expect(
+			X.resolve({ lastActiveAt: 1000 }, m, 1000 + X.GUARD.listenHoldMs + 1),
+		).toBe("idle");
+		X.note(m, { type: "input", state: "blur" }, 1000);
+		expect(X.resolve({ lastActiveAt: 1000 }, m, 1000)).toBe("idle");
+	});
+
+	test("expression guardrail: sub-threshold errors never reach the face; recovery cancels a wince", () => {
+		const X = loadExpression();
+		const m = X.freshMachine();
+		X.note(m, { type: "error", severity: 1 }, 1000); // below GUARD.severityMin
+		expect(X.resolve({ lastActiveAt: 1000 }, m, 1000)).toBe("idle");
+		X.note(m, { type: "error", severity: 2 }, 1000);
+		expect(X.resolve({ lastActiveAt: 1000 }, m, 1000)).toBe("wince");
+		X.note(m, { type: "recovered" }, 1000); // a later success cancels it
+		expect(X.resolve({ lastActiveAt: 1000 }, m, 1000)).toBe("idle");
+	});
+
+	test("expression guardrail: success holds briefly, working outranks it (no mid-turn flicker)", () => {
+		const X = loadExpression();
+		const m = X.freshMachine();
+		X.note(m, { type: "success" }, 1000);
+		expect(X.resolve({ lastActiveAt: 1000 }, m, 1000)).toBe("success");
+		expect(X.resolve({ busy: true, lastActiveAt: 1000 }, m, 1000)).toBe(
+			"working",
+		);
+		expect(
+			X.resolve({ lastActiveAt: 1000 }, m, 1000 + X.GUARD.successHoldMs + 1),
+		).toBe("idle");
+	});
+
+	test("expression.shouldPop: pops on entry into a busy face, coalesces a burst", () => {
+		const X = loadExpression();
+		expect(X.shouldPop("idle", "working")).toBe(true);
+		expect(X.shouldPop("idle", "thinking")).toBe(true);
+		expect(X.shouldPop("thinking", "working")).toBe(false); // already busy → no re-pop
+		expect(X.shouldPop("working", "working")).toBe(false); // burst coalesces
+		expect(X.shouldPop("working", "idle")).toBe(false);
+	});
+
+	// ── Micro-physics (PR A): the spring ──
+	test("spring: under-damped step overshoots then settles on the target", () => {
+		const win: Record<string, unknown> = {};
+		runModule(win, {}, read("spring.js"));
+		const S = win.CompanionSpring as {
+			make: (v: number) => { value: number; velocity: number };
+			step: (
+				s: { value: number; velocity: number },
+				t: number,
+				dt: number,
+				cfg?: { reduced?: boolean },
+			) => { value: number; velocity: number };
+		};
+		const s = S.make(0);
+		let peak = 0;
+		for (let i = 0; i < 240; i++) {
+			S.step(s, 1, 1 / 60);
+			peak = Math.max(peak, s.value);
+		}
+		expect(peak).toBeGreaterThan(1); // overshoot
+		expect(Math.abs(s.value - 1)).toBeLessThan(0.01); // settled
+
+		const r = S.make(0);
+		S.step(r, 1, 1 / 60, { reduced: true });
+		expect(r.value).toBe(1); // reduced-motion snaps instantly
+		expect(r.velocity).toBe(0);
+	});
+
+	// ── Gaze + dynamic caption (PR A) — pure helpers exported on Companion ──
+	function loadShellEnv(): Record<string, unknown> {
+		const win: Record<string, unknown> = {};
+		for (const m of MODULES) runModule(win, {}, read(m));
+		return win;
+	}
+
+	test("gaze: targets active pill > acting sub-agent > input > center", () => {
+		const C = loadShellEnv().Companion as {
+			gazeTarget: (st: unknown, expr: string) => { kind: string; key?: string; idx?: number };
+		};
+		expect(
+			C.gazeTarget({ active: new Map([["slack", {}]]), agents: [] }, "working"),
+		).toEqual({ kind: "pill", key: "slack" });
+		expect(
+			C.gazeTarget({ active: new Map(), agents: [{ working: true }] }, "working"),
+		).toEqual({ kind: "sub", idx: 0 });
+		expect(C.gazeTarget({ active: new Map(), agents: [] }, "listening")).toEqual({
+			kind: "input",
+		});
+		expect(C.gazeTarget({ active: new Map(), agents: [] }, "idle")).toEqual({
+			kind: "center",
+		});
+	});
+
+	test("captionFor: live action line, default greeting when idle", () => {
+		const C = loadShellEnv().Companion as {
+			captionFor: (st: unknown, expr: string) => string;
+		};
+		const st = {
+			active: new Map([["slack", { actor: null }]]),
+			skills: [{ key: "slack", label: "Slack" }],
+			ops: [],
+		};
+		expect(C.captionFor(st, "working")).toContain("Slack");
+		expect(C.captionFor(st, "thinking")).toBe("Thinking…");
+		expect(
+			C.captionFor({ active: new Map(), skills: [], ops: [] }, "idle"),
+		).toContain("Ask me to build");
+	});
+
+	test("engine: feed pendingApprovals → waiting; a failed sub-agent → worried", () => {
+		const win: Record<string, unknown> = {};
+		runModule(win, {}, read("expression.js"));
+		runModule(win, {}, read("engine.js"));
+		const Engine = win.CompanionEngine as new () => {
+			_ingestFeed: (data: unknown, now?: number) => void;
+			getState: (now?: number) => { expression: string };
+		};
+		const now = 5000;
+		const e1 = new Engine();
+		e1._ingestFeed({ pendingApprovals: 2, agents: [] }, now);
+		expect(e1.getState(now).expression).toBe("waiting");
+		const e2 = new Engine();
+		e2._ingestFeed(
+			{ pendingApprovals: 0, agents: [{ id: "a1", name: "Scout", done: true, ok: false }] },
+			now,
+		);
+		expect(e2.getState(now).expression).toBe("worried");
+	});
+
+	test("ops-feed: response carries pendingApprovals (default 0)", () => {
+		const base = {
+			toolLog: null,
+			inFlight: [],
+			nodes: [],
+			rowKey: () => null,
+			agents: [],
+			model: "m",
+			now: 1000,
+		};
+		expect(buildOpsFeed(base, 0).pendingApprovals).toBe(0);
+		expect(buildOpsFeed({ ...base, pendingApprovals: 3 }, 0).pendingApprovals).toBe(
+			3,
+		);
 	});
 
 	test("/companion is framable (SAMEORIGIN, not the default DENY)", async () => {

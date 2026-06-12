@@ -151,15 +151,17 @@ body {
 	background: color-mix(in srgb, var(--accent) 25%, transparent);
 	transition: background 0.3s;
 }
-.avatar.busy .antenna span {
+/* The 3 dots are the THINKING tell — they pulse only while the agent reasons
+ * (not for every busy frame), matching the avatar's `thinking` expression. */
+.avatar.thinking .antenna span {
 	background: var(--accent);
 	box-shadow: 0 0 8px var(--a80);
 	animation: antennaPulse 1s ease-in-out infinite;
 }
-.avatar.busy .antenna span:nth-child(2) {
+.avatar.thinking .antenna span:nth-child(2) {
 	animation-delay: 0.18s;
 }
-.avatar.busy .antenna span:nth-child(3) {
+.avatar.thinking .antenna span:nth-child(3) {
 	animation-delay: 0.36s;
 }
 @keyframes antennaPulse {
@@ -184,7 +186,9 @@ body {
 		#14c98e 100%
 	);
 	box-shadow: 0 0 70px var(--a35);
-	animation: avatarPop 0.55s cubic-bezier(0.3, 1.4, 0.5, 1);
+	/* The orb's pop/squash is driven by CompanionSpring (inline transform) so it
+	 * can react to expression transitions; no declarative keyframe here. */
+	will-change: transform;
 }
 .eye {
 	position: absolute;
@@ -234,20 +238,6 @@ body {
 	height: 8px;
 	border-bottom-width: 3px;
 	bottom: 19%;
-}
-
-/* ── Activity caption ── */
-.activity-caption {
-	height: 18px;
-	margin-top: 8px;
-	font-family: var(--mono);
-	font-size: 12px;
-	color: var(--accent);
-	opacity: 0;
-	transition: opacity 0.25s;
-}
-.activity-caption.on {
-	opacity: 1;
 }
 
 /* ── Sub-agents ── */
@@ -301,11 +291,14 @@ body {
 	white-space: nowrap;
 	transition: transform 0.25s, background 0.25s, color 0.25s, box-shadow 0.25s;
 }
+/* Status encoded by SHAPE, not colour alone (survives colourblindness +
+ * monochrome): an idle/available skill is a hollow ring; an active skill fills
+ * in (see `.pill.active .pill-dot`). */
 .pill-dot {
 	border-radius: 50%;
-	background: var(--accent);
+	background: transparent;
+	border: 1.5px solid var(--accent);
 	flex-shrink: 0;
-	box-shadow: 0 0 6px var(--a80);
 }
 .pill.lg {
 	font-size: 13.5px;
@@ -343,6 +336,7 @@ body {
 }
 .pill.active .pill-dot {
 	background: #03130c;
+	border-color: #03130c;
 	box-shadow: none;
 }
 .pill.active::after {
@@ -372,37 +366,6 @@ body {
 	text-align: center;
 	text-wrap: pretty;
 }
-.stats {
-	display: flex;
-	gap: 14px;
-	margin-top: 26px;
-}
-.stat {
-	min-width: 150px;
-	padding: 18px 24px;
-	border-radius: 12px;
-	border: 1px solid var(--a20);
-	background: var(--a05);
-	text-align: center;
-}
-.stat b {
-	display: block;
-	font-size: 30px;
-	font-weight: 700;
-	color: var(--accent);
-}
-.stat span {
-	display: block;
-	margin-top: 7px;
-	font-size: 10.5px;
-	font-weight: 500;
-	letter-spacing: 0.14em;
-	text-transform: uppercase;
-	color: var(--faint);
-}
-.stat.muted b {
-	color: var(--faint);
-}
 .ops-feed {
 	margin-top: 22px;
 	width: 100%;
@@ -431,8 +394,11 @@ body {
 	background: var(--accent);
 	box-shadow: 0 0 6px var(--a80);
 }
+/* A failed op is a hollow ring, not just a red dot — the shape difference
+ * survives a monochrome tint where the ok dot stays filled. */
 .op-dot.fail {
-	background: #ff5f56;
+	background: transparent;
+	border: 2px solid #ff5f56;
 	box-shadow: 0 0 6px rgba(255, 95, 86, 0.8);
 }
 .op-label {
