@@ -1,0 +1,6 @@
+{
+	"name": "n8n-health-probe",
+	"version": "0.1.0",
+	"description": "Health probes for n8n workflows: per-workflow status, inactivity sweep, and recent failures.",
+	"permissions": ["n8n-health-probe"]
+}
