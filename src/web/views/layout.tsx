@@ -964,6 +964,10 @@ const cssDesignSystem = `
     border: 1px solid var(--border-primary);
   }
   .attach-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+  /* Voice buttons: mic while recording + speak-replies while on. */
+  .voice-btn.recording { color: var(--accent-fg, #fff); background: var(--accent); border-color: var(--accent); animation: voice-pulse 1.3s ease-in-out infinite; }
+  .voice-btn.active { color: var(--accent); border-color: var(--accent); }
+  @keyframes voice-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 
   .typing-indicator {
     display: flex;
