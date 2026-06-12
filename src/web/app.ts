@@ -25,6 +25,10 @@ import type { StreamChunk } from "../ai/base-provider.js";
 import type { Kernel } from "../kernel/kernel.js";
 import { resolveProjectPath } from "../paths.js";
 import { RateLimiter } from "../security/rate-limiter.js";
+import {
+	APP_ASSET_LIMIT_PER_MIN,
+	isAppAssetGet,
+} from "./rate-limit-policy.js";
 import { buildOtpauthUri } from "../security/totp.js";
 import { WebAuthManager } from "../security/web-auth.js";
 import {
@@ -449,6 +453,10 @@ export function createWebApp(
 	const loginRateLimiter = new RateLimiter(5);
 	// --- Global API rate limiter (60 req/min per IP) ---
 	const apiRateLimiter = new RateLimiter(60);
+	// App-space static-asset GETs get their own, much higher per-IP budget so a
+	// page's ~40 assets + the 2s poller don't trip the shared limit (see
+	// rate-limit-policy.ts for the rationale).
+	const appAssetRateLimiter = new RateLimiter(APP_ASSET_LIMIT_PER_MIN);
 
 	// Trusted proxy config — only trust X-Forwarded-For when set
 	const trustedProxy = config.web.trustedProxy ?? false;
@@ -678,10 +686,14 @@ export function createWebApp(
 		}),
 	);
 
-	// Global API rate limiting (60 req/min per IP)
+	// Global API rate limiting (60 req/min per IP; app-space asset GETs use the
+	// separate higher budget so a page's ~40 assets + the poller don't trip it).
 	app.use("/api/*", async (c, next) => {
 		const ip = getClientIp(c);
-		const { allowed, retryAfterMs } = apiRateLimiter.check(ip);
+		const limiter = isAppAssetGet(c.req.method, c.req.path)
+			? appAssetRateLimiter
+			: apiRateLimiter;
+		const { allowed, retryAfterMs } = limiter.check(ip);
 		if (!allowed) {
 			c.header(
 				"Retry-After",
