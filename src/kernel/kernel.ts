@@ -674,6 +674,41 @@ export class Kernel {
 			}
 		}
 
+		// Initialize WordPress integration (REST API + Application Passwords)
+		const wp = this.config.wordpress;
+		if (wp?.enabled && wp.url && wp.username && wp.appPassword) {
+			try {
+				const { WordPressClient } = await import(
+					"../integrations/wordpress/client.js"
+				);
+				const { createWordPressTools } = await import(
+					"../integrations/wordpress/tools.js"
+				);
+				const { AuditLogger } = await import("../security/audit-log.js");
+				const client = new WordPressClient(wp);
+				this.sandbox.registerManifest({
+					name: "wordpress",
+					version: "1.0.0",
+					description: "WordPress REST integration",
+					// `wordpress` covers the plugin-inferred tool permission; the media
+					// tool also reads workspace files.
+					permissions: ["wordpress", "file:read"],
+				});
+				const wpAudit = new AuditLogger(this.db);
+				this.toolRegistry.register(
+					createWordPressTools(client, {
+						audit: (action, details) => wpAudit.log(action, null, details),
+						workspace: this.config.workspace.path,
+					}),
+				);
+				this.logger.info("WordPress integration initialized");
+			} catch (err) {
+				this.logger.warn("WordPress init failed — degrading gracefully", {
+					error: String(err),
+				});
+			}
+		}
+
 		// Build skill catalog from all registered tools
 		this.skillManager.buildFromRegistry(this.toolRegistry);
 		try {

@@ -151,4 +151,11 @@ export const defaults: PawConfig = {
 		serviceKey: "",
 		timeout: 10_000,
 	},
+	wordpress: {
+		enabled: false,
+		url: "",
+		username: "",
+		appPassword: "",
+		timeout: 10_000,
+	},
 };

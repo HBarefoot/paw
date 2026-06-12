@@ -255,6 +255,17 @@ export const configSchema = z.object({
 			timeout: z.number().int().positive().default(10_000),
 		})
 		.default({}),
+	wordpress: z
+		.object({
+			enabled: z.boolean().default(false),
+			// Site URL, e.g. https://example.com
+			url: z.string().default(""),
+			username: z.string().default(""),
+			// Application Password — overlaid from vault slot `wordpress.appPassword`.
+			appPassword: z.string().default(""),
+			timeout: z.number().int().positive().default(10_000),
+		})
+		.default({}),
 });
 
 export type ConfigSchema = z.infer<typeof configSchema>;
