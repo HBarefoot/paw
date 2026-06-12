@@ -26,8 +26,13 @@ import type { Kernel } from "../kernel/kernel.js";
 import { resolveProjectPath } from "../paths.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import {
+	ACTION_LIMIT_PER_MIN,
 	APP_ASSET_LIMIT_PER_MIN,
-	isAppAssetGet,
+	CHROME_LIMIT_PER_MIN,
+	LIVE_LIMIT_PER_MIN,
+	type RateClass,
+	chrome429ContentType,
+	resolveRateClass,
 } from "./rate-limit-policy.js";
 import { buildOtpauthUri } from "../security/totp.js";
 import { WebAuthManager } from "../security/web-auth.js";
@@ -451,12 +456,16 @@ export function createWebApp(
 
 	// --- Login rate limiter (5 attempts/min per IP) ---
 	const loginRateLimiter = new RateLimiter(5);
-	// --- Global API rate limiter (60 req/min per IP) ---
-	const apiRateLimiter = new RateLimiter(60);
-	// App-space static-asset GETs get their own, much higher per-IP budget so a
-	// page's ~40 assets + the 2s poller don't trip the shared limit (see
-	// rate-limit-policy.ts for the rationale).
-	const appAssetRateLimiter = new RateLimiter(APP_ASSET_LIMIT_PER_MIN);
+	// --- Global API rate limiters, one per traffic class (see
+	// rate-limit-policy.ts). Strict "action" budget for real API calls;
+	// generous, independent budgets for app-space assets, per-render brand
+	// chrome, and interval/live reads so they can't starve actions. ---
+	const rateLimiters: Record<RateClass, RateLimiter> = {
+		action: new RateLimiter(ACTION_LIMIT_PER_MIN),
+		"app-asset": new RateLimiter(APP_ASSET_LIMIT_PER_MIN),
+		chrome: new RateLimiter(CHROME_LIMIT_PER_MIN),
+		live: new RateLimiter(LIVE_LIMIT_PER_MIN),
+	};
 
 	// Trusted proxy config — only trust X-Forwarded-For when set
 	const trustedProxy = config.web.trustedProxy ?? false;
@@ -686,19 +695,23 @@ export function createWebApp(
 		}),
 	);
 
-	// Global API rate limiting (60 req/min per IP; app-space asset GETs use the
-	// separate higher budget so a page's ~40 assets + the poller don't trip it).
+	// Global API rate limiting, per traffic class (see rate-limit-policy.ts):
+	// the strict "action" budget is unchanged; chrome/live/app-asset reads get
+	// their own generous budgets so they can't starve it.
 	app.use("/api/*", async (c, next) => {
 		const ip = getClientIp(c);
-		const limiter = isAppAssetGet(c.req.method, c.req.path)
-			? appAssetRateLimiter
-			: apiRateLimiter;
-		const { allowed, retryAfterMs } = limiter.check(ip);
+		const cls = resolveRateClass(c.req.method, c.req.path);
+		const { allowed, retryAfterMs } = rateLimiters[cls].check(ip);
 		if (!allowed) {
-			c.header(
-				"Retry-After",
-				String(Math.ceil((retryAfterMs ?? 60000) / 1000)),
-			);
+			const retryAfter = String(Math.ceil((retryAfterMs ?? 60000) / 1000));
+			c.header("Retry-After", retryAfter);
+			if (cls === "chrome") {
+				// Match the asset's content-type so a limited <link>/fetch degrades
+				// to "unthemed" instead of throwing a MIME console error.
+				const ct = chrome429ContentType(c.req.path);
+				if (ct) c.header("Content-Type", ct);
+				return c.body(c.req.path === "/api/brand/ui" ? "{}" : "", 429);
+			}
 			return c.json({ error: "Too many requests" }, 429);
 		}
 		return next();
