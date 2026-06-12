@@ -346,6 +346,10 @@ export function getChatScript(): string {
       window.speechSynthesis.cancel();
       var u = new SpeechSynthesisUtterance(clean);
       u.rate = 1.0;
+      // Drive the companion's mouth-sync (lip-flap) off the real speech events.
+      u.onstart = function () { notifyPortraitSpeech("start"); };
+      u.onboundary = function () { notifyPortraitSpeech("boundary"); };
+      u.onend = function () { notifyPortraitSpeech("end"); };
       window.speechSynthesis.speak(u);
     } catch (e) {}
   };
@@ -1572,6 +1576,16 @@ export function getChatScript(): string {
         var t = canvasTabs[i];
         if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
         t.iframeEl.contentWindow.postMessage({ type: "paw:notify", id: n.id, title: n.title, level: n.level, url: n.url || "" }, "*");
+      }
+    } catch (e) {}
+  }
+  // Relay TTS speech events so the companion lip-flaps its mouth while talking.
+  function notifyPortraitSpeech(phase) {
+    try {
+      for (var i = 0; i < canvasTabs.length; i++) {
+        var t = canvasTabs[i];
+        if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        t.iframeEl.contentWindow.postMessage({ type: "paw:speak", phase: phase }, "*");
       }
     } catch (e) {}
   }
