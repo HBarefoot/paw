@@ -1531,6 +1531,7 @@ export function getChatScript(): string {
           toolName: chunk.toolName,
           summary: chunk.toolSummary,
           skillKey: chunk.skillKey,
+          agentName: chunk.agentName || null,
           isError: !!chunk.toolIsError,
           toolId: chunk.toolId,
           task: chunk.toolInput && chunk.toolInput.task ? String(chunk.toolInput.task) : "",
@@ -1608,17 +1609,28 @@ export function getChatScript(): string {
     }
   });
 
+  // The pinned Home tab hosts the live Skill Dock companion, served same-origin
+  // at /companion so it can fetch /api/ops/feed AND receive notifyPortrait's
+  // postMessage relay. Every other tab is real user canvas content behind the
+  // null-origin sketch sandbox.
+  function canvasTabSrc(path) {
+    return path === CANVAS_HOME_PATH
+      ? "/companion"
+      : "/api/canvas/preview/" + encodeURIComponent(path);
+  }
+
   function createCanvasTab(path, opts) {
     opts = opts || {};
     var id = ++canvasTabIdSeq;
     var iframe = document.createElement("iframe");
-    iframe.src = "/api/canvas/preview/" + encodeURIComponent(path);
+    iframe.src = canvasTabSrc(path);
     iframe.className = "hidden";
     iframe.style.background = "#fff";
     // allow-forms lets agent-wired canvas pages submit to /api/forms/:id.
     // We deliberately keep NO allow-same-origin: form posts carry Origin: null
-    // + no cookies, which the public form receiver accepts.
-    iframe.sandbox = "allow-scripts allow-forms";
+    // + no cookies, which the public form receiver accepts. The Home companion
+    // is paw's own trusted UI (same-origin), so it runs without the sandbox.
+    if (path !== CANVAS_HOME_PATH) iframe.sandbox = "allow-scripts allow-forms";
     canvasTabContent.appendChild(iframe);
     var tab = { id: id, path: path, iframeEl: iframe, pinned: !!opts.pinned, label: opts.label || null };
     // Pinned tabs (the Home portrait) always sit first.
@@ -2301,7 +2313,7 @@ export function getChatScript(): string {
     for (var i = 0; i < canvasTabs.length; i++) {
       if (canvasTabs[i].path === canvasCurrentFileName) {
         var iframe = canvasTabs[i].iframeEl;
-        var base = "/api/canvas/preview/" + encodeURIComponent(canvasTabs[i].path);
+        var base = canvasTabSrc(canvasTabs[i].path);
         iframe.src = base + "?_r=" + Date.now();
         break;
       }

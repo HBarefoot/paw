@@ -1742,6 +1742,48 @@ export function createWebApp(
 		return c.body(await Bun.file(p).arrayBuffer());
 	});
 
+	// Skill Dock companion modules (served from 'self', not template-literal
+	// strings) — the same-origin home for the live companion. See /companion.
+	app.get("/companion/static/:file", async (c) => {
+		const file = c.req.param("file");
+		if (!/^[a-z0-9_-]+\.(js|css)$/.test(file)) return c.text("Not found", 404);
+		const p = resolve(import.meta.dir, "public/companion", file);
+		if (!existsSync(p)) return c.text("Not found", 404);
+		c.header(
+			"Content-Type",
+			file.endsWith(".css")
+				? "text/css; charset=utf-8"
+				: "application/javascript; charset=utf-8",
+		);
+		c.header("Cache-Control", "public, max-age=3600");
+		return c.body(await Bun.file(p).arrayBuffer());
+	});
+
+	// The live companion (Skill Dock v2). Served same-origin (NOT the null-origin
+	// canvas-preview sandbox) so it can fetch /api/ops/feed AND receive the
+	// chat page's postMessage relay. Mounted as the pinned Home tab in chat.tsx.
+	app.get("/companion", (c) => {
+		const brand = getActiveBrand(kernel.database);
+		const pal = getBrandPalette(brand);
+		const accent = pal?.accent ?? pal?.primary ?? "#7458f5";
+		const cfg = JSON.stringify({ accent, model: currentModel() }).replace(
+			/</g,
+			"\\u003c",
+		);
+		return c.html(`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/companion/static/styles.css"></head>
+<body><div id="companion-root"></div>
+<script src="/companion/static/router.js"></script>
+<script src="/companion/static/dock.js"></script>
+<script src="/companion/static/topology.js"></script>
+<script src="/companion/static/engine.js"></script>
+<script src="/companion/static/shell.js"></script>
+<script>window.__COMPANION_CONFIG=${cfg};
+window.Companion.mount(document.getElementById("companion-root"),window.__COMPANION_CONFIG);</script>
+</body></html>`);
+	});
+
 	app.get("/fonts/:file", async (c) => {
 		const file = c.req.param("file");
 		if (!/^[a-z0-9_-]+\.woff2$/.test(file)) return c.text("Not found", 404);
@@ -1796,8 +1838,12 @@ export function createWebApp(
 			!chunk.skillKey
 		) {
 			// Sub-agent chunks carry a "[agentName] " display prefix on toolName
-			// (added in kernel.runAgentTurnStream); strip it so the skill lookup
-			// resolves (e.g. "[copy-writer-mate] browser_navigate" → "web-pilot").
+			// (added in kernel.runAgentTurnStream); capture the agent so the
+			// companion can route the beam to the acting sub-agent, then strip it
+			// so the skill lookup resolves (e.g. "[copy-writer-mate]
+			// browser_navigate" → "web-pilot").
+			const agentMatch = chunk.toolName.match(/^\[([^\]]+)\]\s*/);
+			if (agentMatch) chunk.agentName = agentMatch[1];
 			const cleanName = chunk.toolName.replace(/^\[[^\]]+\]\s*/, "");
 			// activate_skill itself belongs to the "core" skill, but it's more
 			// intuitive to light the *target* skill's pill (activating "strapi"
