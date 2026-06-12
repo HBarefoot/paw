@@ -78,7 +78,7 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 					)}
 					<div class="chat-input">
 						{raw(
-							`<input type="file" id="file-input" accept="image/*,.csv,.xlsx,.xls" multiple style="display:none" />`,
+							`<input type="file" id="file-input" accept="image/*,audio/*,video/*,application/pdf,text/*,.csv,.tsv,.xlsx,.xls,.json,.jsonl,.md,.markdown,.yaml,.yml,.xml,.html,.htm,.log,.toml,.ini,.env,.js,.ts,.jsx,.tsx,.py,.go,.rs,.java,.c,.h,.cpp,.cs,.rb,.php,.sh,.sql" multiple style="display:none" />`,
 						)}
 						{raw(
 							`<button class="attach-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files">${attachIconSvg}</button>`,
@@ -175,21 +175,17 @@ export function getChatScript(): string {
       file.type === "application/vnd.ms-excel";
   }
 
+  function isImageFile(file) {
+    return (file.type || "").indexOf("image/") === 0;
+  }
+
   function ingestFile(file) {
     if (file.size > MAX_FILE_SIZE) {
       pawModal.alert("File too large", file.name + " exceeds the 5MB size limit.");
       return;
     }
-    if (isSpreadsheet(file)) {
-      var reader = new FileReader();
-      reader.onload = function(e) {
-        var base64 = btoa(new Uint8Array(e.target.result).reduce(function(data, byte) { return data + String.fromCharCode(byte); }, ""));
-        var mimeType = file.type || "application/octet-stream";
-        pendingFiles.push({ data: base64, mimeType: mimeType, name: file.name });
-        renderPendingAttachments();
-      };
-      reader.readAsArrayBuffer(file);
-    } else {
+    if (isImageFile(file)) {
+      // Images go to the multimodal image path (sent to the model as an image).
       var reader = new FileReader();
       reader.onload = function(e) {
         var dataUrl = e.target.result;
@@ -199,6 +195,18 @@ export function getChatScript(): string {
         renderPendingAttachments();
       };
       reader.readAsDataURL(file);
+    } else {
+      // Everything else (PDF, text/code/json, CSV/Excel, audio/video, ...) goes
+      // to the files path; the server's parseUploadedFiles extracts text where
+      // it can (PDF/text/spreadsheet) or notes the file otherwise.
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var base64 = btoa(new Uint8Array(e.target.result).reduce(function(data, byte) { return data + String.fromCharCode(byte); }, ""));
+        var mimeType = file.type || "application/octet-stream";
+        pendingFiles.push({ data: base64, mimeType: mimeType, name: file.name });
+        renderPendingAttachments();
+      };
+      reader.readAsArrayBuffer(file);
     }
   }
 
@@ -251,13 +259,12 @@ export function getChatScript(): string {
     var handled = false;
     for (var i = 0; i < items.length; i++) {
       var item = items[i];
-      if (item.kind === "file" && item.type.indexOf("image/") === 0) {
+      if (item.kind === "file") {
         var blob = item.getAsFile();
         if (!blob) continue;
-        var ext = (item.type.split("/")[1] || "png").split(";")[0];
-        var named = new File([blob], "pasted-" + Date.now() + "." + ext, {
-          type: item.type,
-        });
+        var named = blob.name
+          ? blob
+          : new File([blob], "pasted-" + Date.now() + "." + ((item.type.split("/")[1] || "bin").split(";")[0]), { type: item.type });
         ingestFile(named);
         handled = true;
       }
@@ -280,10 +287,21 @@ export function getChatScript(): string {
         '</div>';
     }
     for (var j = 0; j < pendingFiles.length; j++) {
-      html += '<div class="attachment-thumb" style="display:flex;align-items:center;justify-content:center;width:auto;padding:4px 10px;font-size:12px;gap:4px" data-file-index="' + j + '">' +
-        '<span>\\uD83D\\uDCC4</span><span>' + escapeHtml(pendingFiles[j].name) + '</span>' +
-        '<button class="attachment-remove" style="position:static;width:18px;height:18px;font-size:12px" onclick="removePendingFile(' + j + ')">\\u00d7</button>' +
-        '</div>';
+      var pf = pendingFiles[j];
+      var mt = pf.mimeType || "";
+      var rm = '<button class="attachment-remove" style="position:static;width:18px;height:18px;font-size:12px" onclick="removePendingFile(' + j + ')">\\u00d7</button>';
+      if (mt.indexOf("video/") === 0) {
+        // Inline preview — plays locally; the model still gets a file note.
+        html += '<div class="attachment-thumb" style="width:auto;padding:4px" data-file-index="' + j + '">' +
+          '<video src="data:' + mt + ';base64,' + pf.data + '" controls style="max-width:180px;max-height:120px;border-radius:6px;display:block"></video>' + rm + '</div>';
+      } else if (mt.indexOf("audio/") === 0) {
+        html += '<div class="attachment-thumb" style="display:flex;align-items:center;width:auto;padding:4px 6px;gap:4px" data-file-index="' + j + '">' +
+          '<audio src="data:' + mt + ';base64,' + pf.data + '" controls style="height:32px"></audio>' + rm + '</div>';
+      } else {
+        html += '<div class="attachment-thumb" style="display:flex;align-items:center;justify-content:center;width:auto;padding:4px 10px;font-size:12px;gap:4px" data-file-index="' + j + '">' +
+          '<span>\\uD83D\\uDCC4</span><span>' + escapeHtml(pf.name) + '</span>' + rm +
+          '</div>';
+      }
     }
     attachmentsDiv.innerHTML = html;
   }

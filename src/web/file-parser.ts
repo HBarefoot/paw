@@ -7,6 +7,50 @@ async function getXLSX() {
 	return xlsxModule;
 }
 
+/** Cap extracted text so a huge file can't blow out the model context. */
+const MAX_TEXT_CHARS = 200_000;
+function clampText(text: string): string {
+	return text.length > MAX_TEXT_CHARS
+		? `${text.slice(0, MAX_TEXT_CHARS)}\n... (truncated, ${text.length} chars total)`
+		: text;
+}
+
+/**
+ * Plain-text-family extensions read verbatim as UTF-8 — anything text-like the
+ * model can use directly (config, code, data, logs). Images go through the
+ * separate `images` attachment path; audio/video fall through to the binary
+ * badge (they play inline in the browser but the text model can't read them).
+ */
+const TEXT_EXTS = new Set([
+	"txt", "md", "markdown", "json", "jsonl", "ndjson", "tsv", "log", "yaml",
+	"yml", "xml", "html", "htm", "css", "scss", "less", "js", "jsx", "ts", "tsx",
+	"mjs", "cjs", "py", "rb", "go", "rs", "java", "kt", "swift", "c", "h", "cpp",
+	"cc", "hpp", "cs", "php", "sh", "bash", "zsh", "sql", "toml", "ini", "cfg",
+	"conf", "env", "properties", "gradle", "r", "lua", "pl", "dart", "vue",
+	"svelte", "graphql", "proto", "dockerfile", "makefile", "gitignore",
+]);
+
+async function parsePDF(buffer: Buffer): Promise<string> {
+	const { extractText } = await import("unpdf");
+	const { text } = await extractText(new Uint8Array(buffer), {
+		mergePages: true,
+	});
+	// `text` is a string with mergePages:true; stay defensive if it's an array.
+	const t = text as unknown as string | string[];
+	return (Array.isArray(t) ? t.join("\n") : t).trim();
+}
+
+function isTextLike(ext: string | undefined, mimeType: string): boolean {
+	if (ext && TEXT_EXTS.has(ext)) return true;
+	return (
+		mimeType.startsWith("text/") ||
+		mimeType === "application/json" ||
+		mimeType === "application/xml" ||
+		mimeType.endsWith("+json") ||
+		mimeType.endsWith("+xml")
+	);
+}
+
 export function parseCSV(buffer: Buffer, maxRows = 500): string {
 	const text = buffer.toString("utf-8");
 	let count = 0,
@@ -58,6 +102,7 @@ export async function parseUploadedFiles(
 	for (const file of files) {
 		const buffer = Buffer.from(file.data, "base64");
 		const ext = file.name.split(".").pop()?.toLowerCase();
+		const mime = file.mimeType || "";
 		let textContent = "";
 
 		if (ext === "csv") {
@@ -68,6 +113,20 @@ export async function parseUploadedFiles(
 			} catch {
 				textContent = "(Failed to parse Excel file)";
 			}
+		} else if (ext === "pdf" || mime === "application/pdf") {
+			try {
+				textContent =
+					clampText(await parsePDF(buffer)) ||
+					"(PDF had no extractable text — it may be scanned/image-only)";
+			} catch {
+				textContent = "(Failed to extract text from PDF)";
+			}
+		} else if (isTextLike(ext, mime)) {
+			textContent = clampText(buffer.toString("utf-8"));
+		} else {
+			// Unknown/binary (incl. audio/video): note it so the model knows a file
+			// was attached even though its bytes aren't text the model can read.
+			textContent = `[Attached file: ${file.name} (${mime || "binary"}, ${buffer.length} bytes) — binary content not extracted]`;
 		}
 
 		if (textContent) {
