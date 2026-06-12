@@ -59,13 +59,17 @@ export interface OpsOp {
 	tokOut: number;
 	latency: number | null;
 	args: string;
+	/** Stable per-task id (hash of the sub-agent session) — 0 for orchestrator
+	 *  / main-session ops (the Swarm lens groups agents by non-zero taskId). */
 	taskId: number;
 	taskLabel: string;
+	session: string;
 }
 
 /** A tool_log row (structural — matches ToolLogEntry). */
 interface ToolRow {
 	id: number;
+	session_id: string | null;
 	tool_name: string;
 	plugin: string | null;
 	input_preview: string | null;
@@ -80,6 +84,7 @@ interface InFlightRow {
 	seq: number;
 	toolName: string;
 	plugin: string | null;
+	sessionId: string | null;
 	startedAt: number;
 	input: Record<string, unknown>;
 }
@@ -160,6 +165,32 @@ export function buildOpsFeed(
 		return k && validId.has(k) ? k : "core";
 	};
 
+	// Agent attribution (Swarm): each distinct SUB-AGENT session becomes a swarm
+	// agent; orchestrator / main-session ops stay taskId 0 (core, not a budded
+	// agent). Sub-agent sessions are `agent-<name>-<ts>` (active ones carry a
+	// real task label; recently-finished ones are still matched by the prefix).
+	const agentBySession = new Map(deps.agents.map((a) => [a.id, a]));
+	function hashTask(s: string): number {
+		let h = 0;
+		for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 1000000;
+		return h || 1; // 0 is reserved for the orchestrator/main session
+	}
+	function attribute(session: string | null): {
+		taskId: number;
+		taskLabel: string;
+		session: string;
+	} {
+		const s = session ?? "";
+		const agent = s ? agentBySession.get(s) : undefined;
+		const isAgent = !!agent || s.startsWith("agent-");
+		if (!isAgent) return { taskId: 0, taskLabel: "", session: s };
+		return {
+			taskId: hashTask(s),
+			taskLabel: agent?.task || "sub-agent",
+			session: s,
+		};
+	}
+
 	const rows = deps.toolLog?.query({ limit: OPS_MAX_ROWS }) ?? [];
 	const windowStart = now - windowMs;
 	const ops: OpsOp[] = [];
@@ -172,6 +203,7 @@ export function buildOpsFeed(
 		const duration = r.duration_ms ?? 0;
 		const startedAt = endAt - duration;
 		if (since === 0 && endAt < windowStart) continue;
+		const attr = attribute(r.session_id);
 		ops.push({
 			id: r.id,
 			toolId: toolId(r),
@@ -184,18 +216,19 @@ export function buildOpsFeed(
 			tokOut: estimateTokens(r.output_preview ?? ""),
 			latency: null,
 			args: r.input_preview ?? "",
-			taskId: 0,
-			taskLabel: "",
+			taskId: attr.taskId,
+			taskLabel: attr.taskLabel,
+			session: attr.session,
 		});
 	}
 	ops.sort((a, b) => a.startedAt - b.startedAt);
 
 	const inflight: OpsOp[] = deps.inFlight.map((f) => {
-		const clean = cleanName(f.toolName);
+		const attr = attribute(f.sessionId);
 		return {
 			id: -f.seq, // negative id space so running ops never collide with rows
 			toolId: toolId({ tool_name: f.toolName, plugin: f.plugin }),
-			op: clean,
+			op: cleanName(f.toolName),
 			status: "running",
 			startedAt: f.startedAt,
 			endAt: now,
@@ -204,8 +237,9 @@ export function buildOpsFeed(
 			tokOut: 0,
 			latency: null,
 			args: "",
-			taskId: 0,
-			taskLabel: "",
+			taskId: attr.taskId,
+			taskLabel: attr.taskLabel,
+			session: attr.session,
 		};
 	});
 

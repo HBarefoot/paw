@@ -240,7 +240,7 @@ export class GeminiProvider implements AIProvider {
 			// Phase 2: Execute remaining tools in parallel
 			if (regularCalls.length > 0) {
 				const results = await executeToolsParallel(
-					regularCalls, this.toolRegistry, this.logger,
+					regularCalls, this.toolRegistry, this.logger, undefined, sessionId,
 				);
 				for (const r of results) {
 					if (r.images) collectedImages.push(...r.images);

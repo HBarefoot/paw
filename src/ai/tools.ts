@@ -7,6 +7,7 @@ export interface InFlightOp {
 	seq: number;
 	toolName: string;
 	plugin: string | null;
+	sessionId: string | null;
 	startedAt: number;
 	input: Record<string, unknown>;
 }
@@ -33,6 +34,7 @@ export class ToolRegistry {
 	private trackStart(
 		toolName: string,
 		plugin: string | null,
+		sessionId: string | null,
 		input: Record<string, unknown>,
 	): number {
 		try {
@@ -46,6 +48,7 @@ export class ToolRegistry {
 				seq,
 				toolName,
 				plugin,
+				sessionId,
 				startedAt: Date.now(),
 				input,
 			});
@@ -105,12 +108,14 @@ export class ToolRegistry {
 	async execute(
 		name: string,
 		input: Record<string, unknown>,
+		sessionId?: string,
 	): Promise<ToolResult> {
 		const tool = this.tools.get(name);
 		const start = Date.now();
 		if (!tool) {
 			this.toolLog?.record({
 				toolName: name,
+				sessionId,
 				input,
 				output: `Unknown tool: ${name}`,
 				isError: true,
@@ -134,6 +139,7 @@ export class ToolRegistry {
 				this.toolLog?.record({
 					toolName: name,
 					plugin: tool.plugin,
+					sessionId,
 					input,
 					output: msg,
 					isError: true,
@@ -143,12 +149,18 @@ export class ToolRegistry {
 			}
 		}
 
-		const seq = this.trackStart(name, tool.plugin ?? null, input);
+		const seq = this.trackStart(
+			name,
+			tool.plugin ?? null,
+			sessionId ?? null,
+			input,
+		);
 		try {
 			const result = await tool.handler(input);
 			this.toolLog?.record({
 				toolName: name,
 				plugin: tool.plugin,
+				sessionId,
 				input,
 				output: result.content,
 				isError: !!result.is_error,
@@ -160,6 +172,7 @@ export class ToolRegistry {
 			this.toolLog?.record({
 				toolName: name,
 				plugin: tool.plugin,
+				sessionId,
 				input,
 				output: msg,
 				isError: true,

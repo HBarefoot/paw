@@ -312,6 +312,7 @@ export class OllamaProvider implements AIProvider {
 					this.toolRegistry,
 					this.logger,
 					300_000,
+					sessionId,
 				);
 				for (const r of results) {
 					if (r.images) collectedImages.push(...r.images);
@@ -669,6 +670,8 @@ export class OllamaProvider implements AIProvider {
 					this.toolRegistry,
 					this.logger,
 					roundtrips,
+					undefined,
+					sessionId,
 				);
 				let next = await gen.next();
 				while (!next.done) {

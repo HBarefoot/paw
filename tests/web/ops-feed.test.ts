@@ -15,6 +15,7 @@ function ts(ms: number): string {
 
 type Row = {
 	id: number;
+	session_id: string | null;
 	tool_name: string;
 	plugin: string | null;
 	input_preview: string | null;
@@ -30,9 +31,11 @@ function row(
 	agoMs: number,
 	dur: number,
 	err = 0,
+	session: string | null = null,
 ): Row {
 	return {
 		id,
+		session_id: session,
 		tool_name: name,
 		plugin: null,
 		input_preview: "package.json",
@@ -64,6 +67,7 @@ function deps(over: Partial<OpsFeedDeps> = {}): OpsFeedDeps {
 				seq: 3,
 				toolName: "[plugin] web_search",
 				plugin: "web",
+				sessionId: null,
 				startedAt: NOW - 1500,
 				input: { q: "hi" },
 			},
@@ -186,5 +190,54 @@ describe("buildOpsFeed", () => {
 		expect(f.ops).toEqual([]);
 		expect(f.topology[0].id).toBe("core");
 		expect(f.working).toBe(false);
+	});
+
+	test("agent attribution: sub-agent sessions become non-zero tasks", () => {
+		const agentSession = "agent-researcher-42";
+		const f = buildOpsFeed(
+			deps({
+				toolLog: {
+					query: () => [
+						row(30, "gh_search", 4000, 100, 0, agentSession),
+						row(31, "plan", 4000, 100, 0, "web-1"), // main session → core
+					],
+				},
+				agents: [
+					{
+						id: agentSession,
+						name: "researcher",
+						task: "deep dig",
+						done: false,
+						ok: false,
+						ageMs: 1000,
+					},
+				],
+				inFlight: [],
+			}),
+			0,
+		);
+		const sub = f.ops.find((o) => o.op === "gh_search");
+		expect(sub?.taskId).not.toBe(0);
+		expect(sub?.taskLabel).toBe("deep dig");
+		expect(sub?.session).toBe(agentSession);
+		const main = f.ops.find((o) => o.op === "plan");
+		expect(main?.taskId).toBe(0); // orchestrator / main session, not a budded agent
+		expect(main?.taskLabel).toBe("");
+	});
+
+	test("finished sub-agent ops still attribute via the agent- prefix", () => {
+		const f = buildOpsFeed(
+			deps({
+				toolLog: {
+					query: () => [row(40, "icp_score", 3000, 100, 0, "agent-enricher-9")],
+				},
+				agents: [], // already pruned from kernel.activeAgents
+				inFlight: [],
+			}),
+			0,
+		);
+		const op = f.ops.find((o) => o.op === "icp_score");
+		expect(op?.taskId).not.toBe(0);
+		expect(op?.taskLabel).toBe("sub-agent"); // no live label, but still a swarm agent
 	});
 });
