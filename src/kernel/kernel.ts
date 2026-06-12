@@ -563,13 +563,26 @@ export class Kernel {
 				const { HubSpotClient } = await import(
 					"../integrations/hubspot/client.js"
 				);
-				this.hubspotClient = new HubSpotClient(this.config.hubspot);
+				const { createHubSpotTools } = await import(
+					"../integrations/hubspot/tools.js"
+				);
+				const { AuditLogger } = await import("../security/audit-log.js");
+				const client = new HubSpotClient(this.config.hubspot);
+				this.hubspotClient = client;
 				this.sandbox.registerManifest({
 					name: "hubspot",
 					version: "1.0.0",
 					description: "HubSpot CRM integration",
-					permissions: ["net:api.hubapi.com"],
+					// `hubspot` covers the plugin-inferred tool permission; the net
+					// grant remains for the canvas form-receiver path.
+					permissions: ["hubspot", "net:api.hubapi.com"],
 				});
+				const hsAudit = new AuditLogger(this.db);
+				this.toolRegistry.register(
+					createHubSpotTools(client, {
+						audit: (action, details) => hsAudit.log(action, null, details),
+					}),
+				);
 				this.logger.info("HubSpot integration initialized");
 			} catch (err) {
 				this.logger.warn("HubSpot init failed — degrading gracefully", {
