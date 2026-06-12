@@ -1,37 +1,20 @@
-import { resolveProjectPath } from "../paths.js";
+import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { EventBus } from "./bus.js";
-import { Sandbox } from "./sandbox.js";
-import { discoverPlugins } from "./plugin-loader.js";
-import { ClaudeProvider } from "../ai/provider.js";
-import { OllamaProvider } from "../ai/ollama-provider.js";
-import { OpenAIProvider } from "../ai/openai-provider.js";
-import { GeminiProvider } from "../ai/gemini-provider.js";
-import { ToolRegistry } from "../ai/tools.js";
-import { buildSystemPrompt } from "../ai/system-prompt.js";
-import { runSchemaDrift } from "../ai/mcp-schema-drift.js";
-import { AuditLogger } from "../security/audit-log.js";
+import { AgentRegistry } from "../agents/registry.js";
+import { createSpawnAgentTool } from "../agents/spawn-agent-tool.js";
+import type { AgentDefinition, AgentRunResult } from "../agents/types.js";
 import type {
 	AIProvider,
 	ChatMessage,
 	StreamChunk,
 } from "../ai/base-provider.js";
-import type { ToolDefinition } from "../types/message.js";
-import { compileBrandBrief, getActiveBrand } from "../store/brands.js";
-import { getDb, closeDb } from "../store/db.js";
-import { NotificationStore } from "../store/notifications.js";
-import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
-import { appendMessage, getSessionMessages } from "../store/messages.js";
-import { MemoryStore } from "../memory/store.js";
-import { preloadEmbedder } from "../memory/embeddings.js";
-import { createMemoryTools } from "../memory/tools.js";
-import {
-	extractMemories,
-	storeExtractedMemories,
-} from "../memory/auto-extract.js";
-import { FeedbackStore } from "../feedback/store.js";
-import { detectCorrection } from "../feedback/correction-detector.js";
+import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
+import { GeminiProvider } from "../ai/gemini-provider.js";
+import { runSchemaDrift } from "../ai/mcp-schema-drift.js";
+import { OllamaProvider } from "../ai/ollama-provider.js";
+import { OpenAIProvider } from "../ai/openai-provider.js";
+import { ClaudeProvider } from "../ai/provider.js";
 import {
 	ProviderRouter,
 	VISION_ERROR_NOTE,
@@ -39,35 +22,52 @@ import {
 	planImageTurn,
 	withVisionFallback,
 } from "../ai/router.js";
-import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
-import { ToolLog } from "../observability/tool-log.js";
-import { createProactiveTriggerTools } from "../cron/trigger-tools.js";
+import { SkillManager } from "../ai/skills.js";
+import { buildSystemPrompt } from "../ai/system-prompt.js";
+import { ToolRegistry } from "../ai/tools.js";
+import { readConfigOverrides } from "../config/writer.js";
 import { CronScheduler } from "../cron/scheduler.js";
+import { createProactiveTriggerTools } from "../cron/trigger-tools.js";
+import { detectCorrection } from "../feedback/correction-detector.js";
+import { FeedbackStore } from "../feedback/store.js";
 import { HeartbeatChecker } from "../heartbeat/checker.js";
+import { MCPClientManager } from "../mcp/client-manager.js";
+import {
+	extractMemories,
+	storeExtractedMemories,
+} from "../memory/auto-extract.js";
+import { preloadEmbedder } from "../memory/embeddings.js";
+import { MemoryStore } from "../memory/store.js";
+import { createMemoryTools } from "../memory/tools.js";
+import { createLogger, setLogLevel } from "../observability/logger.js";
+import { ToolLog } from "../observability/tool-log.js";
+import { resolveProjectPath } from "../paths.js";
 import { AccessController } from "../security/access-control.js";
+import { AuditLogger } from "../security/audit-log.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import { VaultManager } from "../security/vault.js";
-import { createWebApp } from "../web/app.js";
-import { startWebServer } from "../web/server.js";
-import { MCPClientManager } from "../mcp/client-manager.js";
-import { SkillManager } from "../ai/skills.js";
-import { createFileTools } from "../tools/file-tools.js";
-import { createExecTools } from "../tools/exec-tools.js";
-import { createCanvasTools } from "../tools/canvas-tools.js";
+import { compileBrandBrief, getActiveBrand } from "../store/brands.js";
+import { closeDb, getDb } from "../store/db.js";
+import { appendMessage, getSessionMessages } from "../store/messages.js";
+import { NotificationStore } from "../store/notifications.js";
+import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
 import { createActionTools } from "../tools/action-tools.js";
-import { readConfigOverrides } from "../config/writer.js";
-import { createLogger, setLogLevel } from "../observability/logger.js";
-import { AgentRegistry } from "../agents/registry.js";
-import { createSpawnAgentTool } from "../agents/spawn-agent-tool.js";
-import type { AgentDefinition, AgentRunResult } from "../agents/types.js";
+import { createCanvasTools } from "../tools/canvas-tools.js";
+import { createExecTools } from "../tools/exec-tools.js";
+import { createFileTools } from "../tools/file-tools.js";
 import type { PawConfig } from "../types/config.js";
+import type { ToolDefinition } from "../types/message.js";
+import type { InboundMessage } from "../types/message.js";
 import type {
 	ChannelPlugin,
 	PluginContext,
 	PluginStore,
 } from "../types/plugin.js";
-import type { InboundMessage } from "../types/message.js";
-import type { Database } from "bun:sqlite";
+import { createWebApp } from "../web/app.js";
+import { startWebServer } from "../web/server.js";
+import { EventBus } from "./bus.js";
+import { discoverPlugins } from "./plugin-loader.js";
+import { Sandbox } from "./sandbox.js";
 
 export class Kernel {
 	private bus: EventBus;
@@ -563,13 +563,26 @@ export class Kernel {
 				const { HubSpotClient } = await import(
 					"../integrations/hubspot/client.js"
 				);
-				this.hubspotClient = new HubSpotClient(this.config.hubspot);
+				const { createHubSpotTools } = await import(
+					"../integrations/hubspot/tools.js"
+				);
+				const { AuditLogger } = await import("../security/audit-log.js");
+				const client = new HubSpotClient(this.config.hubspot);
+				this.hubspotClient = client;
 				this.sandbox.registerManifest({
 					name: "hubspot",
 					version: "1.0.0",
 					description: "HubSpot CRM integration",
-					permissions: ["net:api.hubapi.com"],
+					// `hubspot` covers the plugin-inferred tool permission; the net
+					// grant remains for the canvas form-receiver path.
+					permissions: ["hubspot", "net:api.hubapi.com"],
 				});
+				const hsAudit = new AuditLogger(this.db);
+				this.toolRegistry.register(
+					createHubSpotTools(client, {
+						audit: (action, details) => hsAudit.log(action, null, details),
+					}),
+				);
 				this.logger.info("HubSpot integration initialized");
 			} catch (err) {
 				this.logger.warn("HubSpot init failed — degrading gracefully", {
@@ -601,10 +614,8 @@ export class Kernel {
 					permissions: ["github:read", "github:write", "github:admin"],
 				});
 				const ghAudit = new AuditLogger(this.db);
-				const ghAuditFn = (
-					action: string,
-					details: Record<string, unknown>,
-				) => ghAudit.log(action, null, details);
+				const ghAuditFn = (action: string, details: Record<string, unknown>) =>
+					ghAudit.log(action, null, details);
 				const approvals = new GitHubApprovals(this.db, client, ghAuditFn);
 				this.githubApprovalsInstance = approvals;
 				this.toolRegistry.register(
@@ -1338,7 +1349,10 @@ export class Kernel {
 						signal: controller.signal,
 					}),
 				onFallback: () => {
-					this.logger.warn("Vision provider failed; falling back to default", {});
+					this.logger.warn(
+						"Vision provider failed; falling back to default",
+						{},
+					);
 					return this.provider.chat(messages, systemPrompt, msg.sessionId, {
 						signal: controller.signal,
 					});
@@ -1726,10 +1740,9 @@ export class Kernel {
 				// Vision provider failed before any output → degrade to default,
 				// keep the user's message, and tag cost with the default model.
 				if (route.isVision && !producedModelText) {
-					this.logger.warn(
-						"Vision stream failed; falling back to default",
-						{ error: String(streamErr) },
-					);
+					this.logger.warn("Vision stream failed; falling back to default", {
+						error: String(streamErr),
+					});
 					yield { type: "text_delta", text: `${VISION_ERROR_NOTE}\n\n` };
 					fullText += `${VISION_ERROR_NOTE}\n\n`;
 					effectiveModel = this.config.ai.model;
