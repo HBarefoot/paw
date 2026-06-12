@@ -385,6 +385,105 @@ describe("companion static modules", () => {
 		expect(e2.getState(now).expression).toBe("worried");
 	});
 
+	// ── Sub-agent fidelity (PR B) ──
+	type AgentEngine = new () => {
+		ingestTool: (m: unknown, now?: number) => void;
+		_ingestFeed: (data: unknown, now?: number) => void;
+		getState: (now?: number) => {
+			agents: Array<{ name: string; working: boolean; done: boolean; ok: boolean; status: string }>;
+		};
+	};
+	function loadAgentEngine(): AgentEngine {
+		const win: Record<string, unknown> = {};
+		runModule(win, {}, read("expression.js"));
+		runModule(win, {}, read("engine.js"));
+		return win.CompanionEngine as AgentEngine;
+	}
+
+	test("agent fidelity: an orb is WORKING when it runs a tool with NO skillKey (the reported bug)", () => {
+		const Engine = loadAgentEngine();
+		const e = new Engine();
+		const t0 = 1000;
+		// estimate_revenue-style tool: attributed to agent-3 but maps to no skill.
+		e.ingestTool(
+			{ type: "paw:tool", phase: "start", agentName: "agent-3", toolName: "estimate_revenue" },
+			t0,
+		);
+		const a = e.getState(t0 + 10).agents.find((x) => x.name === "agent-3");
+		expect(a?.working).toBe(true);
+	});
+
+	test("agent fidelity: one orb per spawned agent; many tools from one agent stay one orb", () => {
+		const Engine = loadAgentEngine();
+		const e = new Engine();
+		const t0 = 1000;
+		for (const n of ["agent-1", "agent-2", "agent-3"]) {
+			e.ingestTool(
+				{ type: "paw:tool", phase: "start", toolName: "spawn_agent", summary: `Spawning agent: ${n}` },
+				t0,
+			);
+		}
+		// agent-3 fires many of its own tools — must NOT create extra orbs.
+		for (let i = 0; i < 6; i++) {
+			e.ingestTool(
+				{ type: "paw:tool", phase: "start", agentName: "agent-3", toolName: "estimate_revenue" },
+				t0 + i,
+			);
+		}
+		const names = e.getState(t0 + 20).agents.map((x) => x.name).sort();
+		expect(names).toEqual(["agent-1", "agent-2", "agent-3"]);
+	});
+
+	test("agent fidelity: a spawn relay shows the orb instantly; the feed doesn't duplicate it", () => {
+		const Engine = loadAgentEngine();
+		const e = new Engine();
+		const t0 = 1000;
+		e.ingestTool(
+			{ type: "paw:tool", phase: "start", toolName: "spawn_agent", summary: "Spawning agent: Scout" },
+			t0,
+		);
+		expect(e.getState(t0 + 5).agents.map((x) => x.name)).toEqual(["Scout"]);
+		// feed confirms the same agent (full session id) — still ONE orb.
+		e._ingestFeed(
+			{ agents: [{ id: "agent-Scout-1", name: "Scout", done: false, ok: true }] },
+			t0 + 10,
+		);
+		expect(e.getState(t0 + 15).agents.filter((x) => x.name === "Scout").length).toBe(1);
+	});
+
+	test("agent fidelity: completion → done, absorbs, then leaves; failure flags ok=false", () => {
+		const Engine = loadAgentEngine();
+		const ok = new Engine();
+		const t0 = 1000;
+		ok._ingestFeed({ agents: [{ id: "a1", name: "Scout", done: true, ok: true }] }, t0);
+		expect(ok.getState(t0).agents.find((x) => x.name === "Scout")?.status).toBe("done");
+		// after the display-linger the orb is gone.
+		expect(ok.getState(t0 + 4000).agents.find((x) => x.name === "Scout")).toBeUndefined();
+
+		const bad = new Engine();
+		bad._ingestFeed({ agents: [{ id: "a2", name: "Builder", done: true, ok: false }] }, t0);
+		const f = bad.getState(t0).agents.find((x) => x.name === "Builder");
+		expect(f?.status).toBe("done");
+		expect(f?.ok).toBe(false);
+	});
+
+	test("swarm cap: > 8 agents collapse the tail into one overflow slot", () => {
+		const win: Record<string, unknown> = {};
+		for (const m of MODULES) runModule(win, {}, read(m));
+		const C = win.Companion as {
+			visibleAgents: (
+				all: unknown[],
+				cap: number,
+			) => { visible: unknown[]; overflow: number };
+		};
+		const mk = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `a${i}` }));
+		expect(C.visibleAgents(mk(3), 8)).toMatchObject({ overflow: 0 });
+		expect(C.visibleAgents(mk(8), 8).visible.length).toBe(8);
+		const big = C.visibleAgents(mk(12), 8);
+		expect(big.visible.length).toBe(7); // 7 real + 1 "+N" = 8 slots
+		expect(big.overflow).toBe(5);
+	});
+
 	test("ops-feed: response carries pendingApprovals (default 0)", () => {
 		const base = {
 			toolLog: null,

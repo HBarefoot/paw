@@ -93,9 +93,22 @@
 		}
 	}
 
-	/** What the eyes look at: active pill > acting sub-agent > input > center. */
+	/** Split the agent list into the visible orbs + an overflow count (the cap'd
+	 *  tail collapses into one "+N" orb). Pure → unit-tested. */
+	function visibleAgents(all, cap) {
+		const overflow = all.length > cap ? all.length - (cap - 1) : 0;
+		const visible = overflow ? all.slice(0, cap - 1) : all;
+		return { visible, overflow };
+	}
+
+	/** What the eyes look at: failed sub-agent (worried) > active pill > acting
+	 *  sub-agent > input > center. */
 	function gazeTarget(st, expr) {
 		expr = expr || (st && st.expression) || "idle";
+		if (expr === "worried" && st?.agents) {
+			const fi = st.agents.findIndex((a) => a.status === "done" && a.ok === false);
+			if (fi >= 0) return { kind: "sub", idx: fi };
+		}
 		if (st && st.active && st.active.size) {
 			for (const [k] of st.active) return { kind: "pill", key: k };
 		}
@@ -149,6 +162,21 @@
 		// greeting → dynamic subtitle → ops feed (no stat cards).
 		const avatarZone = el("div", "avatar-zone");
 		avatarZone.appendChild(buildAvatar());
+		// Mood layer: a slow real-telemetry health scalar (0..1, injected from the
+		// 1-hour tool_log failure rate) varies SATURATION / BRIGHTNESS / POSTURE
+		// only — the avatar hue stays brand-driven (the white-label rule).
+		const mood =
+			typeof cfg.moodScalar === "number"
+				? Math.max(0, Math.min(1, cfg.moodScalar))
+				: 1;
+		(() => {
+			const av = avatarZone.firstChild;
+			const ball = av?.querySelector("[data-avatar]");
+			if (ball) {
+				ball.style.filter = `saturate(${(0.7 + 0.3 * mood).toFixed(2)}) brightness(${(0.85 + 0.15 * mood).toFixed(2)})`;
+			}
+			if (av) av.style.transform = `translateY(${((1 - mood) * 6).toFixed(1)}px)`;
+		})();
 		const subRow = el("div", "subagent-row");
 		const wrapDock = el("div", "wrap-dock");
 		home.appendChild(avatarZone);
@@ -171,10 +199,29 @@
 			if (d.type === "paw:tool") engine.ingestTool(d);
 			else if (d.type === "paw:input") engine.ingestInput(d.state);
 			else if (d.type === "paw:ambient") engine.setWaiting(d.pendingApprovals || 0);
+			else if (d.type === "paw:speak") onSpeak(d.phase);
 		});
+
+		// TTS mouth-sync: lip-flap the smile while speaking (masks the MOUTH only —
+		// eyes/antenna keep their expression). Driven by real SpeechSynthesis events.
+		function onSpeak(phase) {
+			const av = avatarZone.firstChild;
+			const smile = av.querySelector(".smile");
+			if (phase === "start") {
+				av.classList.add("speaking");
+			} else if (phase === "boundary") {
+				if (smile) smile.classList.toggle("talk");
+			} else if (phase === "end") {
+				av.classList.remove("speaking");
+				if (smile) smile.classList.remove("talk");
+			}
+		}
 
 		// ── incremental render state ──
 		const pillByKey = new Map();
+		const agentNodes = new Map(); // name | "overflow" -> orb node (keyed reconcile)
+		const prevAgentStatus = new Map(); // name -> last status (nod on completion)
+		const SUBAGENT_CAP = 8; // beyond this, the rest collapse into one "+N" orb
 		let lastSkillSig = "";
 		let lastAgentSig = "";
 		let lastActiveKey = "x";
@@ -230,47 +277,103 @@
 			}
 		}
 
-		function renderAgents(st) {
-			const sig = st.agents.map((a) => a.id).join(",");
-			if (sig !== lastAgentSig) {
-				lastAgentSig = sig;
-				subRow.textContent = "";
-				st.agents.forEach((a, i) => {
-					const node = el("div", "subagent");
-					const ball = el("div", "subagent-ball");
-					ball.setAttribute("data-subagent", String(i));
-					const g = SUB_GRADS[a.gradIndex % SUB_GRADS.length];
-					ball.style.background = g.grad;
-					ball.style.boxShadow = `0 0 26px ${g.glow}`;
-					const eyeL = el("div", "eye eye-l sm");
-					eyeL.appendChild(el("div", "pupil"));
-					const eyeR = el("div", "eye eye-r sm");
-					eyeR.appendChild(el("div", "pupil"));
-					ball.appendChild(eyeL);
-					ball.appendChild(eyeR);
-					ball.appendChild(el("div", "smile sm"));
-					node.appendChild(ball);
-					node.appendChild(el("span", "subagent-name", a.name));
-					node.appendChild(el("span", "subagent-status", "idle"));
-					subRow.appendChild(node);
-				});
-			}
-			// per-frame working state
-			st.agents.forEach((a, i) => {
-				const node = subRow.children[i];
-				if (!node) return;
-				const ball = node.firstChild;
-				const status = node.lastChild;
-				if (a.working) {
-					node.classList.add("acting");
-					ball.setAttribute("data-working", "1");
-					status.textContent = "working";
+		function buildSubagent(a) {
+			const node = el("div", "subagent");
+			const ball = el("div", "subagent-ball");
+			const g = SUB_GRADS[a.gradIndex % SUB_GRADS.length];
+			ball.style.background = g.grad;
+			ball.style.boxShadow = `0 0 26px ${g.glow}`;
+			const eyeL = el("div", "eye eye-l sm");
+			eyeL.appendChild(el("div", "pupil"));
+			const eyeR = el("div", "eye eye-r sm");
+			eyeR.appendChild(el("div", "pupil"));
+			ball.appendChild(eyeL);
+			ball.appendChild(eyeR);
+			ball.appendChild(el("div", "smile sm"));
+			node.appendChild(ball);
+			node.appendChild(el("span", "subagent-name", a.name));
+			node.appendChild(el("span", "subagent-status", "idle"));
+			return node;
+		}
+
+		function buildOverflow() {
+			const node = el("div", "subagent overflow");
+			const ball = el("div", "subagent-ball overflow-ball");
+			node.appendChild(ball);
+			node.appendChild(el("span", "subagent-name", "+0"));
+			node.appendChild(el("span", "subagent-status", "more"));
+			return node;
+		}
+
+		function updateSubagent(node, a, idx) {
+			const ball = node.firstChild;
+			const status = node.lastChild;
+			ball.setAttribute("data-subagent", String(idx));
+			node.classList.remove("acting", "done", "failed");
+			if (a.status === "done") {
+				node.classList.add("done");
+				ball.removeAttribute("data-working");
+				if (a.ok === false) {
+					node.classList.add("failed");
+					status.textContent = "failed";
 				} else {
-					node.classList.remove("acting");
-					ball.removeAttribute("data-working");
-					status.textContent = "idle";
+					status.textContent = "done";
 				}
+			} else if (a.working) {
+				node.classList.add("acting");
+				ball.setAttribute("data-working", "1");
+				status.textContent = "working";
+			} else {
+				ball.removeAttribute("data-working");
+				status.textContent = "idle";
+			}
+			// Orchestrator nod the moment an agent finishes (spring pop on the main orb).
+			if (prevAgentStatus.get(a.name) !== "done" && a.status === "done") {
+				pop.velocity += 12;
+			}
+			prevAgentStatus.set(a.name, a.status);
+		}
+
+		// Keyed reconcile: one orb per spawned agent (lockstep with the chat rows),
+		// capped — a 9th+ agent collapses into a single "+N" orb so the face stays
+		// readable. New orbs bud in; finished orbs are removed once they've absorbed.
+		function renderAgents(st) {
+			const { visible, overflow } = visibleAgents(st.agents, SUBAGENT_CAP);
+			const keys = visible.map((a) => a.name);
+			if (overflow) keys.push("overflow");
+
+			// Drop orbs whose agent left (absorbed / out of the window).
+			for (const [k, node] of agentNodes) {
+				if (keys.indexOf(k) === -1) {
+					if (node.parentNode) node.parentNode.removeChild(node);
+					agentNodes.delete(k);
+					prevAgentStatus.delete(k);
+				}
+			}
+			// Ensure + order + update each visible orb (appendChild moves existing
+			// nodes, preserving their animation/classes — only new orbs bud).
+			visible.forEach((a, i) => {
+				let node = agentNodes.get(a.name);
+				if (!node) {
+					node = buildSubagent(a);
+					node.classList.add("bud");
+					agentNodes.set(a.name, node);
+					const n = node;
+					setTimeout(() => n.classList.remove("bud"), 600);
+				}
+				subRow.appendChild(node);
+				updateSubagent(node, a, i);
 			});
+			if (overflow) {
+				let node = agentNodes.get("overflow");
+				if (!node) {
+					node = buildOverflow();
+					agentNodes.set("overflow", node);
+				}
+				subRow.appendChild(node);
+				node.querySelector(".subagent-name").textContent = `+${overflow}`;
+			}
+			lastAgentSig = keys.join(",");
 		}
 
 		function renderOps(st) {
@@ -520,5 +623,5 @@
 		};
 	}
 
-	window.Companion = { mount, gazeTarget, captionFor };
+	window.Companion = { mount, gazeTarget, captionFor, visibleAgents };
 })();

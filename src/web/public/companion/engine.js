@@ -13,11 +13,27 @@
 	const HOLD_JITTER = 1800;
 	const THINK_MS = 1500;
 	const FEED_MAX = 6;
+	const AGENT_WORK_MS = 2400; // an orb stays "working" this long after its last tool
+	const DONE_LINGER_MS = 1600; // a finished orb plays its absorb, then leaves
+	const PENDING_TTL_MS = 6000; // drop a relay spawn the feed never confirmed
+	const POLL_BUSY_MS = 700; // poll fast while a swarm is live…
+	const POLL_IDLE_MS = 2000; // …and lazily when idle
 
 	function freshMachine() {
 		return window.CompanionExpression
 			? window.CompanionExpression.freshMachine()
 			: { listenUntil: 0, successUntil: 0, winceUntil: 0 };
+	}
+
+	/** The spawned agent's name from a relayed spawn_agent chunk, else null. */
+	function spawnNameOf(msg) {
+		const s = msg.summary || "";
+		const PREFIX = "Spawning agent:";
+		if (s.indexOf(PREFIX) === 0) {
+			const name = s.slice(PREFIX.length).trim();
+			if (name && name !== "unknown") return name;
+		}
+		return null;
 	}
 
 	function CompanionEngine() {
@@ -27,6 +43,14 @@
 		this.ops = []; // [{label, agentName, isError, ts, toolId}]
 		this.thinkingUntil = 0;
 		this.mainPops = 0; // bumps when the orchestrator (not a sub-agent) acts
+		// Sub-agent fidelity: the feed (kernel.activeAgents, stored in this.agents)
+		// is the authoritative SET, but these give the orbs real-time appearance +
+		// correct liveliness so they match the chat's "Spawning agent" rows.
+		this.workingUntil = new Map(); // name -> ts: an agent is "working" while it
+		// runs ANY [name]-attributed tool (independent of whether it maps to a skill)
+		this.pendingSpawns = new Map(); // name -> ts: spawned (relay) but not yet in feed
+		this.subDone = new Map(); // name -> {doneAt, ok}: display-linger + tombstone
+		this._spawnTool = new Map(); // spawn_agent toolId -> agent name (to finalize)
 		// Expression inputs (real signals → the pure CompanionExpression machine).
 		this.machine = freshMachine(); // transient holds: listen/success/wince
 		this.waiting = false; // a GitHub action is pending human approval
@@ -90,7 +114,16 @@
 			})
 			.catch(() => {})
 			.finally(() => {
-				if (!self._stopped) self._timer = setTimeout(() => self._poll(), 2000);
+				if (self._stopped) return;
+				// Poll fast while any agent is live/pending so orbs track the chat.
+				const live =
+					self.pendingSpawns.size > 0 ||
+					self.agents.some((a) => !a.done) ||
+					self.subDone.size > 0;
+				self._timer = setTimeout(
+					() => self._poll(),
+					live ? POLL_BUSY_MS : POLL_IDLE_MS,
+				);
 			});
 	};
 
@@ -105,7 +138,11 @@
 			this.agents = data.agents.map((a) => ({
 				id: String(a.id),
 				name: String(a.name || a.id),
+				done: a.done === true,
+				ok: a.ok !== false,
 			}));
+			// Once the feed confirms a spawned agent, drop its real-time placeholder.
+			for (const a of this.agents) this.pendingSpawns.delete(a.name);
 			// A sub-agent that finished NOT-ok → latch "worried" once per agent.
 			for (const a of data.agents) {
 				if (a.done === true && a.ok === false) {
@@ -159,6 +196,17 @@
 				noteMachine(this, { type: "recovered" }, now);
 			}
 			if (!actor) this.mainPops++;
+			// A spawn (orchestrator calling spawn_agent) → an orb appears the instant
+			// the chat shows its "Spawning agent: X" row, before the feed catches up.
+			const spawnName = spawnNameOf(msg);
+			if (spawnName) {
+				this.subDone.delete(spawnName); // a re-spawn clears the tombstone
+				this.pendingSpawns.set(spawnName, now);
+				if (msg.toolId) this._spawnTool.set(msg.toolId, spawnName);
+			}
+			// An agent is "working" while it runs ANY of its own tools — regardless
+			// of whether the tool maps to a skill pill (the core IDLE-while-busy fix).
+			if (actor) this.workingUntil.set(actor, now + AGENT_WORK_MS);
 			if (key) {
 				this.active.set(key, {
 					untilTs: now + HOLD_MS + Math.random() * HOLD_JITTER,
@@ -175,6 +223,14 @@
 			if (this.ops.length > FEED_MAX) this.ops.length = FEED_MAX;
 		} else if (msg.phase === "end") {
 			this.lastActiveAt = now;
+			// A spawn_agent tool ending = that sub-agent finished → start its absorb.
+			const endedName = msg.toolId && this._spawnTool.get(msg.toolId);
+			if (endedName) {
+				this._spawnTool.delete(msg.toolId);
+				this.pendingSpawns.delete(endedName);
+				this.workingUntil.delete(endedName);
+				this.subDone.set(endedName, { doneAt: now, ok: !msg.isError });
+			}
 			if (msg.isError) {
 				// A failure surfaces at end — flag the matching op's dot red and arm
 				// a wince (severity 2). A later success will mark it recovered.
@@ -197,21 +253,79 @@
 		}
 	};
 
+	/**
+	 * The faithful sub-agent set for the orbs: the feed (authoritative) unioned
+	 * with relay spawns the feed hasn't confirmed yet and any name currently
+	 * running a tool — one entry per agent, tagged working/done. A finished orb
+	 * lingers briefly (absorb animation) then leaves; a tombstone keeps the
+	 * still-lingering feed row from re-adding it.
+	 */
+	CompanionEngine.prototype._buildAgents = function (now) {
+		for (const [n, ts] of this.pendingSpawns) {
+			if (now - ts > PENDING_TTL_MS) this.pendingSpawns.delete(n);
+		}
+		for (const [n, ts] of this.workingUntil) {
+			if (ts < now) this.workingUntil.delete(n);
+		}
+		const byName = new Map();
+		for (const a of this.agents) byName.set(a.name, a);
+
+		const names = [];
+		const seen = new Set();
+		const push = (n) => {
+			if (n && !seen.has(n)) {
+				seen.add(n);
+				names.push(n);
+			}
+		};
+		for (const a of this.agents) push(a.name); // feed order ≈ spawn order
+		for (const [n] of this.pendingSpawns) push(n);
+		for (const [n, ts] of this.workingUntil) if (ts > now) push(n);
+
+		const out = [];
+		let gi = 0;
+		for (const name of names) {
+			const feed = byName.get(name);
+			const working = (this.workingUntil.get(name) || 0) > now;
+			let done = false;
+			let ok = true;
+			if (feed?.done) {
+				done = true;
+				ok = feed.ok;
+			}
+			if (done && !this.subDone.has(name)) this.subDone.set(name, { doneAt: now, ok });
+			const rec = this.subDone.get(name);
+			if (rec) {
+				done = true;
+				ok = rec.ok;
+				if (now - rec.doneAt > DONE_LINGER_MS) continue; // absorbed → leave
+			}
+			out.push({
+				id: feed ? feed.id : `pending-${name}`,
+				name,
+				gradIndex: gi++ % 3,
+				working: working && !done,
+				done,
+				ok,
+				status: done ? "done" : working ? "working" : "idle",
+			});
+		}
+		// Drop tombstones the feed no longer reports, so a re-spawn can re-appear.
+		for (const [n, rec] of this.subDone) {
+			if (now - rec.doneAt > DONE_LINGER_MS && !byName.has(n)) {
+				this.subDone.delete(n);
+			}
+		}
+		return out;
+	};
+
 	/** Prune expired skills and return a render snapshot. */
 	CompanionEngine.prototype.getState = function (now) {
 		now = now || Date.now();
 		for (const [k, v] of this.active) {
 			if (v.untilTs < now) this.active.delete(k);
 		}
-		// An agent is "working" while it owns an active skill.
-		const working = new Set();
-		for (const [, v] of this.active) if (v.actor) working.add(v.actor);
-		const agents = this.agents.map((a, i) => ({
-			id: a.id,
-			name: a.name,
-			gradIndex: i % 3,
-			working: working.has(a.name) || working.has(a.id),
-		}));
+		const agents = this._buildAgents(now);
 		const snapshot = {
 			busy: this.active.size > 0,
 			thinking: now < this.thinkingUntil,
