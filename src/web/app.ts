@@ -2893,9 +2893,13 @@ export function createWebApp(
 			}
 		}
 
-		if (!existsSync(fullPath) || statSync(fullPath).isDirectory()) {
-			// Return a placeholder page for index.html so the iframe isn't blank
-			if (decoded === "index.html") {
+		// `__home__` is a reserved path that ALWAYS renders the live portrait,
+		// regardless of any file in the canvas root — it backs the pinned "Home"
+		// tab so the agent writing index.html can never clobber the portrait.
+		const isHome = decoded === "__home__";
+		if (isHome || !existsSync(fullPath) || statSync(fullPath).isDirectory()) {
+			// Return a placeholder page for index.html / __home__ so the iframe isn't blank
+			if (isHome || decoded === "index.html") {
 				// No external resources (e.g. web fonts): this page renders inside the
 				// sandboxed, null-origin canvas iframe, where cross-origin loads can
 				// trip Safari's "Unsafe attempt to load URL" guard. System fonts only.
