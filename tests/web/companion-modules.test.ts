@@ -5,13 +5,7 @@ import { createSecurityHeaders } from "../../src/web/middleware/security-headers
 const ROOT = new URL("../../src/web/public/companion/", import.meta.url);
 const read = (file: string) => readFileSync(new URL(file, ROOT), "utf8");
 
-const MODULES = [
-	"router.js",
-	"dock.js",
-	"topology.js",
-	"engine.js",
-	"shell.js",
-];
+const MODULES = ["router.js", "topology.js", "engine.js", "shell.js"];
 
 /** A minimal DOM node for the shell's build/render path. */
 // biome-ignore lint/suspicious/noExplicitAny: a permissive DOM stub is intentionally untyped
@@ -140,33 +134,6 @@ describe("companion static modules", () => {
 		expect(a.sy).toBe(100);
 	});
 
-	test("dock: >16 skills caps the column and builds the overflow chip", () => {
-		const win: Record<string, unknown> = {};
-		runModule(win, {}, read("dock.js"));
-		const Dock = win.CompanionDock as {
-			computeColumn: (
-				s: Array<{ key: string; label: string }>,
-				o: { max: number; activeHiddenKey?: string | null },
-			) => {
-				visible: unknown[];
-				overflow: null | { count: number; label: string; hot: boolean };
-			};
-		};
-		const skills = Array.from({ length: 100 }, (_, i) => ({
-			key: i === 90 ? "webhooks" : `s${i}`,
-			label: i === 90 ? "webhooks" : `Skill ${i}`,
-		}));
-		const plain = Dock.computeColumn(skills, { max: 16 });
-		expect(plain.visible.length).toBe(16);
-		expect(plain.overflow?.label).toBe("+84");
-		const hot = Dock.computeColumn(skills, {
-			max: 16,
-			activeHiddenKey: "webhooks",
-		});
-		expect(hot.overflow?.hot).toBe(true);
-		expect(hot.overflow?.label).toBe("+84 · webhooks");
-	});
-
 	test("topology: beam routes to the acting sub-agent, else the avatar", () => {
 		const win: Record<string, unknown> = {};
 		runModule(win, {}, read("topology.js"));
@@ -274,7 +241,7 @@ describe("companion static modules", () => {
 			mount: (root: unknown, cfg: unknown) => { stop: () => void };
 		};
 		expect(typeof C.mount).toBe("function");
-		// >16 skills so the overflow-chip branch builds too.
+		// A full skill set so the wrap dock builds many pills.
 		const skills = Array.from({ length: 18 }, (_, i) => ({
 			key: `s${i}`,
 			label: `Skill ${i}`,

@@ -11,9 +11,7 @@
  */
 (() => {
 	const R = window.CompanionRouter;
-	const Dock = window.CompanionDock;
 	const SVGNS = "http://www.w3.org/2000/svg";
-	const CAP = 16;
 	// Sub-agent orb gradients (cycled), verbatim from the design's skills-data.js.
 	const SUB_GRADS = [
 		{
@@ -93,20 +91,18 @@
 		tetherSvg.setAttribute("class", "tether-svg");
 		home.appendChild(tetherSvg);
 
-		const topArea = el("div", "top-area");
-		const skillCol = el("div", "skill-col");
-		const avatarCell = el("div", "avatar-cell");
+		// Wrap-dock composition: centered avatar → caption → sub-agents → the
+		// skills wrapping below (then greeting/stats/ops feed).
 		const avatarZone = el("div", "avatar-zone");
 		avatarZone.appendChild(buildAvatar());
 		const caption = el("div", "activity-caption");
 		caption.appendChild(el("span"));
 		const subRow = el("div", "subagent-row");
-		avatarCell.appendChild(avatarZone);
-		avatarCell.appendChild(caption);
-		avatarCell.appendChild(subRow);
-		topArea.appendChild(skillCol);
-		topArea.appendChild(avatarCell);
-		home.appendChild(topArea);
+		const wrapDock = el("div", "wrap-dock");
+		home.appendChild(avatarZone);
+		home.appendChild(caption);
+		home.appendChild(subRow);
+		home.appendChild(wrapDock);
 
 		const greeting = el("h1", "greeting", `Hi — I'm ${cfg.brandName || "Paw"}`);
 		const subtitle = el(
@@ -134,7 +130,6 @@
 
 		// ── incremental render state ──
 		const pillByKey = new Map();
-		let hiddenKeys = [];
 		let lastSkillSig = "";
 		let lastAgentSig = "";
 		let lastActiveKey = "x";
@@ -144,43 +139,35 @@
 		let tetherTimer = null;
 		let raf = null;
 
-		function buildColumn(st) {
-			skillCol.textContent = "";
+		function buildDock(st) {
+			wrapDock.textContent = "";
 			pillByKey.clear();
-			const tier = st.skills.length <= 14 ? "lg" : "md";
-			const col = Dock.computeColumn(st.skills, { max: CAP });
-			for (const s of col.visible) {
+			// Density tier by count (prototype WrapDock): bigger pills when there
+			// are few, shrinking as the set grows so everything stays on screen.
+			const n = st.skills.length;
+			const tier = n <= 20 ? "lg" : n <= 48 ? "md" : "sm";
+			for (const s of st.skills) {
 				const p = el("span", `pill ${tier}`);
 				p.setAttribute("data-key", s.key);
 				p.title = s.label;
 				p.appendChild(el("span", "pill-dot"));
 				p.appendChild(el("span", "pill-label", s.label));
-				skillCol.appendChild(p);
+				wrapDock.appendChild(p);
 				pillByKey.set(s.key, p);
-			}
-			hiddenKeys = st.skills.slice(CAP).map((s) => s.key);
-			if (col.overflow) {
-				const p = el("span", `pill ${tier} ovf`);
-				p.setAttribute("data-overflow", "1");
-				p.appendChild(el("span", "pill-dot"));
-				p.appendChild(el("span", "pill-label", col.overflow.label));
-				skillCol.appendChild(p);
-				pillByKey.set("__overflow__", p);
 			}
 		}
 
 		function agentTargetFor(actor, agents) {
-			if (!actor) return "main";
-			for (let i = 0; i < agents.length; i++) {
-				if (agents[i].name === actor || agents[i].id === actor) return `sub${i}`;
+			const t = window.CompanionTopology.beamTarget({ agentName: actor }, agents);
+			if (t.kind === "agent") {
+				const idx = agents.findIndex((a) => a.id === t.id);
+				if (idx >= 0) return `sub${idx}`;
 			}
 			return "main";
 		}
 
 		function renderActive(st) {
-			// pills
 			for (const [key, p] of pillByKey) {
-				if (key === "__overflow__") continue;
 				const a = st.active.get(key);
 				if (a) {
 					p.classList.add("active");
@@ -188,31 +175,6 @@
 				} else {
 					p.classList.remove("active");
 					p.removeAttribute("data-tether");
-				}
-			}
-			// overflow chip: light + relabel when a hidden skill is active
-			const chip = pillByKey.get("__overflow__");
-			if (chip) {
-				let hot = null;
-				for (const k of hiddenKeys) {
-					if (st.active.has(k)) {
-						hot = k;
-						break;
-					}
-				}
-				const label = chip.querySelector(".pill-label");
-				if (hot) {
-					const name = (st.skills.find((s) => s.key === hot) || {}).label || hot;
-					if (label) label.textContent = `+${hiddenKeys.length} · ${name}`;
-					chip.classList.add("active");
-					chip.setAttribute(
-						"data-tether",
-						agentTargetFor(st.active.get(hot).actor, st.agents),
-					);
-				} else {
-					if (label) label.textContent = `+${hiddenKeys.length}`;
-					chip.classList.remove("active");
-					chip.removeAttribute("data-tether");
 				}
 			}
 		}
@@ -422,7 +384,7 @@
 			const skillSig = st.skills.map((s) => s.key).join(",");
 			if (skillSig !== lastSkillSig) {
 				lastSkillSig = skillSig;
-				buildColumn(st);
+				buildDock(st);
 				lastActiveKey = "x";
 			}
 			renderAgents(st);
