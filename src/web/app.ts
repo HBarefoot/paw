@@ -846,9 +846,11 @@ export function createWebApp(
 	// canvas lenses). The page shell is OpsPage; all visual logic lives in the
 	// static modules under /ops/static/* reading /api/ops/feed.
 	app.get("/", (c) => {
+		const brand = getActiveBrand(kernel.database);
+		const colors = brand?.data.colors ?? {};
 		return c.html(
 			OpsPage({
-				brand: getActiveBrand(kernel.database)?.name ?? null,
+				accent: colors.accent || colors.primary || "",
 				model: currentModel(),
 				uptimeMs: process.uptime() * 1000,
 			}),

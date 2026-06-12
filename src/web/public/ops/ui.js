@@ -45,6 +45,16 @@
 		return hh + ":" + mm + ":" + ss;
 	}
 
+	// Brand accent (hex) → rgba() for canvas fills; falls back to the design green.
+	function hexToRgba(hex, a) {
+		if (typeof hex !== "string") return "rgba(63,224,143," + a + ")";
+		var h = hex.replace("#", "");
+		if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+		var n = h.length >= 6 ? parseInt(h.slice(0, 6), 16) : NaN;
+		if (isNaN(n)) return "rgba(63,224,143," + a + ")";
+		return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+	}
+
 	function esc(v) {
 		return String(v == null ? "" : v)
 			.replace(/&/g, "&amp;")
@@ -161,6 +171,7 @@
 		fmtMs: fmtMs,
 		fmtPct: fmtPct,
 		fmtClock: fmtClock,
+		hexToRgba: hexToRgba,
 		esc: esc,
 		Tip: Tip,
 		opTipHTML: opTipHTML,

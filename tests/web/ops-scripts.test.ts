@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { OpsPage } from "../../src/web/views/ops-page.js";
 
 const ROOT = new URL("../../src/web/public/ops/", import.meta.url);
 function read(file: string): string {
@@ -195,5 +196,25 @@ describe("ops-page inline bootstrap (template-trap guard)", () => {
 		const inner = src.slice(start, end).replace(/\$\{[^}]*\}/g, "null");
 		expect(() => new Function(inner)).not.toThrow();
 		expect(inner).toContain("ops-content");
+	});
+});
+
+describe("OpsPage accent theming", () => {
+	test("inlines a valid brand accent as --ops-green", () => {
+		const html = String(OpsPage({ accent: "#0af", model: "m", uptimeMs: 0 }));
+		expect(html).toContain("--ops-green:#0af");
+		expect(html).toContain('id="ops-root"');
+	});
+
+	test("falls back to the design green for a missing/invalid accent", () => {
+		expect(String(OpsPage({ accent: "", model: "m", uptimeMs: 0 }))).toContain(
+			"--ops-green:#3fe08f",
+		);
+		// CSS-injection attempt is rejected → fallback (no raw payload in style)
+		const evil = String(
+			OpsPage({ accent: "red;}</style><script>", model: "m", uptimeMs: 0 }),
+		);
+		expect(evil).toContain("--ops-green:#3fe08f");
+		expect(evil).not.toContain("</style><script>");
 	});
 });

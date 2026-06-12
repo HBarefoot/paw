@@ -62,9 +62,9 @@
 		root.className = "ops-app";
 		root.innerHTML =
 			'<div class="topbar">' +
-			'<div class="brand"><div class="logo"></div><div class="name" id="ops-brand"></div>' +
-			'<span class="live-pill"><span class="dot" id="ops-live-dot"></span><span id="ops-live-txt">LIVE</span></span></div>' +
-			'<div class="model-chip"><span class="dot" style="background:#3fe08f"></span><span id="ops-model"></span></div>' +
+			'<div class="lens" id="ops-lens"></div>' +
+			'<span class="live-pill"><span class="dot" id="ops-live-dot"></span><span id="ops-live-txt">LIVE</span></span>' +
+			'<div class="model-chip"><span class="dot" style="background:var(--ops-green)"></span><span id="ops-model"></span></div>' +
 			'<div class="top-stats">' +
 			'<div class="stat"><span class="v tnum" id="ops-tps">0</span><span class="k">ops / sec</span></div>' +
 			'<div class="stat"><span class="v tnum" id="ops-active">0</span><span class="k">in flight</span></div>' +
@@ -74,9 +74,7 @@
 			'<div class="seg" id="ops-speed"></div>' +
 			'<button class="btn on" id="ops-insp-toggle" title="Toggle inspector">▦</button></div>' +
 			"</div></div>" +
-			'<div class="rail" id="ops-rail"></div>' +
-			'<div class="stage" id="ops-stage"><div class="stage-head"><div class="t" id="ops-stage-t"></div>' +
-			'<div class="d" id="ops-stage-d"></div></div><div class="viz-root"><canvas id="ops-canvas"></canvas></div></div>' +
+			'<div class="stage" id="ops-stage"><div class="viz-root"><canvas id="ops-canvas"></canvas></div></div>' +
 			'<div class="scrub"><span class="lbl">Timeline</span>' +
 			'<div class="scrub-track" id="ops-scrub-track"><canvas id="ops-scrub-canvas"></canvas>' +
 			'<div class="cursor" id="ops-scrub-cursor"></div></div>' +
@@ -84,15 +82,15 @@
 			'<button class="btn live-btn on" id="ops-live-btn">JUMP TO LIVE</button></div>' +
 			'<div class="insp" id="ops-insp">' +
 			'<div class="sec"><div class="sec-hd"><span>Filter · tools</span>' +
-			'<span id="ops-showall" style="cursor:pointer;color:#3fe08f;display:none">show all</span></div>' +
+			'<span id="ops-showall" style="cursor:pointer;color:var(--ops-green);display:none">show all</span></div>' +
 			'<div class="chips" id="ops-chips"></div></div>' +
 			'<div class="sec" id="ops-detail"></div>' +
 			'<div class="sec grow"><div class="sec-hd"><span>Live operations</span>' +
 			'<span><span class="dot pulse"></span></span></div><div class="feed" id="ops-feed"></div></div>' +
 			"</div>";
 
-		el("ops-brand").textContent = cfg.brand ? String(cfg.brand).toUpperCase() : "AGENT OPS";
 		el("ops-model").textContent = cfg.model || "—";
+		var accent = cfg.accent || "#3fe08f";
 
 		var canvas = el("ops-canvas");
 		var stage = el("ops-stage");
@@ -101,37 +99,53 @@
 			size: { w: 0, h: 0, dpr: Math.min(2, window.devicePixelRatio || 1) },
 			engine: engine,
 			ui: ui,
+			accent: accent,
 			state: state,
 			actions: { toggleTool: toggleTool, selectOp: selectOp },
 		};
 
-		// ---- rail -------------------------------------------------------------
-		(function buildRail() {
-			var rail = el("ops-rail");
-			var html = '<div class="hd">Visualizations</div>';
+		// ---- lens switcher (top-bar dropdown; replaces the old left rail) -----
+		var lensEl = el("ops-lens");
+		function lensGlyph(m) {
+			return ui.MODE_GLYPHS[m.glyph]; // SVG already carries class="glyph"
+		}
+		function buildLens() {
+			var active = modeById[state.modeId];
+			var menu = "";
 			MODES.forEach(function (m) {
 				var on = m.id === state.modeId;
 				var soon = !isEnabled(m);
-				html +=
-					'<button class="mode' + (on ? " on" : "") + (soon ? " soon" : "") +
+				menu +=
+					'<button class="lens-item' + (on ? " on" : "") + (soon ? " soon" : "") +
 					'" data-mode="' + m.id + '"' + (soon ? " disabled" : "") + ">" +
-					'<span class="glyph">' + ui.MODE_GLYPHS[m.glyph] + "</span>" +
+					lensGlyph(m) +
 					'<span><span class="t">' + m.t + '</span><span class="d">' +
 					m.d + (soon ? " · soon" : "") + "</span></span></button>";
 			});
-			html +=
-				'<div class="spacer"></div><div class="note">Same live agent, multiple lenses. ' +
-				"Hover any element for detail · click a tool to isolate it · click an operation to inspect.</div>";
-			rail.innerHTML = html;
-			rail.querySelectorAll(".mode").forEach(function (b) {
+			lensEl.innerHTML =
+				'<button class="lens-btn" id="ops-lens-btn" title="Switch lens">' +
+				lensGlyph(active) + '<span id="ops-lens-label">' + active.t + "</span>" +
+				'<span class="cv">▾</span></button>' +
+				'<div class="lens-menu">' + menu + "</div>";
+			el("ops-lens-btn").addEventListener("click", function (e) {
+				e.stopPropagation();
+				lensEl.classList.toggle("open");
+			});
+			lensEl.querySelectorAll(".lens-item").forEach(function (b) {
 				b.addEventListener("click", function () {
 					var id = b.getAttribute("data-mode");
 					var m = modeById[id];
+					lensEl.classList.remove("open");
 					if (!m || !isEnabled(m) || id === state.modeId) return;
 					setMode(id);
 				});
 			});
-		})();
+		}
+		// close the menu on any outside click
+		document.addEventListener("click", function () {
+			lensEl.classList.remove("open");
+		});
+		buildLens();
 
 		// ---- speed seg + controls --------------------------------------------
 		(function buildControls() {
@@ -240,9 +254,12 @@
 		function setMode(id) {
 			state.modeId = id;
 			var m = modeById[id];
-			el("ops-stage-t").textContent = m.t;
-			el("ops-stage-d").textContent = m.head;
-			root.querySelectorAll(".mode").forEach(function (b) {
+			// reflect the active lens in the top-bar switcher (button + menu)
+			var label = el("ops-lens-label");
+			if (label) label.textContent = m.t;
+			var btnGlyph = lensEl.querySelector(".lens-btn .glyph");
+			if (btnGlyph) btnGlyph.outerHTML = ui.MODE_GLYPHS[m.glyph];
+			lensEl.querySelectorAll(".lens-item").forEach(function (b) {
 				b.classList.toggle("on", b.getAttribute("data-mode") === id);
 			});
 			var g = canvas.getContext("2d");
@@ -372,7 +389,7 @@
 			var running = engine.running;
 			el("ops-live-txt").textContent = running ? "LIVE" : "PAUSED";
 			var dot = el("ops-live-dot");
-			dot.style.background = running ? "#3fe08f" : "#e6b248";
+			dot.style.background = running ? accent : "#e6b248";
 			dot.classList.toggle("pulse", running);
 			el("ops-play").textContent = running ? "❚❚" : "▶";
 		}
@@ -417,7 +434,7 @@
 				if (!bk.n) return;
 				var x = k * bw,
 					hgt = 4 + (bk.n / mx) * (r.height - 8);
-				g.fillStyle = bk.err ? "rgba(229,96,77,0.7)" : "rgba(63,224,143,0.45)";
+				g.fillStyle = bk.err ? "rgba(229,96,77,0.7)" : ui.hexToRgba(accent, 0.45);
 				g.fillRect(x, r.height - hgt, Math.max(1, bw - 0.6), hgt);
 			});
 			// stream view-window hint (last 22s)

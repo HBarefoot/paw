@@ -164,9 +164,10 @@
 				bars.push({ x: x1, y: by, w: bw, h: bh, o: o });
 			}
 
-			// now line
+			// now line — live edge follows the brand accent; review edge is amber
 			var nx = X(nowRef);
-			g.strokeStyle = vt === "live" ? "rgba(63,224,143,0.5)" : "rgba(230,178,72,0.6)";
+			g.strokeStyle =
+				vt === "live" ? ui.hexToRgba(ctx.accent || "#3fe08f", 0.5) : "rgba(230,178,72,0.6)";
 			g.lineWidth = 1.5;
 			g.beginPath();
 			g.moveTo(nx, PAD_T - 4);

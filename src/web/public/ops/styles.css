@@ -38,7 +38,10 @@
   --ops-ink-bright: #eef4ef;
   --ops-ink-dim: #7c887f;
   --ops-ink-faint: #4a534c;
-  --ops-green: var(--brand-accent, #3fe08f);
+  /* Accent follows the active brand (server-inlined on #ops-root as
+     style="--ops-green:<brand accent>"); the design green is the fallback.
+     Status colors (amber/red/cyan) are fixed below — semantics, not brand. */
+  --ops-green: #3fe08f;
   --ops-red: #e5604d;
   --ops-r: 10px;
   --ops-r-sm: 7px;
@@ -48,12 +51,12 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 232px 1fr 312px;
+  grid-template-columns: 1fr 312px;
   grid-template-rows: 56px 1fr 64px;
   grid-template-areas:
-    "top   top    top"
-    "rail  stage  insp"
-    "rail  scrub  insp";
+    "top   top"
+    "stage insp"
+    "scrub insp";
   color: var(--ops-ink);
   font-family: var(--ops-mono);
   font-size: 13px;
@@ -62,7 +65,7 @@
     radial-gradient(1200px 600px at 50% -10%, rgba(63, 224, 143, 0.05), transparent 60%),
     var(--ops-bg);
 }
-.ops-app.no-insp { grid-template-columns: 232px 1fr 0; }
+.ops-app.no-insp { grid-template-columns: 1fr 0; }
 .ops-app * { box-sizing: border-box; }
 .ops-app .mono { font-family: var(--ops-mono); }
 .ops-app .dim { color: var(--ops-ink-dim); }
@@ -121,36 +124,41 @@
 .ops-app .seg .btn { border: none; border-radius: 0; border-right: 1px solid var(--ops-line); }
 .ops-app .seg .btn:last-child { border-right: none; }
 
-/* ---- Left rail ---- */
-.ops-app .rail {
-  grid-area: rail; border-right: 1px solid var(--ops-line);
-  padding: 16px 12px; display: flex; flex-direction: column; gap: 7px;
-  background: linear-gradient(180deg, rgba(10, 14, 15, 0.5), transparent); overflow-y: auto;
+/* ---- Lens switcher (top-bar dropdown; replaces the old left rail) ---- */
+.ops-app .lens { position: relative; }
+.ops-app .lens-btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px;
+  font-family: var(--ops-mono); font-size: 11px; color: var(--ops-ink-bright);
+  background: var(--ops-panel-2); border: 1px solid var(--ops-line-2);
+  border-radius: var(--ops-r-sm); cursor: pointer; transition: border-color .14s ease;
 }
-.ops-app .rail .hd { font-size: 9.5px; letter-spacing: 0.18em; color: var(--ops-ink-dim); text-transform: uppercase; padding: 4px 8px 8px; }
-.ops-app .mode {
-  text-align: left; cursor: pointer; border: 1px solid transparent; border-radius: var(--ops-r);
-  background: transparent; color: var(--ops-ink-dim); padding: 11px 12px; display: grid;
-  grid-template-columns: 22px 1fr; gap: 11px; align-items: center; transition: all .15s ease; position: relative; width: 100%;
+.ops-app .lens-btn:hover { border-color: var(--ops-green); }
+.ops-app .lens-btn .glyph { width: 16px; height: 16px; color: var(--ops-green); }
+.ops-app .lens-btn .cv { color: var(--ops-ink-dim); transition: transform .15s ease; }
+.ops-app .lens.open .lens-btn .cv { transform: rotate(180deg); }
+.ops-app .lens-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 240px;
+  background: rgba(8, 12, 13, 0.98); border: 1px solid var(--ops-line-2);
+  border-radius: var(--ops-r); padding: 6px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  display: none; flex-direction: column; gap: 2px;
 }
-.ops-app .mode:hover { background: var(--ops-panel); color: var(--ops-ink); }
-.ops-app .mode.on { background: var(--ops-panel-2); border-color: var(--ops-line-2); color: var(--ops-ink-bright); }
-.ops-app .mode.on::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px; background: var(--ops-green); border-radius: 2px; }
-.ops-app .mode.soon { opacity: 0.45; cursor: default; }
-.ops-app .mode.soon:hover { background: transparent; color: var(--ops-ink-dim); }
-.ops-app .mode .glyph { width: 22px; height: 22px; color: currentColor; opacity: 0.9; }
-.ops-app .mode.on .glyph { color: var(--ops-green); }
-.ops-app .mode .t { font-family: var(--ops-sans); font-size: 13px; line-height: 1.1; display: block; }
-.ops-app .mode .d { font-size: 10px; color: var(--ops-ink-faint); margin-top: 2px; line-height: 1.2; display: block; }
-.ops-app .mode.on .d { color: var(--ops-ink-dim); }
-.ops-app .rail .spacer { flex: 1; }
-.ops-app .rail .note { font-size: 10px; color: var(--ops-ink-faint); line-height: 1.5; padding: 8px; border-top: 1px solid var(--ops-line); }
+.ops-app .lens.open .lens-menu { display: flex; }
+.ops-app .lens-item {
+  text-align: left; cursor: pointer; border: 1px solid transparent; border-radius: var(--ops-r-sm);
+  background: transparent; color: var(--ops-ink-dim); padding: 9px 10px; display: grid;
+  grid-template-columns: 18px 1fr; gap: 10px; align-items: center; transition: all .13s ease; width: 100%;
+}
+.ops-app .lens-item:hover { background: var(--ops-panel-2); color: var(--ops-ink); }
+.ops-app .lens-item.on { background: var(--ops-panel-2); color: var(--ops-ink-bright); }
+.ops-app .lens-item.soon { opacity: 0.45; cursor: default; }
+.ops-app .lens-item.soon:hover { background: transparent; color: var(--ops-ink-dim); }
+.ops-app .lens-item .glyph { width: 18px; height: 18px; }
+.ops-app .lens-item.on .glyph { color: var(--ops-green); }
+.ops-app .lens-item .t { font-family: var(--ops-sans); font-size: 12.5px; line-height: 1.1; display: block; }
+.ops-app .lens-item .d { font-size: 10px; color: var(--ops-ink-faint); margin-top: 2px; line-height: 1.2; display: block; }
 
 /* ---- Stage ---- */
 .ops-app .stage { grid-area: stage; position: relative; overflow: hidden; }
-.ops-app .stage-head { position: absolute; top: 16px; left: 20px; z-index: 6; pointer-events: none; }
-.ops-app .stage-head .t { font-family: var(--ops-sans); font-size: 14px; color: var(--ops-ink-bright); letter-spacing: 0.02em; }
-.ops-app .stage-head .d { font-size: 10.5px; color: var(--ops-ink-dim); margin-top: 3px; max-width: 360px; line-height: 1.4; }
 .ops-app .viz-root { position: absolute; inset: 0; }
 .ops-app .viz-root canvas { position: absolute; inset: 0; }
 
