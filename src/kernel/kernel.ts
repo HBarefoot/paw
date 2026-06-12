@@ -456,6 +456,29 @@ export class Kernel {
 
 		const loaded = await discoverPlugins(pluginsDir, createLogger("loader"));
 
+		// Skill Creator: a meta-skill that scaffolds NEW plugins into pluginsDir.
+		// Always available (on-demand skill); generated code is inert until the
+		// next boot, so it never hot-loads. Targets the same dir plugins load from.
+		{
+			const { createSkillCreatorTools } = await import(
+				"../tools/skill-creator.js"
+			);
+			const { AuditLogger } = await import("../security/audit-log.js");
+			this.sandbox.registerManifest({
+				name: "skill-creator",
+				version: "1.0.0",
+				description: "Scaffold new paw plugins/skills",
+				permissions: ["skill-creator"],
+			});
+			const scAudit = new AuditLogger(this.db);
+			this.toolRegistry.register(
+				createSkillCreatorTools({
+					pluginsDir,
+					audit: (action, details) => scAudit.log(action, null, details),
+				}),
+			);
+		}
+
 		for (const { plugin, manifest } of loaded) {
 			this.sandbox.registerManifest(manifest);
 			const ctx = this.createPluginContext(plugin.name);
