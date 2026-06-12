@@ -97,7 +97,7 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 				{raw(`<div class="canvas-panel" id="canvas-panel">
           <div class="canvas-toolbar">
             <button onclick="toggleExplorer()" title="Toggle workspace explorer" id="explorer-toggle-btn">${explorerIconSvg}</button>
-            <span class="current-file" id="current-file">index.html</span>
+            <span class="current-file" id="current-file">Home</span>
             <button onclick="canvasTemplateMenu(this)" title="Templates" id="canvas-template-btn">${templateIconSvg}</button>
             <button onclick="canvasExportMenu(this)" title="Export / Share" id="canvas-export-btn">${exportIconSvg}</button>
             <button onclick="canvasRefresh()" title="Refresh preview">${refreshIconSvg}</button>
@@ -1386,12 +1386,15 @@ export function getChatScript(): string {
   // (already-finished) turn's chunks. Replaying them rebuilds a stale streaming
   // bubble that can stick on "writing…". We skip the finished backlog on poll #1.
   var canvasFirstPoll = true;
-  var canvasCurrentFileName = "index.html";
+  var canvasCurrentFileName = "__home__";
   var canvasThinkingEl = null;
   var attachBtn = document.getElementById("attach-btn");
   var canvasDividerEl = null;
 
   // Multi-tab state
+  // Reserved path for the pinned "Home" tab: the live portrait, served by
+  // /api/canvas/preview/__home__ regardless of any index.html the agent writes.
+  var CANVAS_HOME_PATH = "__home__";
   var canvasTabs = [];
   var canvasTabIdSeq = 0;
 
@@ -1402,7 +1405,7 @@ export function getChatScript(): string {
     try {
       for (var i = 0; i < canvasTabs.length; i++) {
         var t = canvasTabs[i];
-        if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
         // tool_start/end drive pills + feed; thinking/roundtrip_start are
         // keep-alive "work" heartbeats so the face stays working between tools.
         var phase = chunk.type === "tool_start" ? "start"
@@ -1429,7 +1432,7 @@ export function getChatScript(): string {
     try {
       for (var i = 0; i < canvasTabs.length; i++) {
         var t = canvasTabs[i];
-        if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
         t.iframeEl.contentWindow.postMessage({ type: "paw:tool", phase: "done" }, "*");
       }
     } catch (e) {}
@@ -1442,7 +1445,7 @@ export function getChatScript(): string {
     try {
       for (var i = 0; i < canvasTabs.length; i++) {
         var t = canvasTabs[i];
-        if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
         t.iframeEl.contentWindow.postMessage({ type: "paw:ambient", unread: unread, pendingApprovals: pendingApprovals }, "*");
       }
     } catch (e) {}
@@ -1452,7 +1455,7 @@ export function getChatScript(): string {
     try {
       for (var i = 0; i < canvasTabs.length; i++) {
         var t = canvasTabs[i];
-        if (t.path !== "index.html" || !t.iframeEl || !t.iframeEl.contentWindow) continue;
+        if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
         t.iframeEl.contentWindow.postMessage({ type: "paw:notify", id: n.id, title: n.title, level: n.level, url: n.url || "" }, "*");
       }
     } catch (e) {}
@@ -1491,7 +1494,8 @@ export function getChatScript(): string {
     }
   });
 
-  function createCanvasTab(path) {
+  function createCanvasTab(path, opts) {
+    opts = opts || {};
     var id = ++canvasTabIdSeq;
     var iframe = document.createElement("iframe");
     iframe.src = "/api/canvas/preview/" + encodeURIComponent(path);
@@ -1502,8 +1506,9 @@ export function getChatScript(): string {
     // + no cookies, which the public form receiver accepts.
     iframe.sandbox = "allow-scripts allow-forms";
     canvasTabContent.appendChild(iframe);
-    var tab = { id: id, path: path, iframeEl: iframe };
-    canvasTabs.push(tab);
+    var tab = { id: id, path: path, iframeEl: iframe, pinned: !!opts.pinned, label: opts.label || null };
+    // Pinned tabs (the Home portrait) always sit first.
+    if (tab.pinned) canvasTabs.unshift(tab); else canvasTabs.push(tab);
     renderCanvasTabs();
     activateCanvasTab(id);
     return tab;
@@ -1515,7 +1520,7 @@ export function getChatScript(): string {
       canvasTabs[i].iframeEl.classList.toggle("hidden", !isActive);
       if (isActive) {
         canvasCurrentFileName = canvasTabs[i].path;
-        canvasCurrentFile.textContent = canvasTabs[i].path;
+        canvasCurrentFile.textContent = canvasTabs[i].label || canvasTabs[i].path;
       }
     }
     renderCanvasTabs();
@@ -1527,6 +1532,8 @@ export function getChatScript(): string {
       if (canvasTabs[i].id === id) { idx = i; break; }
     }
     if (idx === -1) return;
+    // Never close the pinned Home tab.
+    if (canvasTabs[idx].pinned) return;
     // Don't allow closing the last tab
     if (canvasTabs.length <= 1) return;
     var tab = canvasTabs[idx];
@@ -1545,11 +1552,13 @@ export function getChatScript(): string {
     for (var i = 0; i < canvasTabs.length; i++) {
       var t = canvasTabs[i];
       var active = t.path === canvasCurrentFileName ? " active" : "";
-      var closeBtn = canvasTabs.length > 1
+      // Pinned tabs (Home) are never closable.
+      var closeBtn = (!t.pinned && canvasTabs.length > 1)
         ? ' <span class="tab-close" data-tab-id="' + t.id + '">\\u00d7</span>'
         : "";
-      html += '<div class="canvas-tab' + active + '" data-tab-id="' + t.id + '">'
-        + esc(t.path) + closeBtn + '</div>';
+      var pinClass = t.pinned ? " canvas-tab-pinned" : "";
+      html += '<div class="canvas-tab' + active + pinClass + '" data-tab-id="' + t.id + '">'
+        + esc(t.label || t.path) + closeBtn + '</div>';
     }
     html += '<div class="canvas-tab canvas-tab-add" id="canvas-tab-add" title="Open file">+</div>';
     canvasTabsBar.innerHTML = html;
@@ -1645,8 +1654,9 @@ export function getChatScript(): string {
     return createCanvasTab(path);
   }
 
-  // Initialize default tab
-  createCanvasTab("index.html");
+  // Initialize the pinned Home tab (the live portrait). Real files (incl. the
+  // agent's index.html) open as their own tabs — see the file-changed handler.
+  createCanvasTab(CANVAS_HOME_PATH, { pinned: true, label: "Home" });
 
   // Draggable divider
   function insertDivider() {
@@ -2057,12 +2067,20 @@ export function getChatScript(): string {
           } else if (evt.event === "file-changed") {
             hadFileChange = true;
             var changed = evt.data && evt.data.path ? evt.data.path : "";
-            // Only refresh the viewed file when IT changes. The index.html
-            // portrait must stay stable while the agent works (it reacts live
-            // via postMessage); reloading it on every file change wiped those
-            // reactions. index.html still refreshes if index.html itself changes.
+            // Only refresh the viewed file when IT changes. The Home portrait
+            // must stay stable while the agent works (it reacts live via
+            // postMessage); reloading it on every file change wiped those
+            // reactions.
             if (changed === canvasCurrentFileName) {
               debouncedCanvasRefresh();
+            } else if (changed === "index.html") {
+              // Auto-open the agent's main page once so the build "shows up
+              // right here" next to the pinned Home tab (only if not already open).
+              var alreadyOpen = false;
+              for (var k = 0; k < canvasTabs.length; k++) {
+                if (canvasTabs[k].path === "index.html") { alreadyOpen = true; break; }
+              }
+              if (!alreadyOpen) createCanvasTab("index.html");
             }
           }
         }
@@ -2157,7 +2175,7 @@ export function getChatScript(): string {
     // via postMessage) — reloading it just wipes its reactions/feed and
     // re-renders the same capabilities. Skip it so the refresh button doesn't
     // reset the live face. (Counts refresh when the canvas is reopened.)
-    if (canvasCurrentFileName === "index.html") return;
+    if (canvasCurrentFileName === CANVAS_HOME_PATH) return;
     // Refresh the active tab's iframe with a cache-busting query so the
     // preview re-fetches. We intentionally avoid the old "about:blank then
     // restore src" round-trip: in Safari, navigating a sandboxed (null-origin)
@@ -2186,7 +2204,7 @@ export function getChatScript(): string {
         for (var i = 0; i < canvasTabs.length; i++) canvasTabs[i].iframeEl.remove();
         canvasTabs = [];
         canvasTabIdSeq = 0;
-        createCanvasTab("index.html");
+        createCanvasTab(CANVAS_HOME_PATH, { pinned: true, label: "Home" });
         appendMsg("assistant", "Canvas cleared.");
       })
       .catch(function(err) {
@@ -2514,6 +2532,8 @@ export function getChatScript(): string {
       for (var i = 0; i < canvasTabs.length; i++) canvasTabs[i].iframeEl.remove();
       canvasTabs = [];
       canvasTabIdSeq = 0;
+      // Keep the pinned Home portrait, then show the template's index.html.
+      createCanvasTab(CANVAS_HOME_PATH, { pinned: true, label: "Home" });
       createCanvasTab("index.html");
       refreshCanvasFiles();
       appendMsg("assistant", "Applied template. Files: " + data.files.join(", "));
@@ -2808,12 +2828,20 @@ export function getChatScript(): string {
             hadFileChange = true;
             var changed = evt.data && evt.data.path ? evt.data.path : "";
             if (changed) changedPaths.push(changed);
-            // Only refresh the viewed file when IT changes. The index.html
-            // portrait must stay stable while the agent works (it reacts live
-            // via postMessage); reloading it on every file change wiped those
-            // reactions. index.html still refreshes if index.html itself changes.
+            // Only refresh the viewed file when IT changes. The Home portrait
+            // must stay stable while the agent works (it reacts live via
+            // postMessage); reloading it on every file change wiped those
+            // reactions.
             if (changed === canvasCurrentFileName) {
               debouncedCanvasRefresh();
+            } else if (changed === "index.html") {
+              // Auto-open the agent's main page once so the build "shows up
+              // right here" next to the pinned Home tab (only if not already open).
+              var alreadyOpen = false;
+              for (var k = 0; k < canvasTabs.length; k++) {
+                if (canvasTabs[k].path === "index.html") { alreadyOpen = true; break; }
+              }
+              if (!alreadyOpen) createCanvasTab("index.html");
             }
           }
         }
