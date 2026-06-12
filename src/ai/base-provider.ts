@@ -38,6 +38,9 @@ export interface StreamChunk {
 	/** Skill/group key the tool belongs to (e.g. "web-pilot", "mcp:n8n"), set
 	 * server-side so the canvas portrait can light up the matching pill. */
 	skillKey?: string;
+	/** Acting sub-agent name (the stripped "[agentName] " prefix), set
+	 * server-side so the companion can route a tether beam to that agent. */
+	agentName?: string;
 	durationMs?: number;
 	roundtrip?: number;
 	error?: string;

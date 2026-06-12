@@ -1,0 +1,18 @@
+/* Skill Dock companion — fills its iframe and never scrolls. */
+html,
+body {
+	margin: 0;
+	height: 100%;
+	overflow: hidden;
+	background: #0a0a0f;
+}
+#companion-root {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+}
+.companion-canvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
