@@ -273,7 +273,11 @@ function skillKeyForToolRow(
 		/* ignore */
 	}
 	if (row.plugin === "strapi") return "strapi";
-	if (row.plugin) return `mcp:${row.plugin}`;
+	// MCP tools already store plugin as "mcp:<server>" (client-manager.ts), which
+	// is exactly the scene-node key — don't double-prefix it to "mcp:mcp:<server>"
+	// (that misses the lane and dumps the op into core).
+	if (row.plugin)
+		return row.plugin.startsWith("mcp:") ? row.plugin : `mcp:${row.plugin}`;
 	return null;
 }
 

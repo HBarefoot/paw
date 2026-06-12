@@ -113,7 +113,7 @@
 
 	// --- sliding-window aggregates (ported verbatim from the design sim) -------
 	function windowStats(toolId, win) {
-		win = win || 5000;
+		win = win || 20000;
 		var from = API.simNow - win;
 		var total = 0,
 			errors = 0,
@@ -145,7 +145,7 @@
 	}
 
 	function totals(win) {
-		win = win || 5000;
+		win = win || 20000;
 		var per = topology.map(function (t) {
 			var s = windowStats(t.id, win);
 			s.tool = t;

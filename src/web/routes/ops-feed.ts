@@ -123,20 +123,28 @@ function parseTs(s: string, fallback: number): number {
 	return Number.isFinite(t) ? t : fallback;
 }
 
-/** Build the topology node list: synthetic `core` first, then real nodes with
- * deterministic family colors. `core` carries reasoning + any unmapped ops. */
+/** Build the topology node list: a `core` node first (reasoning + any unmapped
+ * ops), then real nodes with deterministic family colors. Deduped by id — paw
+ * has a real `core` skill, so the synthetic core is only added when `nodes`
+ * doesn't already provide one, and any duplicate keys are dropped. */
 function buildTopology(
 	nodes: Array<{ key: string; label: string; kind: string }>,
 ): OpsTopologyNode[] {
-	const out: OpsTopologyNode[] = [
-		{ id: "core", label: "Core", kind: "reason", color: "#3fe08f" },
-	];
+	const out: OpsTopologyNode[] = [];
+	const seen = new Set<string>();
+	if (!nodes.some((n) => n.key === "core")) {
+		out.push({ id: "core", label: "Core", kind: "reason", color: "#3fe08f" });
+		seen.add("core");
+	}
 	nodes.forEach((n, i) => {
+		if (seen.has(n.key)) return;
+		seen.add(n.key);
 		out.push({
 			id: n.key,
 			label: n.label,
 			kind: n.kind,
-			color: TOOL_PALETTE[i % TOOL_PALETTE.length],
+			color:
+				n.key === "core" ? "#3fe08f" : TOOL_PALETTE[i % TOOL_PALETTE.length],
 		});
 	});
 	return out;

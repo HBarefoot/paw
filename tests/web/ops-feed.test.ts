@@ -108,6 +108,23 @@ describe("buildOpsFeed", () => {
 		expect(f.topology[1].color).not.toBe("#3fe08f"); // family color, not core green
 	});
 
+	test("topology dedupes a real 'core' node (no duplicate Core lane)", () => {
+		// paw has a real `core` skill — it must not duplicate the synthetic one.
+		const f = buildOpsFeed(
+			deps({
+				nodes: [
+					{ key: "core", label: "Core", kind: "skill" },
+					{ key: "files", label: "Files", kind: "skill" },
+				],
+			}),
+			0,
+		);
+		const ids = f.topology.map((t) => t.id);
+		expect(ids).toEqual(["core", "files"]); // exactly one core
+		expect(ids.filter((id) => id === "core")).toHaveLength(1);
+		expect(f.topology.find((t) => t.id === "core")?.color).toBe("#3fe08f");
+	});
+
 	test("backfill (since=0) returns ops within the window, ascending", () => {
 		const f = buildOpsFeed(deps(), 0);
 		const ops = f.ops;
