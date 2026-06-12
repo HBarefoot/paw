@@ -6,11 +6,13 @@ import {
 	createBrand,
 	deleteBrand,
 	getActiveBrand,
+	getBrandUi,
 	listBrands,
 	renderBrandTokensCss,
 	slugify,
 	updateBrand,
 } from "../../src/store/brands.js";
+import { ChatPage } from "../../src/web/views/chat.js";
 
 function freshDb(): Database {
 	const db = new Database(":memory:");
@@ -134,6 +136,46 @@ describe("brand store", () => {
 
 	test("compileBrandBrief returns undefined for null brand", () => {
 		expect(compileBrandBrief(null)).toBeUndefined();
+	});
+});
+
+// Regression: chatLabel must survive the DB round-trip. rowToBrand() rebuilds
+// `data` from a hand-written field whitelist; chatLabel was written by
+// create/update but omitted on read-back, so the feature silently rendered
+// "Chat" no matter what the brand stored. The original PR only tested the
+// render path with an in-memory brand, never the row round-trip.
+describe("brand chatLabel — DB round-trip (read-back)", () => {
+	let db: Database;
+	beforeEach(() => {
+		db = freshDb();
+	});
+
+	test("a persisted chatLabel survives rowToBrand and reaches the chat title", () => {
+		const b = createBrand(db, "Acme", { chatLabel: "Command AI" });
+		activateBrand(db, b.id);
+
+		// read back through the real store path (getActiveBrand → rowToBrand)
+		const read = getActiveBrand(db);
+		expect(read?.data.chatLabel).toBe("Command AI");
+		expect(getBrandUi(read)?.chatLabel).toBe("Command AI");
+
+		const html = String(
+			ChatPage({ sessionId: "s1", chatLabel: getBrandUi(read)?.chatLabel }),
+		);
+		expect(html).toContain("<title>Command AI - Paw</title>");
+	});
+
+	test("a brand without chatLabel still defaults to Chat", () => {
+		const b = createBrand(db, "Plain", { tagline: "no label" });
+		activateBrand(db, b.id);
+
+		const read = getActiveBrand(db);
+		expect(getBrandUi(read)?.chatLabel).toBeUndefined();
+
+		const html = String(
+			ChatPage({ sessionId: "s1", chatLabel: getBrandUi(read)?.chatLabel }),
+		);
+		expect(html).toContain("<title>Chat - Paw</title>");
 	});
 });
 

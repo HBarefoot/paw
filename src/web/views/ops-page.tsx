@@ -10,6 +10,10 @@ interface OpsPageProps {
 	model: string;
 	/** Process uptime in ms at render (the top-bar "uptime" stat baseline). */
 	uptimeMs: number;
+	/** Route this page is mounted at, for the sidebar nav active-state. Defaults
+	 *  to "/" (the stock mount); a white-label fork can mount Agent Ops elsewhere
+	 *  (e.g. "/ops") and pass its own path so the nav highlights correctly. */
+	currentPath?: string;
 }
 
 const COLOR_RE = /^#[0-9a-fA-F]{3,8}$|^rgba?\([\d.,\s%]+\)$/;
@@ -24,7 +28,12 @@ const COLOR_RE = /^#[0-9a-fA-F]{3,8}$|^rgba?\([\d.,\s%]+\)$/;
  * static modules; the only inline script is the bootstrap (cook-parse guarded —
  * no regex / no backslash, per the #37 lesson).
  */
-export const OpsPage: FC<OpsPageProps> = ({ accent, model, uptimeMs }) => {
+export const OpsPage: FC<OpsPageProps> = ({
+	accent,
+	model,
+	uptimeMs,
+	currentPath = "/",
+}) => {
 	const safeAccent = COLOR_RE.test(accent.trim()) ? accent.trim() : "#3fe08f";
 	const cfg = JSON.stringify({
 		model: model || "",
@@ -32,7 +41,7 @@ export const OpsPage: FC<OpsPageProps> = ({ accent, model, uptimeMs }) => {
 		accent: safeAccent,
 	}).replace(/</g, "\\u003c");
 	return (
-		<Layout title="Agent Ops" currentPath="/">
+		<Layout title="Agent Ops" currentPath={currentPath}>
 			{raw(`<link rel="stylesheet" href="/ops/static/styles.css">`)}
 			<div id="ops-root" class="ops-app" style={`--ops-green:${safeAccent}`} />
 			{raw(`<script src="/ops/static/ui.js"></script>`)}
