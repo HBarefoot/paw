@@ -13,6 +13,19 @@ import {
 	SupabaseTimeoutError,
 } from "./types.js";
 
+/** Minimal shape of the PostgREST OpenAPI/swagger doc we read for introspection. */
+interface OpenApiProp {
+	type?: string;
+	format?: string;
+}
+interface OpenApiSchema {
+	properties?: Record<string, OpenApiProp>;
+}
+interface OpenApiDoc {
+	definitions?: Record<string, OpenApiSchema>;
+	components?: { schemas?: Record<string, OpenApiSchema> };
+}
+
 /** PostgREST identifiers (table / function / column names). Defense-in-depth. */
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -97,6 +110,41 @@ export class SupabaseClient {
 		assertIdentifier("function", fn);
 		const url = `${this.baseUrl}/rpc/${fn}`;
 		return this.request<unknown>(url, "POST", args);
+	}
+
+	/**
+	 * Introspect the exposed schema via PostgREST's OpenAPI document at the REST
+	 * root (`<url>/rest/v1/`). Returns the tables/views on the exposed (public)
+	 * schema with their columns + types — so the agent can discover what exists
+	 * instead of guessing names into 404s. Read-only; queries the root, so it
+	 * never touches the table-identifier guard, and `information_schema` stays
+	 * unreachable (PostgREST doesn't expose it and dotted names are rejected).
+	 */
+	async listTables(): Promise<{
+		tables: Array<{
+			name: string;
+			columns: Array<{ name: string; type: string }>;
+		}>;
+	}> {
+		const doc = await this.request<OpenApiDoc>(`${this.baseUrl}/`, "GET");
+		// PostgREST v2 swagger uses `definitions`; OpenAPI 3 uses
+		// `components.schemas`. Each key is an exposed table/view; RPC functions
+		// live under `paths` (/rpc/*), not here.
+		const defs: Record<string, OpenApiSchema> = {
+			...(doc?.definitions ?? {}),
+			...(doc?.components?.schemas ?? {}),
+		};
+		const tables = Object.entries(defs).map(([name, def]) => {
+			const props = def?.properties ?? {};
+			const columns = Object.entries(props).map(([col, p]) => ({
+				name: col,
+				// `format` carries the Postgres type (e.g. uuid, timestamp with time
+				// zone); `type` is the coarser JSON type — prefer format.
+				type: String(p?.format ?? p?.type ?? "unknown"),
+			}));
+			return { name, columns };
+		});
+		return { tables };
 	}
 
 	private async request<T>(
