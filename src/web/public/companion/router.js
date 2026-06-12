@@ -1,85 +1,91 @@
 /**
- * CompanionRouter — orthogonal, n8n-style connector routing.
+ * CompanionRouter — orthogonal, n8n-style connector routing (SVG path strings).
  *
- * Pure geometry: straight horizontal/vertical runs, dominant-axis routing, and
- * near-aligned pairs collapse to a single straight line. Rendering adds ~12px
- * rounded elbows via canvas arcTo. Served as a real module (no template-literal
- * cook trap), so plain modern JS is fine.
+ * Verbatim port of the design prototype's `orthPath`: straight H/V runs with
+ * ~12px rounded (quadratic) elbows, dominant-axis routing, and near-aligned
+ * pairs collapse to a single straight line. Returns an SVG `d` string so the
+ * companion can render real <path> tethers with <animateMotion> particles
+ * flowing along the elbows (no canvas approximation).
  */
 (() => {
-	/**
-	 * Route a connector from `a` to `b`. Returns an array of {x,y} waypoints.
-	 * - within `alignTol` on an axis → straight 2-point line (collapse).
-	 * - else route along the dominant axis first with a single mid bend.
-	 */
-	function route(a, b, opts) {
-		opts = opts || {};
-		const align = opts.alignTol == null ? 6 : opts.alignTol;
-		const dx = b.x - a.x;
-		const dy = b.y - a.y;
-		if (Math.abs(dy) <= align || Math.abs(dx) <= align) {
-			return [
-				{ x: a.x, y: a.y },
-				{ x: b.x, y: b.y },
-			];
-		}
+	const ELBOW_R = 12;
+
+	/** Orthogonal path from (sx,sy) to (ex,ey). Returns an SVG `d` string or null. */
+	function orthPath(sx, sy, ex, ey) {
+		const dx = ex - sx;
+		const dy = ey - sy;
+		if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return null;
 		if (Math.abs(dx) >= Math.abs(dy)) {
-			// Horizontal dominant: H → V → H through a mid x.
-			const mx = a.x + dx / 2;
+			// horizontal → vertical → horizontal
+			if (Math.abs(dy) < 8) return `M ${sx} ${sy} L ${ex} ${ey}`;
+			const midX = (sx + ex) / 2;
+			const dx1 = Math.sign(midX - sx) || 1;
+			const dyv = Math.sign(dy) || 1;
+			const dx2 = Math.sign(ex - midX) || 1;
+			const r = Math.min(
+				ELBOW_R,
+				Math.abs(midX - sx),
+				Math.abs(ex - midX),
+				Math.abs(dy) / 2,
+			);
 			return [
-				{ x: a.x, y: a.y },
-				{ x: mx, y: a.y },
-				{ x: mx, y: b.y },
-				{ x: b.x, y: b.y },
-			];
+				"M", sx, sy,
+				"L", midX - dx1 * r, sy,
+				"Q", midX, sy, midX, sy + dyv * r,
+				"L", midX, ey - dyv * r,
+				"Q", midX, ey, midX + dx2 * r, ey,
+				"L", ex, ey,
+			].join(" ");
 		}
-		// Vertical dominant: V → H → V through a mid y.
-		const my = a.y + dy / 2;
+		// vertical → horizontal → vertical
+		if (Math.abs(dx) < 8) return `M ${sx} ${sy} L ${ex} ${ey}`;
+		const midY = (sy + ey) / 2;
+		const dy1 = Math.sign(midY - sy) || 1;
+		const dxh = Math.sign(dx) || 1;
+		const dy2 = Math.sign(ey - midY) || 1;
+		const r = Math.min(
+			ELBOW_R,
+			Math.abs(midY - sy),
+			Math.abs(ey - midY),
+			Math.abs(dx) / 2,
+		);
 		return [
-			{ x: a.x, y: a.y },
-			{ x: a.x, y: my },
-			{ x: b.x, y: my },
-			{ x: b.x, y: b.y },
-		];
+			"M", sx, sy,
+			"L", sx, midY - dy1 * r,
+			"Q", sx, midY, sx + dxh * r, midY,
+			"L", ex - dxh * r, midY,
+			"Q", ex, midY, ex, midY + dy2 * r,
+			"L", ex, ey,
+		].join(" ");
 	}
 
-	/** Stroke a waypoint polyline with rounded elbows onto a 2D context. */
-	function stroke(ctx, pts, radius) {
-		if (!pts || pts.length < 2) return;
-		const r = radius == null ? 12 : radius;
-		ctx.beginPath();
-		ctx.moveTo(pts[0].x, pts[0].y);
-		for (let i = 1; i < pts.length - 1; i++) {
-			ctx.arcTo(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, r);
+	/**
+	 * Anchor a beam from a source rect's edge to a target circle's edge along the
+	 * dominant axis (matches the prototype's exit/landing offsets). `src` is
+	 * {cx,cy,w,h}; `tgt` is {cx,cy,rad}. `pad`/`tpad` are the edge gaps.
+	 */
+	function anchor(src, tgt, pad, tpad) {
+		pad = pad == null ? 5 : pad;
+		tpad = tpad == null ? 10 : tpad;
+		const dx0 = tgt.cx - src.cx;
+		const dy0 = tgt.cy - src.cy;
+		if (Math.abs(dx0) >= Math.abs(dy0)) {
+			const dir = Math.sign(dx0) || 1;
+			return {
+				sx: src.cx + dir * (src.w / 2 + pad),
+				sy: src.cy,
+				ex: tgt.cx - dir * (tgt.rad + tpad),
+				ey: tgt.cy,
+			};
 		}
-		ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
-		ctx.stroke();
+		const dir = Math.sign(dy0) || 1;
+		return {
+			sx: src.cx,
+			sy: src.cy + dir * (src.h / 2 + pad),
+			ex: tgt.cx,
+			ey: tgt.cy - dir * (tgt.rad + tpad),
+		};
 	}
 
-	/** Total length of a polyline (for dash/particle animation). */
-	function length(pts) {
-		let total = 0;
-		for (let i = 1; i < pts.length; i++) {
-			total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-		}
-		return total;
-	}
-
-	/** Point at distance `d` along the polyline (for flowing particles). */
-	function pointAt(pts, d) {
-		for (let i = 1; i < pts.length; i++) {
-			const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-			if (d <= seg || i === pts.length - 1) {
-				const t = seg === 0 ? 0 : d / seg;
-				return {
-					x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
-					y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t,
-				};
-			}
-			d -= seg;
-		}
-		return pts[pts.length - 1];
-	}
-
-	window.CompanionRouter = { route, stroke, length, pointAt };
+	window.CompanionRouter = { orthPath, anchor, ELBOW_R };
 })();
