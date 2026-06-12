@@ -54,6 +54,7 @@
 		// Expression inputs (real signals → the pure CompanionExpression machine).
 		this.machine = freshMachine(); // transient holds: listen/success/wince
 		this.waiting = false; // a GitHub action is pending human approval
+		this.unreadByKind = {}; // {skillKey: unreadCount} → badges the skill pill
 		this.agentFailedUntil = 0; // latched "worried" window after a sub-agent fails
 		this.lastActiveAt = 0; // for idle → sleepy decay
 		this._errAt = 0; // last tool-error time…
@@ -88,6 +89,11 @@
 	/** Ambient signal: GitHub actions awaiting human approval → "waiting". */
 	CompanionEngine.prototype.setWaiting = function (pending) {
 		this.waiting = pending > 0;
+	};
+
+	/** Per-kind unread notification counts → badges on the matching skill pills. */
+	CompanionEngine.prototype.setNotifications = function (byKind) {
+		this.unreadByKind = byKind && typeof byKind === "object" ? byKind : {};
 	};
 
 	CompanionEngine.prototype.setSkills = function (list) {
@@ -348,6 +354,7 @@
 			waiting: snapshot.waiting,
 			agentFailed: snapshot.agentFailed,
 			expression,
+			unreadByKind: this.unreadByKind,
 			mainPops: this.mainPops,
 			now,
 		};

@@ -198,7 +198,10 @@
 			if (!d) return;
 			if (d.type === "paw:tool") engine.ingestTool(d);
 			else if (d.type === "paw:input") engine.ingestInput(d.state);
-			else if (d.type === "paw:ambient") engine.setWaiting(d.pendingApprovals || 0);
+			else if (d.type === "paw:ambient") {
+				engine.setWaiting(d.pendingApprovals || 0);
+				engine.setNotifications(d.unreadByKind || {});
+			}
 			else if (d.type === "paw:speak") onSpeak(d.phase);
 		});
 
@@ -273,6 +276,27 @@
 				} else {
 					p.classList.remove("active");
 					p.removeAttribute("data-tether");
+				}
+			}
+		}
+
+		// Badge a skill pill when there are unread notifications of its kind
+		// (notification.kind === the skill key, e.g. "github", "slack").
+		function renderBadges(st) {
+			const byKind = st.unreadByKind || {};
+			for (const [key, p] of pillByKey) {
+				const count = byKind[key] || 0;
+				if (count > 0) {
+					if (!p._badge) {
+						p._badge = el("span", "pill-badge");
+						p.appendChild(p._badge);
+					}
+					p._badge.textContent = count > 99 ? "99+" : String(count);
+					p.classList.add("has-alert");
+				} else if (p._badge) {
+					if (p._badge.parentNode) p._badge.parentNode.removeChild(p._badge);
+					p._badge = null;
+					p.classList.remove("has-alert");
 				}
 			}
 		}
@@ -597,6 +621,7 @@
 			}
 			renderAgents(st);
 			renderActive(st);
+			renderBadges(st);
 			renderOps(st);
 			renderAvatar(st);
 			applyPhysics(st);
