@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { createSecurityHeaders } from "../../src/web/middleware/security-headers.js";
 
 const ROOT = new URL("../../src/web/public/companion/", import.meta.url);
 const read = (file: string) => readFileSync(new URL(file, ROOT), "utf8");
@@ -210,6 +211,32 @@ describe("companion static modules", () => {
 		const after = e.getState(t0 + 30);
 		expect(after.active.size).toBe(0);
 		expect(after.beams.length).toBe(0);
+	});
+
+	test("/companion is framable (SAMEORIGIN, not the default DENY)", async () => {
+		const mw = createSecurityHeaders(false, {});
+		async function headersFor(path: string) {
+			const headers: Record<string, string> = {};
+			const c = {
+				req: { path },
+				header: (k: string, v: string) => {
+					headers[k] = v;
+				},
+			};
+			// The /companion + preview branches set headers directly then next();
+			// give a no-op next so the middleware resolves.
+			await mw(c as never, (async () => {}) as never);
+			return headers;
+		}
+		const companion = await headersFor("/companion");
+		// Must be framable by the same-origin chat page (the bug: it was DENY).
+		expect(companion["X-Frame-Options"]).toBe("SAMEORIGIN");
+		expect(companion["Content-Security-Policy"]).toContain(
+			"frame-ancestors 'self'",
+		);
+		expect(companion["Content-Security-Policy"]).toContain(
+			"connect-src 'self'",
+		);
 	});
 
 	test("the /companion inline bootstrap cooks and parses (template-trap guard)", () => {
