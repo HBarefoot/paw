@@ -20,15 +20,20 @@ bun run dev
 
 ## Features
 
-- **Multi-provider AI** — Claude, OpenAI, Ollama, Gemini. Switch providers via config.
+- **Multi-provider AI** — Claude, OpenAI, Ollama, Gemini. Switch providers via config. Optional vision routing sends image-bearing turns to a configured vision model.
 - **Memory system** — Hybrid vector + full-text search. Auto-extracts facts from conversations. Persists across sessions.
 - **Skills ecosystem** — Tools grouped into skills that load on demand, reducing token usage. Manage via web UI at `/skills`.
-- **Plugin architecture** — Built-in Slack and Web Pilot (Playwright) plugins. Drop-in plugin discovery from `plugins/` directory.
-- **MCP support** — Connect external tool servers via stdio, SSE, or HTTP transport. Manage at `/mcp`.
+- **Plugin architecture** — Built-in Slack and Web Pilot (Playwright) plugins. Drop-in plugin discovery from `plugins/` directory. A `skill_scaffold` tool generates new (inert, review-then-restart) plugins.
+- **Native integrations** — First-class, vault-credentialed integrations that work out of the box: GitHub (App), Strapi, HubSpot, Supabase, WordPress, n8n.
+- **MCP support** — Connect external tool servers via stdio, SSE, or HTTP transport (bearer/header auth, JSON-paste import). Manage at `/mcp`.
 - **Cron scheduler** — Schedule prompts, tool calls, or events on cron expressions.
-- **Live Canvas** — Agent-driven visual workspace. Prompt the AI to build HTML/CSS/JS and see a live preview in a split-pane iframe. Auto-refreshes on changes.
-- **Web UI** — Dashboard, chat, canvas, memory browser, session history, config editor, skill/cron/MCP management.
-- **Security** — Rate limiting, user allowlist/blocklist, pairing code approval, sandboxed tool execution.
+- **Live Canvas** — Agent-driven visual workspace with a live preview iframe; plus authed `apps/<space>/` production-app surfaces with per-space CSP. Toggle canvas mode in `/chat`.
+- **Chat** — Attachments for all file types (PDF text extraction, inline previews) and browser voice (speech-to-text / text-to-speech).
+- **Brand Kit** — A library of brand profiles (one active) that white-labels the agent, canvas output, and the entire console.
+- **Credential vault** — Encrypted, web-managed secrets (AES-256-GCM); resolved server-side and never exposed to the model.
+- **Agent Ops console** — The `/` dashboard: a live operation feed (Stream + Swarm lenses over the real tool stream) with in-flight tracking and session attribution.
+- **Web UI** — Agent Ops dashboard, chat + canvas, memory browser, session history, config editor, brand/vault/GitHub admin, and skill/cron/MCP management.
+- **Security** — Class-tiered rate limiting, user allowlist/blocklist, pairing code approval, optional TOTP 2FA, sandboxed tool execution.
 
 ## Configuration
 
@@ -95,14 +100,17 @@ Start with `PAW_WEB_ENABLED=true` (or set in config). Default: `http://127.0.0.1
 
 | Page | Path | Description |
 |------|------|-------------|
-| Dashboard | `/` | Health, uptime, plugin status, memory/cron stats |
-| Chat | `/chat` | Interactive chat with session persistence |
-| Canvas | `/canvas` | Live visual workspace — AI writes HTML/CSS/JS with live preview |
+| Agent Ops | `/` | Live operation feed (Stream + Swarm lenses), in-flight tracking, session attribution |
+| Chat | `/chat` | Interactive chat with session persistence; toggle canvas mode for the live visual workspace |
 | Memory | `/memory` | Browse, search, and manage stored memories |
 | Sessions | `/sessions` | View past conversation sessions |
 | Skills | `/skills` | View/toggle/edit skill groups and their tools |
 | Cron | `/cron` | Create and manage scheduled jobs |
 | MCP | `/mcp` | Connect and manage MCP tool servers |
+| Brand | `/brand` | Manage brand profiles and activate white-label theming |
+| Vault | `/vault` | Store and rotate encrypted credentials |
+| GitHub | `/github` | GitHub App status, PRs, approvals inbox, activity feed |
+| Submissions | `/submissions` | Durable inbox of canvas form submissions |
 | Config | `/config` | Edit all configuration live |
 
 Optional HTTP basic auth: set `web.password` in config.
@@ -117,7 +125,7 @@ Manage skills at `/skills` in the web UI: toggle always-active, edit description
 
 ## Canvas
 
-The live canvas at `/canvas` is a split-pane workspace where the AI generates HTML/CSS/JS and the result renders in a live preview iframe.
+The live canvas (toggle canvas mode in `/chat`) is a split-pane workspace where the AI generates HTML/CSS/JS and the result renders in a live preview iframe.
 
 - **How it works** — Send a prompt (e.g. "Create a landing page for a car dealer"), the AI uses `canvas_write` to create files in `./data/canvas/`, and the preview auto-refreshes.
 - **Persistence** — Canvas files survive server restarts. Use the trash icon in the toolbar to clear all files and start fresh.
