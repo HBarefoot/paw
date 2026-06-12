@@ -8,6 +8,8 @@ interface ChatPageProps {
 
 const sendIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
 const attachIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>`;
+const micIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+const speakerIconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
 const canvasIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
 const refreshIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
 const trashIconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
@@ -83,12 +85,18 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId }) => {
 						{raw(
 							`<button class="attach-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files">${attachIconSvg}</button>`,
 						)}
+						{raw(
+							`<button class="attach-btn voice-btn" id="mic-btn" style="display:none" onclick="window.pawToggleDictation()" title="Dictate (speech to text)">${micIconSvg}</button>`,
+						)}
 						<textarea
 							id="chat-input"
 							placeholder="Type a message... (Shift+Enter for new line)"
 							autocomplete="off"
 							rows={1}
 						/>
+						{raw(
+							`<button class="attach-btn voice-btn" id="speak-btn" style="display:none" onclick="window.pawToggleSpeak()" title="Speak replies aloud">${speakerIconSvg}</button>`,
+						)}
 						{raw(
 							`<button class="send-btn" id="send-btn" onclick="sendMessage()">${sendIconSvg}</button>`,
 						)}
@@ -271,6 +279,92 @@ export function getChatScript(): string {
     }
     if (handled) e.preventDefault();
   });
+
+  // ===== Voice: browser STT (dictation) + TTS (speak replies) =====
+  // Browser-only (Web Speech API): the mic transcribes to text and the browser
+  // speaks replies, so this works regardless of the AI model. NOTE: this is a
+  // cooked template literal — no regex literals / no literal backticks (a
+  // backtick is built via String.fromCharCode(96)).
+  var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var recognition = null, recognizing = false, sttBase = "";
+  function updateMicUI() {
+    var b = document.getElementById("mic-btn");
+    if (b) b.classList.toggle("recording", recognizing);
+  }
+  window.pawToggleDictation = function() {
+    if (!SpeechRec) return;
+    if (recognizing) { try { recognition.stop(); } catch (e) {} return; }
+    recognition = new SpeechRec();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = navigator.language || "en-US";
+    sttBase = input.value ? input.value + " " : "";
+    recognition.onresult = function(e) {
+      var finalT = "", interimT = "";
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        var r = e.results[i];
+        if (r.isFinal) finalT += r[0].transcript; else interimT += r[0].transcript;
+      }
+      if (finalT) sttBase += finalT + " ";
+      input.value = sttBase + interimT;
+      try { input.dispatchEvent(new Event("input")); } catch (e2) {}
+    };
+    recognition.onerror = function() { recognizing = false; updateMicUI(); };
+    recognition.onend = function() { recognizing = false; updateMicUI(); };
+    try { recognition.start(); recognizing = true; updateMicUI(); } catch (e) {}
+  };
+  function stopDictation() {
+    if (recognition && recognizing) { try { recognition.stop(); } catch (e) {} }
+    recognizing = false; updateMicUI();
+  }
+
+  var speakEnabled = false;
+  try { speakEnabled = localStorage.getItem("paw-speak") === "1"; } catch (e) {}
+  function stripForSpeech(md) {
+    var t = md || "";
+    var bt = String.fromCharCode(96);
+    var fence = bt + bt + bt;
+    // Drop fenced code blocks (don't read code aloud).
+    while (t.indexOf(fence) !== -1) {
+      var a = t.indexOf(fence);
+      var b = t.indexOf(fence, a + 3);
+      if (b === -1) { t = t.slice(0, a); break; }
+      t = t.slice(0, a) + ". " + t.slice(b + 3);
+    }
+    t = t.split(bt).join("");
+    t = t.split("#").join("");
+    t = t.split("*").join("");
+    t = t.split("_").join(" ");
+    return t.trim();
+  }
+  window.pawSpeakReply = function(text) {
+    if (!speakEnabled || !window.speechSynthesis) return;
+    var clean = stripForSpeech(text);
+    if (!clean) return;
+    try {
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(clean);
+      u.rate = 1.0;
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  };
+  window.pawToggleSpeak = function() {
+    speakEnabled = !speakEnabled;
+    try { localStorage.setItem("paw-speak", speakEnabled ? "1" : "0"); } catch (e) {}
+    if (!speakEnabled && window.speechSynthesis) { try { window.speechSynthesis.cancel(); } catch (e) {} }
+    var sb = document.getElementById("speak-btn");
+    if (sb) sb.classList.toggle("active", speakEnabled);
+  };
+  // Reveal the voice buttons only where the browser supports them.
+  (function() {
+    var micBtn = document.getElementById("mic-btn");
+    if (micBtn && SpeechRec) micBtn.style.display = "";
+    var speakBtn = document.getElementById("speak-btn");
+    if (speakBtn && window.speechSynthesis) {
+      speakBtn.style.display = "";
+      speakBtn.classList.toggle("active", speakEnabled);
+    }
+  })();
 
   function renderPendingAttachments() {
     if (pendingImages.length === 0 && pendingFiles.length === 0) {
@@ -853,6 +947,7 @@ export function getChatScript(): string {
         // never emits a closing fence.
         if (fullText) {
           streamBubble.mdDiv.innerHTML = renderMarkdown(fullText, false);
+          if (window.pawSpeakReply) window.pawSpeakReply(fullText);
         }
         // Only show fallback text if no text AND no activity content (errors/tools)
         var hasActivity = streamBubble.activityDiv.children.length > 0;
@@ -2077,6 +2172,7 @@ export function getChatScript(): string {
             canvasWaitingForResponse = false;
             canvasPollInterval = CANVAS_POLL_IDLE;
             appendMsg("assistant", evt.data.content || "(empty response)");
+            if (window.pawSpeakReply) window.pawSpeakReply(evt.data.content || "");
           } else if (evt.event === "error" && evt.data) {
             hideCanvasThinking();
             canvasWaitingForResponse = false;
@@ -2355,6 +2451,7 @@ export function getChatScript(): string {
   // Override sendMessage when canvas mode is on
   var _origSendMessage = window.sendMessage;
   window.sendMessage = function() {
+    stopDictation();
     if (!canvasMode) return _origSendMessage();
 
     var text = input.value.trim();
@@ -2835,6 +2932,7 @@ export function getChatScript(): string {
             canvasWaitingForResponse = false;
             canvasPollInterval = CANVAS_POLL_IDLE;
             appendMsg("assistant", evt.data.content || "(empty response)");
+            if (window.pawSpeakReply) window.pawSpeakReply(evt.data.content || "");
           } else if (evt.event === "error" && evt.data) {
             hideCanvasThinking();
             canvasWaitingForResponse = false;
