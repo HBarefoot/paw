@@ -7,25 +7,14 @@
 (function () {
 	"use strict";
 
+	// Only implemented lenses. The switcher renders a static label when one is
+	// live and a compact segmented toggle when two+ are — no dropdown, no "soon"
+	// placeholders (the other metaphors were never built).
 	var MODES = [
-		{ id: "swarm", t: "Swarm", d: "Agent highway network", glyph: "swarm",
-			comp: function () { return window.VizSwarm; },
-			head: "The orchestrator spawns a swarm of agents — one per mission. Each agent runs traffic-scaled highways to the skills it uses: calls stream outbound, results return in the opposite lane." },
-		{ id: "stream", t: "Stream", d: "Swimlane flow", glyph: "stream",
-			comp: function () { return window.VizStream; },
-			head: "Each operation is a bar on a moving time axis, one lane per tool. Width = real duration. Scrub the timeline to rewind." },
-		{ id: "pipeline", t: "Pipeline", d: "Task threads", glyph: "pipeline",
-			comp: function () { return window.VizPipeline; },
-			head: "Every request becomes a thread advancing from intake to result through its tool chain." },
-		{ id: "matrix", t: "Matrix", d: "Density grid", glyph: "matrix",
-			comp: function () { return window.VizMatrix; },
-			head: "Tool × time heat field — scan bursts, idle gaps and error clusters across all servers at once." },
-		{ id: "radar", t: "Radar", d: "Recency sweep", glyph: "radar",
-			comp: function () { return window.VizRadar; },
-			head: "Sonar of recent activity. Fresh contacts appear at the rim and drift inward as they age." },
-		{ id: "pulse", t: "Pulse", d: "Channel mixer", glyph: "pulse",
-			comp: function () { return window.VizPulse; },
-			head: "A heartbeat per server — mirrored waveform plus a live level meter." },
+		{ id: "swarm", t: "Swarm", glyph: "swarm",
+			comp: function () { return window.VizSwarm; } },
+		{ id: "stream", t: "Stream", glyph: "stream",
+			comp: function () { return window.VizStream; } },
 	];
 	var SPEEDS = [0.5, 1, 2, 4];
 
@@ -104,47 +93,33 @@
 			actions: { toggleTool: toggleTool, selectOp: selectOp },
 		};
 
-		// ---- lens switcher (top-bar dropdown; replaces the old left rail) -----
+		// ---- lens switcher: label when one lens is live, segmented toggle for 2+
 		var lensEl = el("ops-lens");
 		function lensGlyph(m) {
 			return ui.MODE_GLYPHS[m.glyph]; // SVG already carries class="glyph"
 		}
+		var liveModes = MODES.filter(isEnabled);
 		function buildLens() {
-			var active = modeById[state.modeId];
-			var menu = "";
-			MODES.forEach(function (m) {
-				var on = m.id === state.modeId;
-				var soon = !isEnabled(m);
-				menu +=
-					'<button class="lens-item' + (on ? " on" : "") + (soon ? " soon" : "") +
-					'" data-mode="' + m.id + '"' + (soon ? " disabled" : "") + ">" +
-					lensGlyph(m) +
-					'<span><span class="t">' + m.t + '</span><span class="d">' +
-					m.d + (soon ? " · soon" : "") + "</span></span></button>";
+			if (liveModes.length <= 1) {
+				var only = liveModes[0] || modeById[state.modeId];
+				lensEl.innerHTML =
+					'<span class="lens-label">' + lensGlyph(only) + "<span>" + only.t + "</span></span>";
+				return;
+			}
+			var seg = "";
+			liveModes.forEach(function (m) {
+				seg +=
+					'<button class="btn' + (m.id === state.modeId ? " on" : "") +
+					'" data-mode="' + m.id + '">' + lensGlyph(m) + "<span>" + m.t + "</span></button>";
 			});
-			lensEl.innerHTML =
-				'<button class="lens-btn" id="ops-lens-btn" title="Switch lens">' +
-				lensGlyph(active) + '<span id="ops-lens-label">' + active.t + "</span>" +
-				'<span class="cv">▾</span></button>' +
-				'<div class="lens-menu">' + menu + "</div>";
-			el("ops-lens-btn").addEventListener("click", function (e) {
-				e.stopPropagation();
-				lensEl.classList.toggle("open");
-			});
-			lensEl.querySelectorAll(".lens-item").forEach(function (b) {
+			lensEl.innerHTML = '<div class="lens-seg seg">' + seg + "</div>";
+			lensEl.querySelectorAll(".btn").forEach(function (b) {
 				b.addEventListener("click", function () {
 					var id = b.getAttribute("data-mode");
-					var m = modeById[id];
-					lensEl.classList.remove("open");
-					if (!m || !isEnabled(m) || id === state.modeId) return;
-					setMode(id);
+					if (id !== state.modeId) setMode(id);
 				});
 			});
 		}
-		// close the menu on any outside click
-		document.addEventListener("click", function () {
-			lensEl.classList.remove("open");
-		});
 		buildLens();
 
 		// ---- speed seg + controls --------------------------------------------
@@ -254,12 +229,8 @@
 		function setMode(id) {
 			state.modeId = id;
 			var m = modeById[id];
-			// reflect the active lens in the top-bar switcher (button + menu)
-			var label = el("ops-lens-label");
-			if (label) label.textContent = m.t;
-			var btnGlyph = lensEl.querySelector(".lens-btn .glyph");
-			if (btnGlyph) btnGlyph.outerHTML = ui.MODE_GLYPHS[m.glyph];
-			lensEl.querySelectorAll(".lens-item").forEach(function (b) {
+			// reflect the active lens in the segmented toggle
+			lensEl.querySelectorAll("[data-mode]").forEach(function (b) {
 				b.classList.toggle("on", b.getAttribute("data-mode") === id);
 			});
 			var g = canvas.getContext("2d");

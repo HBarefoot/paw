@@ -17,9 +17,17 @@
 @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/space-grotesk-600.woff2") format("woff2"); }
 @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/space-grotesk-700.woff2") format("woff2"); }
 
-/* Full-bleed the ops console inside paw's Layout content area. */
+/* Hide paw's page-header bar on the ops page (no flash; complements the
+   bootstrap's JS fallback) so the console starts at its own top bar. */
+.main-area:has(> .content.ops-content) > .topbar { display: none; }
+
+/* Full-bleed the ops console inside paw's Layout content area. A DEFINITE height
+   (the paw topbar is hidden on this page) is required so the .ops-app grid's 1fr
+   row constrains and the inspector's Live-operations feed scrolls inside its own
+   panel instead of growing the whole page. */
 .content.ops-content {
   padding: 0;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -124,38 +132,15 @@
 .ops-app .seg .btn { border: none; border-radius: 0; border-right: 1px solid var(--ops-line); }
 .ops-app .seg .btn:last-child { border-right: none; }
 
-/* ---- Lens switcher (top-bar dropdown; replaces the old left rail) ---- */
-.ops-app .lens { position: relative; }
-.ops-app .lens-btn {
-  display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px;
-  font-family: var(--ops-mono); font-size: 11px; color: var(--ops-ink-bright);
-  background: var(--ops-panel-2); border: 1px solid var(--ops-line-2);
-  border-radius: var(--ops-r-sm); cursor: pointer; transition: border-color .14s ease;
+/* ---- Lens switcher (top bar): static label for one lens, segmented toggle for 2+ ---- */
+.ops-app .lens-label {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 4px;
+  font-family: var(--ops-sans); font-size: 13px; color: var(--ops-ink-bright); letter-spacing: 0.02em;
 }
-.ops-app .lens-btn:hover { border-color: var(--ops-green); }
-.ops-app .lens-btn .glyph { width: 16px; height: 16px; color: var(--ops-green); }
-.ops-app .lens-btn .cv { color: var(--ops-ink-dim); transition: transform .15s ease; }
-.ops-app .lens.open .lens-btn .cv { transform: rotate(180deg); }
-.ops-app .lens-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 240px;
-  background: rgba(8, 12, 13, 0.98); border: 1px solid var(--ops-line-2);
-  border-radius: var(--ops-r); padding: 6px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
-  display: none; flex-direction: column; gap: 2px;
-}
-.ops-app .lens.open .lens-menu { display: flex; }
-.ops-app .lens-item {
-  text-align: left; cursor: pointer; border: 1px solid transparent; border-radius: var(--ops-r-sm);
-  background: transparent; color: var(--ops-ink-dim); padding: 9px 10px; display: grid;
-  grid-template-columns: 18px 1fr; gap: 10px; align-items: center; transition: all .13s ease; width: 100%;
-}
-.ops-app .lens-item:hover { background: var(--ops-panel-2); color: var(--ops-ink); }
-.ops-app .lens-item.on { background: var(--ops-panel-2); color: var(--ops-ink-bright); }
-.ops-app .lens-item.soon { opacity: 0.45; cursor: default; }
-.ops-app .lens-item.soon:hover { background: transparent; color: var(--ops-ink-dim); }
-.ops-app .lens-item .glyph { width: 18px; height: 18px; }
-.ops-app .lens-item.on .glyph { color: var(--ops-green); }
-.ops-app .lens-item .t { font-family: var(--ops-sans); font-size: 12.5px; line-height: 1.1; display: block; }
-.ops-app .lens-item .d { font-size: 10px; color: var(--ops-ink-faint); margin-top: 2px; line-height: 1.2; display: block; }
+.ops-app .lens-label .glyph { width: 16px; height: 16px; color: var(--ops-green); }
+.ops-app .lens-seg .btn { gap: 7px; padding: 6px 11px; }
+.ops-app .lens-seg .btn .glyph { width: 15px; height: 15px; }
+.ops-app .lens-seg .btn.on .glyph { color: var(--ops-green); }
 
 /* ---- Stage ---- */
 .ops-app .stage { grid-area: stage; position: relative; overflow: hidden; }
