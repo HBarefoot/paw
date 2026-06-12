@@ -29,6 +29,16 @@ Every fix-PR ships a regression test that fails on the pre-fix code. No exceptio
 
 Tests mirror `src/` under `tests/` and must pass from a clean checkout regardless of the developer's environment — scrub `PAW_*` env vars (and redirect `PAW_CONFIG_DIR` to a temp dir) via `tests/helpers/env.ts` for anything that reads config/credentials/the vault.
 
+## Releasing
+
+Version bumps happen via a PR, not ad-hoc. The PR carries a `CHANGELOG.md` section (Keep a Changelog format, newest first) and bumps the `version` field in `package.json`. After the PR merges, tag from `main`:
+
+```bash
+git tag vX.Y.Z && git push --tags
+```
+
+Never tag from the feature branch. Every changelog entry should be traceable to a merged PR.
+
 ## Architecture
 
 **Kernel-centric event-driven design.** The Kernel (`src/kernel/kernel.ts`) is the central orchestrator that boots all subsystems: AI providers, plugin loader, event bus, memory store, cron scheduler, web server, and MCP client manager.
