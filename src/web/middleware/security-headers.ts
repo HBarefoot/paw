@@ -109,6 +109,27 @@ export function createSecurityHeaders(
 			return handler(c, next);
 		}
 
+		// The live companion (/companion) is framed inside the same-origin chat
+		// page's pinned Home tab. The default X-Frame-Options: DENY blocks that,
+		// so allow SAMEORIGIN framing with a CSP that lets it load its modules
+		// (script-src 'self' + the inline bootstrap) and fetch /api/ops/feed.
+		if (path === "/companion") {
+			c.header("X-Content-Type-Options", "nosniff");
+			c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+			c.header("X-Frame-Options", "SAMEORIGIN");
+			c.header(
+				"Content-Security-Policy",
+				"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self';",
+			);
+			if (tlsEnabled) {
+				c.header(
+					"Strict-Transport-Security",
+					"max-age=31536000; includeSubDomains",
+				);
+			}
+			return next();
+		}
+
 		// Default headers for all other routes
 		const handler = secureHeaders({
 			contentSecurityPolicy: {
