@@ -1933,6 +1933,7 @@ export function brandIdentityScript(): string {
 		'document.querySelectorAll("[data-brand-name]").forEach(function(el){el.textContent=name;});',
 		'document.querySelectorAll("[data-brand-logo]").forEach(function(img){var mark=img.parentElement?img.parentElement.querySelector(".app-icon"):null;if(b&&b.logo){img.setAttribute("src",b.logo);img.style.display="";if(mark)mark.style.display="none";}else{img.style.display="none";if(mark)mark.style.display="";}});',
 		'document.querySelectorAll("[data-brand-avatar]").forEach(function(img){img.setAttribute("src",(b&&b.logo)||"/paw-logo.jpg");});',
+		'document.querySelectorAll("[data-brand-chat-label]").forEach(function(el){el.textContent=(b&&b.chatLabel)||"Chat";});',
 		"}",
 		"function apply(b){applyHead(b);if(document.body)applyBody(b);}",
 		"var cached=read();",
@@ -1994,7 +1995,14 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 								class={`nav-item${currentPath === item.path ? " active" : ""}`}
 							>
 								{raw(`<span class="nav-icon">${navIcon(item.icon)}</span>`)}
-								<span class="nav-label">{item.label}</span>
+								<span
+									class="nav-label"
+									data-brand-chat-label={
+										item.path === "/chat" ? "" : undefined
+									}
+								>
+									{item.label}
+								</span>
 								{item.path === "/notifications" && (
 									<span
 										id="nav-notif-badge"
