@@ -47,6 +47,126 @@ export function isAllowedCronEvent(name: string): boolean {
 	return CRON_ALLOWED_EVENTS.has(name);
 }
 
+/**
+ * Strip one matching pair of surrounding single/double quotes. Users who paste
+ * a value into a free-text box (or whose tooling re-quotes form input) end up
+ * with `"Health"` reaching validation, which then renders as the confusing
+ * `Event ""Health"" is not in the allowlist` error. We unwrap a single pair so
+ * a quoted-but-otherwise-valid identifier still resolves.
+ */
+export function stripWrappingQuotes(s: string): string {
+	if (s.length >= 2) {
+		const first = s[0];
+		const last = s[s.length - 1];
+		if (first === last && (first === '"' || first === "'")) {
+			return s.slice(1, -1);
+		}
+	}
+	return s;
+}
+
+/**
+ * Suggest up to `limit` registered tool names closest to `query` (prefix
+ * matches first, then substrings). Powers the "Did you mean …?" hint when an
+ * API caller passes an unknown tool name.
+ */
+export function suggestToolNames(
+	names: string[],
+	query: string,
+	limit = 5,
+): string[] {
+	const q = query.trim().toLowerCase();
+	if (!q) return [];
+	const prefix: string[] = [];
+	const substring: string[] = [];
+	for (const name of names) {
+		const lower = name.toLowerCase();
+		if (lower.startsWith(q)) prefix.push(name);
+		else if (lower.includes(q) || q.includes(lower)) substring.push(name);
+	}
+	const ordered: string[] = [];
+	for (const name of [...prefix, ...substring]) {
+		if (!ordered.includes(name)) ordered.push(name);
+		if (ordered.length >= limit) break;
+	}
+	return ordered;
+}
+
+export interface CronActionDeps {
+	/** Look up a registered tool (for the H-NEW-2 plugin tag). */
+	getTool(name: string): { plugin: string } | undefined;
+	/** All registered tool names (for unknown-tool suggestions). */
+	toolNames(): string[];
+}
+
+export type CronActionResult =
+	| { action: CronAction }
+	| { error: string };
+
+/**
+ * Validate + normalize raw cron-form input into a {@link CronAction}. This is
+ * the single API-boundary seam for H-NEW-1 (event allowlist) and H-NEW-2 (tool
+ * plugin tag); the scheduler re-enforces both at addJob/execute time (defense
+ * in depth). Pure — no kernel coupling, so it is unit-testable in isolation.
+ */
+export function resolveCronAction(
+	actionType: string,
+	rawPayload: string,
+	rawArgs: string | undefined,
+	deps: CronActionDeps,
+): CronActionResult {
+	const trimmed = rawPayload.trim();
+
+	if (actionType === "prompt") {
+		// Keep the prompt verbatim — a prompt may legitimately open/close with a
+		// quote; only identifier-typed payloads get unwrapped.
+		return { action: { type: "prompt", prompt: trimmed } };
+	}
+
+	if (actionType === "tool") {
+		const tool = stripWrappingQuotes(trimmed);
+		const def = deps.getTool(tool);
+		if (!def) {
+			const hints = suggestToolNames(deps.toolNames(), tool);
+			const suffix =
+				hints.length > 0 ? ` Did you mean: ${hints.join(", ")}?` : "";
+			return { error: `Unknown tool: ${tool}.${suffix}` };
+		}
+		const action: CronAction = { type: "tool", tool, plugin: def.plugin };
+		const argsText = rawArgs?.trim();
+		if (argsText) {
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(argsText);
+			} catch {
+				return { error: "Tool args must be valid JSON." };
+			}
+			if (
+				typeof parsed !== "object" ||
+				parsed === null ||
+				Array.isArray(parsed)
+			) {
+				return { error: "Tool args must be a JSON object." };
+			}
+			action.input = parsed as Record<string, unknown>;
+		}
+		return { action };
+	}
+
+	if (actionType === "event") {
+		const event = stripWrappingQuotes(trimmed);
+		if (!isAllowedCronEvent(event)) {
+			const allowed = [...CRON_ALLOWED_EVENTS].join(", ");
+			return {
+				error: `Event "${event}" is not in the cron event allowlist. Allowed: ${allowed}`,
+			};
+		}
+		return { action: { type: "event", event } };
+	}
+
+	return { error: `Unknown action type: ${actionType}` };
+}
+
 export interface CronJob {
 	id: string;
 	name: string;
