@@ -1,43 +1,43 @@
 /**
  * CompanionEngine — the live data layer for the Skill Dock companion.
  *
- * Two real sources, no mock:
- *  - GET /api/ops/feed (~2s): topology (skills + connected services), spawned
- *    sub-agents, and recent ops. A same-origin module CAN fetch this (the old
- *    null-origin portrait iframe could not).
- *  - postMessage `paw:tool` from the chat page: low-latency per-tool start/end/
- *    work/done with skillKey + agentName, so beams light the instant a tool runs.
- *
- * Motion is event-driven: skills/beams light on activation and wind down; there
- * is no idle churn.
+ * Skills come from the injected config (ordered, humanized — so the column +
+ * overflow are right immediately). Sub-agents come from GET /api/ops/feed
+ * (~2s). Per-tool liveliness comes from the chat page's postMessage `paw:tool`
+ * relay (skillKey + agentName), so a beam lights the instant a tool runs and
+ * routes to the acting agent. Motion is event-driven (skills wind down on a
+ * timer; no idle churn). Op labels are the REAL tool summary/name, not a sim.
  */
 (() => {
-	const HOLD_MS = 900; // minimum readable glow once a skill lights
-	const GRACE_MS = 2600; // wind-down after a tool ends
-	const BEAM_MS = 1100; // a tether beam's lifetime
-	const THINK_MS = 1500; // antenna thinking-dots linger after a heartbeat
-	const FEED_MAX = 8;
+	const HOLD_MS = 2200; // base active-glow duration (prototype: 2200–4000ms)
+	const HOLD_JITTER = 1800;
+	const THINK_MS = 1500;
+	const FEED_MAX = 6;
 
 	function CompanionEngine() {
-		this.skills = []; // [{key,label}]
-		this.agents = []; // [{id,name,task,done,ok}]
-		this.active = new Map(); // key -> untilTs
-		this.agentActive = new Map(); // agentId -> untilTs
-		this.beams = []; // {id,fromKey,target,bornAt,untilTs}
-		this.feed = []; // [{label,skillKey,agentName,isError,ts}]
-		this.model = "";
+		this.skills = []; // [{key,label}] from config
+		this.agents = []; // [{id,name}] from the feed
+		this.active = new Map(); // key -> {untilTs, actor}
+		this.ops = []; // [{label, agentName, isError, ts, toolId}]
 		this.thinkingUntil = 0;
-		this.activeCount = 0;
-		this._beamSeq = 0;
+		this.mainPops = 0; // bumps when the orchestrator (not a sub-agent) acts
 		this._cursor = 0;
 		this._timer = null;
 		this._stopped = false;
 	}
 
 	CompanionEngine.prototype.start = function (cfg) {
-		this.model = (cfg && cfg.model) || "";
+		cfg = cfg || {};
+		this.setSkills(cfg.skills || []);
 		this._stopped = false;
 		this._poll();
+	};
+
+	CompanionEngine.prototype.setSkills = function (list) {
+		this.skills = (list || []).map((s) => ({
+			key: String(s.key),
+			label: String(s.label || s.key),
+		}));
 	};
 
 	CompanionEngine.prototype.stop = function () {
@@ -57,35 +57,29 @@
 			})
 			.catch(() => {})
 			.finally(() => {
-				if (!self._stopped) {
-					self._timer = setTimeout(() => self._poll(), 2000);
-				}
+				if (!self._stopped) self._timer = setTimeout(() => self._poll(), 2000);
 			});
 	};
 
-	/** Merge a /api/ops/feed payload: skills (topology), agents, model. */
 	CompanionEngine.prototype._ingestFeed = function (data) {
 		if (typeof data.cursor === "number") this._cursor = data.cursor;
-		if (data.model) this.model = data.model;
-		if (Array.isArray(data.topology)) {
-			const skills = [];
-			const seen = {};
-			for (const n of data.topology) {
-				const key = String(n.id || n.key || "");
-				if (!key || key === "core" || seen[key]) continue;
-				seen[key] = 1;
-				skills.push({ key, label: String(n.label || key) });
-			}
-			if (skills.length) this.skills = skills;
-		}
 		if (Array.isArray(data.agents)) {
 			this.agents = data.agents.map((a) => ({
 				id: String(a.id),
 				name: String(a.name || a.id),
-				task: String(a.task || ""),
-				done: !!a.done,
-				ok: a.ok !== false,
 			}));
+		}
+		// Fallback: if config supplied no skills, derive them from the topology.
+		if (this.skills.length === 0 && Array.isArray(data.topology)) {
+			const seen = {};
+			const out = [];
+			for (const n of data.topology) {
+				const key = String(n.id || n.key || "");
+				if (!key || key === "core" || seen[key]) continue;
+				seen[key] = 1;
+				out.push({ key, label: String(n.label || key) });
+			}
+			this.skills = out;
 		}
 	};
 
@@ -95,9 +89,6 @@
 		if (!msg || msg.type !== "paw:tool") return;
 		if (msg.phase === "done") {
 			this.active.clear();
-			this.agentActive.clear();
-			this.beams = [];
-			this.activeCount = 0;
 			return;
 		}
 		if (msg.phase === "work") {
@@ -105,68 +96,58 @@
 			return;
 		}
 		const key = msg.skillKey || null;
+		const actor = msg.agentName || null;
 		if (msg.phase === "start") {
-			this.activeCount++;
 			this.thinkingUntil = now + THINK_MS;
-			if (key) this.active.set(key, now + HOLD_MS);
-			const target = window.CompanionTopology.beamTarget(
-				{ agentName: msg.agentName },
-				this.agents,
-			);
-			if (target.kind === "agent") {
-				this.agentActive.set(target.id, now + HOLD_MS);
-			}
+			if (!actor) this.mainPops++;
 			if (key) {
-				this.beams.push({
-					id: ++this._beamSeq,
-					fromKey: key,
-					target,
-					bornAt: now,
-					untilTs: now + BEAM_MS,
+				this.active.set(key, {
+					untilTs: now + HOLD_MS + Math.random() * HOLD_JITTER,
+					actor,
 				});
 			}
-			this.feed.unshift({
+			this.ops.unshift({
 				label: msg.summary || msg.toolName || key || "tool",
-				skillKey: key,
-				agentName: msg.agentName || null,
+				agentName: actor,
 				isError: !!msg.isError,
 				ts: now,
+				toolId: msg.toolId || null,
 			});
-			if (this.feed.length > FEED_MAX) this.feed.length = FEED_MAX;
-		} else if (msg.phase === "end") {
-			this.activeCount = Math.max(0, this.activeCount - 1);
-			if (key) this.active.set(key, now + GRACE_MS); // begin wind-down
-			if (msg.isError) {
-				for (const f of this.feed) {
-					if (f.skillKey === key) {
-						f.isError = true;
-						break;
-					}
+			if (this.ops.length > FEED_MAX) this.ops.length = FEED_MAX;
+		} else if (msg.phase === "end" && msg.isError) {
+			// A failure surfaces at end — flag the matching op's dot red.
+			for (const o of this.ops) {
+				if (msg.toolId && o.toolId === msg.toolId) {
+					o.isError = true;
+					break;
 				}
 			}
 		}
 	};
 
-	/** Prune expired state and return a render snapshot. */
+	/** Prune expired skills and return a render snapshot. */
 	CompanionEngine.prototype.getState = function (now) {
 		now = now || Date.now();
-		for (const [k, until] of this.active) {
-			if (until < now) this.active.delete(k);
+		for (const [k, v] of this.active) {
+			if (v.untilTs < now) this.active.delete(k);
 		}
-		for (const [k, until] of this.agentActive) {
-			if (until < now) this.agentActive.delete(k);
-		}
-		this.beams = this.beams.filter((b) => b.untilTs >= now);
+		// An agent is "working" while it owns an active skill.
+		const working = new Set();
+		for (const [, v] of this.active) if (v.actor) working.add(v.actor);
+		const agents = this.agents.map((a, i) => ({
+			id: a.id,
+			name: a.name,
+			gradIndex: i % 3,
+			working: working.has(a.name) || working.has(a.id),
+		}));
 		return {
 			skills: this.skills,
-			agents: this.agents,
 			active: this.active,
-			agentActive: this.agentActive,
-			beams: this.beams,
-			feed: this.feed,
-			model: this.model,
+			agents,
+			ops: this.ops,
 			thinking: now < this.thinkingUntil,
-			busy: this.activeCount > 0 || this.beams.length > 0,
+			busy: this.active.size > 0,
+			mainPops: this.mainPops,
 			now,
 		};
 	};
