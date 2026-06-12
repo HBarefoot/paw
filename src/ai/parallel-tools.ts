@@ -47,6 +47,7 @@ export async function executeToolsParallel(
 	toolRegistry: ToolRegistry,
 	logger: Logger,
 	timeoutMs = 1_200_000,
+	sessionId?: string,
 ): Promise<ToolCallResult[]> {
 	const promises = calls.map(async (call): Promise<ToolCallResult> => {
 		const startTime = Date.now();
@@ -63,7 +64,7 @@ export async function executeToolsParallel(
 		let result: ToolResult;
 		try {
 			result = await Promise.race([
-				toolRegistry.execute(call.name, call.input),
+				toolRegistry.execute(call.name, call.input, sessionId),
 				new Promise<never>((_, reject) =>
 					setTimeout(
 						() =>
@@ -111,6 +112,7 @@ export async function* executeToolsParallelStreaming(
 	logger: Logger,
 	roundtrip: number,
 	timeoutMs = 1_200_000,
+	sessionId?: string,
 ): AsyncGenerator<StreamChunk, ToolCallResult[]> {
 	// Single tool with streamHandler: use it for full sub-agent detail forwarding
 	if (calls.length === 1) {
@@ -158,7 +160,7 @@ export async function* executeToolsParallelStreaming(
 			});
 			try {
 				result = await Promise.race([
-					toolRegistry.execute(call.name, call.input),
+					toolRegistry.execute(call.name, call.input, sessionId),
 					new Promise<never>((_, reject) =>
 						setTimeout(
 							() =>
@@ -255,7 +257,7 @@ export async function* executeToolsParallelStreaming(
 							timeoutMs,
 						);
 						result = await Promise.race([
-							toolRegistry.execute(call.name, call.input),
+							toolRegistry.execute(call.name, call.input, sessionId),
 							new Promise<never>((_, reject) =>
 								setTimeout(
 									() =>
