@@ -933,6 +933,9 @@ export function createWebApp(
 					agents: kernel.activeAgents,
 					model: currentModel(),
 					now: Date.now(),
+					pendingApprovals: kernel.githubApprovals
+						? kernel.githubApprovals.listPending().length
+						: 0,
 				},
 				since,
 			),
@@ -1767,18 +1770,6 @@ export function createWebApp(
 		const pal = getBrandPalette(brand);
 		const accent = pal?.accent ?? pal?.primary ?? "#7458f5";
 		const brandName = brand?.name ?? "Paw";
-		// Tools + Operations stats (same source as the portrait badges).
-		let tools = 0;
-		let operations = 0;
-		try {
-			tools = kernel.toolRegistryPublic.size;
-			operations =
-				kernel.database
-					.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tool_log")
-					.get()?.n ?? 0;
-		} catch {
-			/* counts default to 0 */
-		}
 		// Ordered, humanized skill list for the column (excluding the synthetic
 		// orchestrator "core" lane) — so the capped column + overflow are correct
 		// before the feed loads. Pills key off the same skillKey the relay sends.
@@ -1796,8 +1787,6 @@ export function createWebApp(
 			bg: pal?.bg,
 			model: currentModel(),
 			brandName,
-			tools,
-			operations,
 			skills,
 		}).replace(/</g, "\\u003c");
 		return c.html(`<!doctype html><html><head><meta charset="utf-8">
@@ -1806,6 +1795,8 @@ export function createWebApp(
 <body><div id="companion-root"></div>
 <script src="/companion/static/router.js"></script>
 <script src="/companion/static/topology.js"></script>
+<script src="/companion/static/expression.js"></script>
+<script src="/companion/static/spring.js"></script>
 <script src="/companion/static/engine.js"></script>
 <script src="/companion/static/shell.js"></script>
 <script>window.__COMPANION_CONFIG=${cfg};

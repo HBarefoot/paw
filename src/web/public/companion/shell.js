@@ -1,17 +1,27 @@
 /**
- * Companion shell — the Skill Dock v2 home, built with real DOM + SVG to match
- * the design prototype pixel-for-pixel (CSS-gradient avatar, dashed SVG tether
- * beams with purple particles, pill ping rings). Driven by CompanionEngine
- * (real data) and the chat page's postMessage relay. Scaled to fit its tab so
- * it never scrolls.
+ * Companion shell — the Skill Dock companion home, built with real DOM + SVG
+ * (CSS-gradient avatar, dashed SVG tether beams with purple particles, pill
+ * ping rings). Driven by CompanionEngine (real data) and the chat page's
+ * postMessage relay. Scaled to fit its tab so it never scrolls.
  *
- * Layout 1: left skill column (capped 16 + smart overflow chip) next to the
- * avatar, with the greeting + Tools/Operations/Income stats + ops feed below,
- * and sub-agent orbs with persistent orchestrator links.
+ * Wrap dock: centered avatar → dynamic action subtitle → sub-agent orbs →
+ * skills wrapping below → greeting → ops feed (the stat cards were removed).
+ *
+ * Reactivity layer: the face is the product's emotional surface, so every frame
+ * the engine resolves a single expression (idle/sleepy/listening/thinking/
+ * working/success/wince/worried/waiting) from REAL signals via the pure
+ * CompanionExpression machine. That expression drives the antenna "thinking"
+ * dots, the dynamic subtitle, a CompanionSpring squash/stretch pop, and the
+ * gaze (pupils track the active pill / acting sub-agent / chat input). All
+ * motion honours prefers-reduced-motion.
  */
 (() => {
 	const R = window.CompanionRouter;
+	const E = window.CompanionExpression;
+	const SP = window.CompanionSpring;
 	const SVGNS = "http://www.w3.org/2000/svg";
+	const DEFAULT_SUBTITLE =
+		"Ask me to build something and it'll show up right here.";
 	// Sub-agent orb gradients (cycled), verbatim from the design's skills-data.js.
 	const SUB_GRADS = [
 		{
@@ -41,6 +51,62 @@
 		return document.createElementNS(SVGNS, tag);
 	}
 
+	/** Strip control chars + clamp length on text that can embed remote tool
+	 *  output (mirrors the server's sanitizePromptText control-char strip; tag
+	 *  safety is covered because we only ever assign it via textContent). */
+	function sanitizeText(s) {
+		// biome-ignore lint: control-char strip is intentional
+		return String(s == null ? "" : s)
+			.replace(/[\u0000-\u001f\u007f]/g, " ")
+			.slice(0, 80)
+			.trim();
+	}
+
+	/** The plain-words line under the avatar — reflects the live action. */
+	function captionFor(st, expr) {
+		switch (expr) {
+			case "working": {
+				const names = [];
+				for (const [k] of st.active) {
+					const s = st.skills.find((x) => x.key === k);
+					if (s) names.push(s.label);
+					if (names.length >= 2) break;
+				}
+				if (names.length) return sanitizeText(`▸ ${names.join(", ")}`);
+				const op = st.ops && st.ops[0];
+				return op ? sanitizeText(`▸ ${op.label}`) : "Working…";
+			}
+			case "thinking":
+				return "Thinking…";
+			case "waiting":
+				return "Waiting for your approval…";
+			case "worried":
+				return "A sub-agent ran into trouble…";
+			case "wince":
+				return "That didn't go through — retrying…";
+			case "success":
+				return "Done.";
+			case "listening":
+				return "Listening…";
+			default:
+				return DEFAULT_SUBTITLE;
+		}
+	}
+
+	/** What the eyes look at: active pill > acting sub-agent > input > center. */
+	function gazeTarget(st, expr) {
+		expr = expr || (st && st.expression) || "idle";
+		if (st && st.active && st.active.size) {
+			for (const [k] of st.active) return { kind: "pill", key: k };
+		}
+		if (st && st.agents) {
+			const idx = st.agents.findIndex((a) => a.working);
+			if (idx >= 0) return { kind: "sub", idx };
+		}
+		if (expr === "listening") return { kind: "input" };
+		return { kind: "center" };
+	}
+
 	function buildAvatar() {
 		const wrap = el("div", "avatar");
 		wrap.appendChild(el("div", "avatar-glow"));
@@ -62,19 +128,6 @@
 		return wrap;
 	}
 
-	function statCard(value, label) {
-		if (value == null) {
-			const c = el("div", "stat muted");
-			c.appendChild(el("b", null, "—"));
-			c.appendChild(el("span", null, `${label} · soon`));
-			return c;
-		}
-		const c = el("div", "stat");
-		c.appendChild(el("b", null, String(value)));
-		c.appendChild(el("span", null, label));
-		return c;
-	}
-
 	function mount(root, cfg) {
 		cfg = cfg || {};
 		const docEl = root.ownerDocument.documentElement;
@@ -83,6 +136,7 @@
 
 		const engine = new window.CompanionEngine();
 		engine.start(cfg);
+		const reduced = SP ? SP.prefersReducedMotion() : false;
 
 		// ── DOM skeleton (built once) ──
 		const fit = el("div", "fit");
@@ -91,33 +145,21 @@
 		tetherSvg.setAttribute("class", "tether-svg");
 		home.appendChild(tetherSvg);
 
-		// Wrap-dock composition: centered avatar → caption → sub-agents → the
-		// skills wrapping below (then greeting/stats/ops feed).
+		// Wrap-dock composition: centered avatar → sub-agents → skills wrapping →
+		// greeting → dynamic subtitle → ops feed (no stat cards).
 		const avatarZone = el("div", "avatar-zone");
 		avatarZone.appendChild(buildAvatar());
-		const caption = el("div", "activity-caption");
-		caption.appendChild(el("span"));
 		const subRow = el("div", "subagent-row");
 		const wrapDock = el("div", "wrap-dock");
 		home.appendChild(avatarZone);
-		home.appendChild(caption);
 		home.appendChild(subRow);
 		home.appendChild(wrapDock);
 
 		const greeting = el("h1", "greeting", `Hi — I'm ${cfg.brandName || "Paw"}`);
-		const subtitle = el(
-			"p",
-			"subtitle",
-			"Ask me to build something and it'll show up right here.",
-		);
-		const stats = el("div", "stats");
-		stats.appendChild(statCard(cfg.tools, "Tools"));
-		stats.appendChild(statCard(cfg.operations, "Operations"));
-		stats.appendChild(statCard(null, "Income"));
+		const subtitle = el("p", "subtitle", DEFAULT_SUBTITLE);
 		const opsFeed = el("div", "ops-feed");
 		home.appendChild(greeting);
 		home.appendChild(subtitle);
-		home.appendChild(stats);
 		home.appendChild(opsFeed);
 
 		fit.appendChild(home);
@@ -125,7 +167,10 @@
 
 		window.addEventListener("message", (e) => {
 			const d = e && e.data;
-			if (d && d.type === "paw:tool") engine.ingestTool(d);
+			if (!d) return;
+			if (d.type === "paw:tool") engine.ingestTool(d);
+			else if (d.type === "paw:input") engine.ingestInput(d.state);
+			else if (d.type === "paw:ambient") engine.setWaiting(d.pendingApprovals || 0);
 		});
 
 		// ── incremental render state ──
@@ -134,10 +179,16 @@
 		let lastAgentSig = "";
 		let lastActiveKey = "x";
 		let lastPops = -1;
+		let lastExpr = "idle";
+		let lastCaption = "";
 		let renderedTs = [];
 		let scale = 1;
 		let tetherTimer = null;
 		let raf = null;
+		// Micro-physics: one spring kicked on entry into a busy face / orchestrator
+		// pop; its value squashes the orb (reduced-motion snaps it flat).
+		const pop = SP ? SP.make(0) : { value: 0, velocity: 0 };
+		let lastTs = 0;
 
 		function buildDock(st) {
 			wrapDock.textContent = "";
@@ -249,32 +300,86 @@
 
 		function renderAvatar(st) {
 			const av = avatarZone.firstChild;
-			if (st.busy) av.classList.add("busy");
+			const expr = st.expression || "idle";
+			// Expression → classes. The 3 antenna dots animate ONLY while thinking
+			// (user spec); busy keeps the orb glow up across thinking/working.
+			if (expr === "thinking") av.classList.add("thinking");
+			else av.classList.remove("thinking");
+			if (expr === "working" || expr === "thinking") av.classList.add("busy");
 			else av.classList.remove("busy");
-			// re-trigger the avatarPop when the orchestrator itself acts
-			if (st.mainPops !== lastPops) {
+			av.setAttribute("data-expr", expr);
+
+			// Kick the squash spring on entry into a busy face or an orchestrator pop.
+			const popOnExpr = E ? E.shouldPop(lastExpr, expr) : false;
+			if (popOnExpr || st.mainPops !== lastPops) {
 				lastPops = st.mainPops;
-				const ball = av.querySelector("[data-avatar]");
-				if (ball) {
-					ball.style.animation = "none";
-					// reflow to restart the keyframe
-					void ball.offsetWidth;
-					ball.style.animation = "";
-				}
+				pop.velocity += 16;
 			}
-			const span = caption.firstChild;
-			if (st.busy) {
-				caption.classList.add("on");
-				const names = [];
-				for (const [k] of st.active) {
-					const s = st.skills.find((x) => x.key === k);
-					if (s) names.push(s.label);
-					if (names.length >= 3) break;
+			lastExpr = expr;
+
+			// Dynamic subtitle = the live action line (default greeting when idle).
+			const text = captionFor(st, expr);
+			if (text !== lastCaption) {
+				lastCaption = text;
+				subtitle.textContent = text;
+			}
+		}
+
+		function applyPhysics(st) {
+			const now = Date.now();
+			const dt = lastTs ? (now - lastTs) / 1000 : 0;
+			lastTs = now;
+			if (SP) SP.step(pop, 0, dt, { reduced });
+			const ball = avatarZone.firstChild.querySelector("[data-avatar]");
+			if (ball) {
+				const e = Math.max(-0.12, Math.min(0.12, pop.value * 0.04));
+				ball.style.transform = `scale(${(1 + e).toFixed(3)}, ${(1 - e).toFixed(3)})`;
+			}
+			applyGaze(st);
+		}
+
+		function applyGaze(st) {
+			const ball = avatarZone.firstChild.querySelector("[data-avatar]");
+			if (!ball) return;
+			const pupils = ball.querySelectorAll(".pupil");
+			if (!pupils || !pupils.length) return;
+			const t = gazeTarget(st, st.expression);
+			const br = ball.getBoundingClientRect();
+			const bx = br.left + br.width / 2;
+			const by = br.top + br.height / 2;
+			let tx = null;
+			let ty = null;
+			if (t.kind === "pill") {
+				const p = pillByKey.get(t.key);
+				if (p) {
+					const r = p.getBoundingClientRect();
+					tx = r.left + r.width / 2;
+					ty = r.top + r.height / 2;
 				}
-				span.textContent = names.length ? `▸ using ${names.join(", ")}` : " ";
-			} else {
-				caption.classList.remove("on");
-				span.textContent = " ";
+			} else if (t.kind === "sub") {
+				const node = subRow.children[t.idx];
+				if (node?.firstChild) {
+					const r = node.firstChild.getBoundingClientRect();
+					tx = r.left + r.width / 2;
+					ty = r.top + r.height / 2;
+				}
+			} else if (t.kind === "input") {
+				// the chat input lives below the companion (parent doc) → look down
+				tx = bx;
+				ty = by + 220;
+			}
+			let dx = 0;
+			let dy = 0;
+			if (tx != null && !reduced) {
+				const vx = tx - bx;
+				const vy = ty - by;
+				const len = Math.hypot(vx, vy) || 1;
+				const max = 4; // px of travel within the eye
+				dx = (vx / len) * max;
+				dy = (vy / len) * max;
+			}
+			for (const pu of pupils) {
+				pu.style.transform = `translate(calc(-50% + ${dx.toFixed(1)}px), calc(-50% + ${dy.toFixed(1)}px))`;
 			}
 		}
 
@@ -391,6 +496,7 @@
 			renderActive(st);
 			renderOps(st);
 			renderAvatar(st);
+			applyPhysics(st);
 			scaleToFit();
 			const ak = activeKey(st);
 			if (ak !== lastActiveKey) {
@@ -414,5 +520,5 @@
 		};
 	}
 
-	window.Companion = { mount };
+	window.Companion = { mount, gazeTarget, captionFor };
 })();
