@@ -204,7 +204,7 @@ export function createSupabaseTools(
 	const listTables: ToolDefinition = {
 		name: "supabase_list_tables",
 		description:
-			"List the tables/views exposed by the Supabase project's public schema, with their columns and types (parsed from PostgREST's OpenAPI document). Call this first to discover what exists instead of guessing table names.",
+			"List the tables/views exposed by the Supabase project, with their columns and types (parsed from PostgREST's OpenAPI document). Covers both the `public` schema and the agent's `canvas` yard (where supabase_create_table builds). Each table is tagged with its `schema`. Call this first to discover what exists instead of guessing table names.",
 		plugin: "supabase",
 		input_schema: { type: "object", properties: {} },
 		handler: async (): Promise<ToolResult> => {
@@ -214,7 +214,7 @@ export function createSupabaseTools(
 					return {
 						content: JSON.stringify({
 							tables: [],
-							note: "No tables are exposed on the public schema.",
+							note: "No tables are exposed on the public or canvas schemas. Use supabase_create_table to provision one in the canvas yard.",
 						}),
 					};
 				}
