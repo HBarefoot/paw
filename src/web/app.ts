@@ -1782,11 +1782,28 @@ export function createWebApp(
 		const skills = (kernel.skills?.skillNames ?? [])
 			.filter((k) => k !== "core")
 			.map((k) => ({ key: k, label: humanize(k) }));
+		// Mood scalar: a slow health signal (1 − the last hour's tool failure rate)
+		// the companion maps to avatar saturation/brightness/posture (hue unchanged).
+		let moodScalar = 1;
+		try {
+			const row = kernel.database
+				.query<{ total: number; fails: number }, []>(
+					`SELECT COUNT(*) AS total, COALESCE(SUM(is_error), 0) AS fails
+					 FROM tool_log WHERE created_at >= datetime('now', '-1 hour')`,
+				)
+				.get();
+			if (row && row.total > 0) {
+				moodScalar = Math.max(0, Math.min(1, 1 - row.fails / row.total));
+			}
+		} catch {
+			/* default to healthy */
+		}
 		const cfg = JSON.stringify({
 			accent,
 			bg: pal?.bg,
 			model: currentModel(),
 			brandName,
+			moodScalar,
 			skills,
 		}).replace(/</g, "\\u003c");
 		return c.html(`<!doctype html><html><head><meta charset="utf-8">
