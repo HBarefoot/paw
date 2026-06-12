@@ -98,6 +98,16 @@ function resolvedCredentials(): Record<string, unknown> {
 			maxToolRoundtrips: env.PAW_AI_MAX_ROUNDTRIPS
 				? Number(env.PAW_AI_MAX_ROUNDTRIPS)
 				: undefined,
+			// Vision routing from env: PAW_VISION_PROVIDER + PAW_VISION_MODEL (both
+			// required) route image turns to that provider/model.
+			vision:
+				env.PAW_VISION_PROVIDER && env.PAW_VISION_MODEL
+					? {
+							provider: env.PAW_VISION_PROVIDER,
+							model: env.PAW_VISION_MODEL,
+							enabled: true,
+						}
+					: undefined,
 		},
 		ollama: {
 			baseUrl: env.PAW_OLLAMA_BASE_URL ?? ollamaConfig?.baseUrl,
@@ -164,6 +174,33 @@ function resolvedCredentials(): Record<string, unknown> {
 					strapiCreds?.token
 				) || undefined,
 		},
+		// First-class HubSpot: PAW_HUBSPOT_TOKEN auto-enables it from env alone.
+		hubspot: env.PAW_HUBSPOT_TOKEN
+			? { enabled: true, token: env.PAW_HUBSPOT_TOKEN }
+			: undefined,
+		// First-class Supabase: both PAW_SUPABASE_URL and PAW_SUPABASE_SERVICE_KEY
+		// are required (a partial set leaves supabase untouched).
+		supabase:
+			env.PAW_SUPABASE_URL && env.PAW_SUPABASE_SERVICE_KEY
+				? {
+						enabled: true,
+						url: env.PAW_SUPABASE_URL,
+						serviceKey: env.PAW_SUPABASE_SERVICE_KEY,
+					}
+				: undefined,
+		// First-class WordPress: all three of PAW_WORDPRESS_URL,
+		// PAW_WORDPRESS_USERNAME, PAW_WORDPRESS_APP_PASSWORD are required.
+		wordpress:
+			env.PAW_WORDPRESS_URL &&
+			env.PAW_WORDPRESS_USERNAME &&
+			env.PAW_WORDPRESS_APP_PASSWORD
+				? {
+						enabled: true,
+						url: env.PAW_WORDPRESS_URL,
+						username: env.PAW_WORDPRESS_USERNAME,
+						appPassword: env.PAW_WORDPRESS_APP_PASSWORD,
+					}
+				: undefined,
 		store: {
 			dbPath: env.PAW_DB_PATH,
 		},
