@@ -119,7 +119,10 @@ export function createSecurityHeaders(
 			c.header("X-Frame-Options", "SAMEORIGIN");
 			c.header(
 				"Content-Security-Policy",
-				"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self';",
+				// Cloudflare auto-injects its analytics beacon into proxied HTML; allow
+				// it here (matching the default app CSP below) so it doesn't throw a CSP
+				// error on the framed companion. Everything else stays same-origin only.
+				"default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://cloudflareinsights.com; frame-ancestors 'self';",
 			);
 			if (tlsEnabled) {
 				c.header(

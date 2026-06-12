@@ -527,10 +527,25 @@ describe("companion static modules", () => {
 		};
 		await mw(c as never, (async () => {}) as never);
 		expect(headers["X-Frame-Options"]).toBe("SAMEORIGIN");
-		expect(headers["Content-Security-Policy"]).toContain(
-			"frame-ancestors 'self'",
+		const csp = headers["Content-Security-Policy"];
+		expect(csp).toContain("frame-ancestors 'self'");
+		expect(csp).toContain("connect-src 'self'");
+		// Cloudflare's auto-injected analytics beacon must be allowed (matches the
+		// default app CSP) so it doesn't throw a CSP error on the framed companion.
+		expect(csp).toContain("https://static.cloudflareinsights.com");
+		expect(csp).toContain("https://cloudflareinsights.com");
+	});
+
+	test("chat: ephemeral canvas sessions skip the DB history fetch (no 404)", () => {
+		const src = readFileSync(
+			new URL("../../src/web/views/chat.tsx", import.meta.url),
+			"utf8",
 		);
-		expect(headers["Content-Security-Policy"]).toContain("connect-src 'self'");
+		// The guard must sit in loadMessagesForSession, before the fetch, so a
+		// client-only `canvas-<uuid>` id never hits /api/sessions/<id>/messages.
+		const fn = src.slice(src.indexOf("function loadMessagesForSession"));
+		const body = fn.slice(0, fn.indexOf('fetch("/api/sessions/'));
+		expect(body).toContain('indexOf("canvas-") === 0');
 	});
 
 	test("the /companion inline bootstrap cooks and parses (template-trap guard)", () => {

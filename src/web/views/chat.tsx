@@ -423,6 +423,9 @@ export function getChatScript(): string {
   }
 
   function loadMessagesForSession(sid) {
+    // Canvas sessions are ephemeral (in-memory only) — never persisted to the DB,
+    // so /api/sessions/<id>/messages 404s. History replays from /api/canvas/events.
+    if (!sid || sid.indexOf("canvas-") === 0) return;
     fetch("/api/sessions/" + sid + "/messages")
       .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
       .then(function(data) {
