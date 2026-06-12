@@ -404,6 +404,95 @@ export function createGitHubTools(
 		},
 	};
 
+	const createIssue: ToolDefinition = {
+		name: "github_create_issue",
+		description:
+			"Open a new issue in an allowlisted repository (title, body, optional labels and assignees). Use this to file bugs or track work. Closing an issue is a separate, approval-gated action.",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				title: { type: "string", description: "Issue title." },
+				body: { type: "string", description: "Issue body (markdown)." },
+				labels: {
+					type: "array",
+					items: { type: "string" },
+					description: "Optional label names to apply.",
+				},
+				assignees: {
+					type: "array",
+					items: { type: "string" },
+					description: "Optional GitHub usernames to assign.",
+				},
+			},
+			required: ["repo", "title"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			const repo = input.repo as string;
+			try {
+				const res = await audited(
+					"github.create_issue",
+					{ repo, title: input.title },
+					() =>
+						client.createIssue(repo, {
+							title: input.title as string,
+							body: input.body as string | undefined,
+							labels: input.labels as string[] | undefined,
+							assignees: input.assignees as string[] | undefined,
+						}),
+				);
+				return { content: JSON.stringify(res) };
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const updateIssue: ToolDefinition = {
+		name: "github_update_issue",
+		description:
+			"Update an existing issue's title, body, labels, or assignees. Does NOT close or reopen — closing an issue is the separate, approval-gated github_close_issue action.",
+		plugin: "github",
+		input_schema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: 'Repository as "owner/repo".' },
+				number: { type: "number", description: "Issue number." },
+				title: { type: "string", description: "New title." },
+				body: { type: "string", description: "New body (markdown)." },
+				labels: {
+					type: "array",
+					items: { type: "string" },
+					description: "Replacement set of label names.",
+				},
+				assignees: {
+					type: "array",
+					items: { type: "string" },
+					description: "Replacement set of assignee usernames.",
+				},
+			},
+			required: ["repo", "number"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			const repo = input.repo as string;
+			const number = input.number as number;
+			try {
+				const res = await audited("github.update_issue", { repo, number }, () =>
+					client.updateIssue(repo, number, {
+						title: input.title as string | undefined,
+						body: input.body as string | undefined,
+						labels: input.labels as string[] | undefined,
+						assignees: input.assignees as string[] | undefined,
+					}),
+				);
+				return { content: JSON.stringify(res) };
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
 	// --- CI feedback (read-only) ---
 
 	const getChecks: ToolDefinition = {
@@ -705,6 +794,8 @@ export function createGitHubTools(
 		openPr,
 		updatePr,
 		comment,
+		createIssue,
+		updateIssue,
 		getChecks,
 		getWorkflowRuns,
 		getRunLogs,

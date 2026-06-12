@@ -17,6 +17,40 @@ import {
 } from "./types.js";
 
 /**
+ * Heuristic hint appended to 403/404 errors so an opaque "Resource not
+ * accessible by integration" becomes self-explanatory: it names the GitHub App
+ * permission the operation most likely needs, derived from the operation's
+ * context string. Pure (no API call) so it stays offline-testable.
+ */
+function scopeHint(ctx: string): string {
+	const c = ctx.toLowerCase();
+	let perm: string;
+	if (
+		c.includes("workflow") ||
+		c.includes("dispatch") ||
+		c.includes("action")
+	) {
+		perm = "`actions: write`";
+	} else if (c.includes("pull") || c.includes("merge")) {
+		perm = "`pull_requests: write`";
+	} else if (c.includes("issue") || c.includes("comment")) {
+		perm = "`issues: write`";
+	} else if (
+		c.includes("commit") ||
+		c.includes("ref") ||
+		c.includes("blob") ||
+		c.includes("tree") ||
+		c.includes("content") ||
+		c.includes("branch")
+	) {
+		perm = "`contents: write`";
+	} else {
+		perm = "the matching write permission";
+	}
+	return ` — the GitHub App installation likely lacks ${perm}, or is not installed on this repo. Adjust the App's repository permissions (and re-accept the request) at github.com/settings/installations, and confirm the repo is in the allowlist.`;
+}
+
+/**
  * GitHubClient — a house-style wrapper around Octokit's GitHub App auth.
  *
  * Auth: a GitHub App. We mint a short-lived installation token (Octokit handles
@@ -178,17 +212,7 @@ export class GitHubClient {
 			const content = Buffer.from(data.content, "base64").toString("utf-8");
 			return { content, sha: data.sha, size: data.size, path: data.path };
 		} catch (err) {
-			if (err instanceof GitHubError) throw err;
-			const status =
-				typeof (err as { status?: number }).status === "number"
-					? (err as { status: number }).status
-					: undefined;
-			throw new GitHubError(
-				`GitHub getContent ${fullName}/${path} failed: ${
-					err instanceof Error ? err.message : String(err)
-				}`,
-				status,
-			);
+			throw this.toError(`GitHub getContent ${fullName}/${path} failed`, err);
 		}
 	}
 
@@ -211,10 +235,14 @@ export class GitHubClient {
 			typeof (err as { status?: number }).status === "number"
 				? (err as { status: number }).status
 				: undefined;
-		return new GitHubError(
-			`${ctx}: ${err instanceof Error ? err.message : String(err)}`,
-			status,
-		);
+		const base = `${ctx}: ${err instanceof Error ? err.message : String(err)}`;
+		// A 403/404 on a write is almost always a missing App permission or an
+		// installation that doesn't cover the repo — annotate it so the model and
+		// the user know exactly what to fix instead of seeing GitHub's opaque
+		// "Resource not accessible by integration".
+		const message =
+			status === 403 || status === 404 ? `${base}${scopeHint(ctx)}` : base;
+		return new GitHubError(message, status);
 	}
 
 	/** Default branch for a repo (cached). */
@@ -574,6 +602,91 @@ export class GitHubClient {
 		} catch (err) {
 			throw this.toError(
 				`GitHub createComment ${fullName}#${number} failed`,
+				err,
+			);
+		}
+	}
+
+	/**
+	 * Open a new issue. A regular write (not gated) — closing an issue is the
+	 * separate, approval-gated `closeIssue` path.
+	 */
+	async createIssue(
+		fullName: string,
+		opts: {
+			title: string;
+			body?: string;
+			labels?: string[];
+			assignees?: string[];
+		},
+	): Promise<{ number: number; url: string; title: string; state: string }> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			const res = await octokit.rest.issues.create({
+				owner,
+				repo,
+				title: opts.title,
+				...(opts.body !== undefined ? { body: opts.body } : {}),
+				...(opts.labels ? { labels: opts.labels } : {}),
+				...(opts.assignees ? { assignees: opts.assignees } : {}),
+			});
+			const i = res.data;
+			return {
+				number: i.number,
+				url: i.html_url,
+				title: i.title,
+				state: i.state,
+			};
+		} catch (err) {
+			throw this.toError(`GitHub issues.create ${fullName} failed`, err);
+		}
+	}
+
+	/**
+	 * Update an issue's title/body/labels/assignees. Deliberately does NOT touch
+	 * `state` — closing/reopening goes through the approval-gated `closeIssue` so
+	 * the human gate can't be bypassed via an update.
+	 */
+	async updateIssue(
+		fullName: string,
+		number: number,
+		patch: {
+			title?: string;
+			body?: string;
+			labels?: string[];
+			assignees?: string[];
+		},
+	): Promise<{ number: number; url: string; title: string; state: string }> {
+		const { owner, repo } = this.split(fullName);
+		const octokit = await this.octokit();
+		try {
+			await octokit.rest.issues.update({
+				owner,
+				repo,
+				issue_number: number,
+				...(patch.title !== undefined ? { title: patch.title } : {}),
+				...(patch.body !== undefined ? { body: patch.body } : {}),
+				...(patch.labels !== undefined ? { labels: patch.labels } : {}),
+				...(patch.assignees !== undefined
+					? { assignees: patch.assignees }
+					: {}),
+			});
+			const res = await octokit.rest.issues.get({
+				owner,
+				repo,
+				issue_number: number,
+			});
+			const i = res.data;
+			return {
+				number: i.number,
+				url: i.html_url,
+				title: i.title,
+				state: i.state,
+			};
+		} catch (err) {
+			throw this.toError(
+				`GitHub issues.update ${fullName}#${number} failed`,
 				err,
 			);
 		}
