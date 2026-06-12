@@ -149,6 +149,7 @@ export const defaults: PawConfig = {
 		enabled: false,
 		url: "",
 		serviceKey: "",
+		builderDsn: "",
 		timeout: 10_000,
 	},
 	wordpress: {

@@ -88,6 +88,11 @@ export const KNOWN_SECRET_SLOTS: {
 		label: "Supabase service-role key",
 	},
 	{
+		name: "supabase.builderDsn",
+		scope: "supabase",
+		label: "Supabase paw_builder DSN (scoped DDL role)",
+	},
+	{
 		name: "wordpress.appPassword",
 		scope: "wordpress",
 		label: "WordPress Application Password",
@@ -305,6 +310,9 @@ export class VaultManager {
 		});
 		apply("supabase.serviceKey", (v) => {
 			if (config.supabase) config.supabase.serviceKey = v;
+		});
+		apply("supabase.builderDsn", (v) => {
+			if (config.supabase) config.supabase.builderDsn = v;
 		});
 		apply("wordpress.appPassword", (v) => {
 			if (config.wordpress) config.wordpress.appPassword = v;
