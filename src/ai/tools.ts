@@ -1,6 +1,15 @@
 import type { Sandbox } from "../kernel/sandbox.js";
-import type { ToolDefinition, ToolResult } from "../types/message.js";
 import type { ToolLog } from "../observability/tool-log.js";
+import type { ToolDefinition, ToolResult } from "../types/message.js";
+
+/** A currently-executing tool call (live "running" op for the Agent Ops feed). */
+export interface InFlightOp {
+	seq: number;
+	toolName: string;
+	plugin: string | null;
+	startedAt: number;
+	input: Record<string, unknown>;
+}
 
 export class ToolRegistry {
 	private tools = new Map<string, ToolDefinition>();
@@ -8,8 +17,59 @@ export class ToolRegistry {
 	private enforcePermissions = false;
 	private toolLog: ToolLog | null = null;
 
+	// Live in-flight tool calls — powers the Agent Ops "running" state. Hooks the
+	// single chokepoint every tool call passes through, so it is fail-open and
+	// in-memory (Rider 1): every mutation is try/catch-wrapped so a registry bug
+	// can never throw into execute(); only synchronous Map set/delete on the hot
+	// path (no awaits, no DB writes); bounded size so a leak can't grow unbounded.
+	private inFlight = new Map<number, InFlightOp>();
+	private inFlightSeq = 0;
+	private static readonly IN_FLIGHT_CAP = 256;
+
 	setToolLog(log: ToolLog | null): void {
 		this.toolLog = log;
+	}
+
+	private trackStart(
+		toolName: string,
+		plugin: string | null,
+		input: Record<string, unknown>,
+	): number {
+		try {
+			const seq = ++this.inFlightSeq;
+			// Bound the map: evict the oldest entry rather than grow unbounded.
+			if (this.inFlight.size >= ToolRegistry.IN_FLIGHT_CAP) {
+				const oldest = this.inFlight.keys().next().value;
+				if (oldest !== undefined) this.inFlight.delete(oldest);
+			}
+			this.inFlight.set(seq, {
+				seq,
+				toolName,
+				plugin,
+				startedAt: Date.now(),
+				input,
+			});
+			return seq;
+		} catch {
+			return -1; // fail-open: never block a tool call
+		}
+	}
+
+	private trackEnd(seq: number): void {
+		try {
+			if (seq >= 0) this.inFlight.delete(seq);
+		} catch {
+			/* fail-open */
+		}
+	}
+
+	/** Snapshot of currently-running tool calls. Defensive — never throws. */
+	getInFlight(): InFlightOp[] {
+		try {
+			return [...this.inFlight.values()];
+		} catch {
+			return [];
+		}
 	}
 
 	register(tools: ToolDefinition[]): void {
@@ -83,6 +143,7 @@ export class ToolRegistry {
 			}
 		}
 
+		const seq = this.trackStart(name, tool.plugin ?? null, input);
 		try {
 			const result = await tool.handler(input);
 			this.toolLog?.record({
@@ -105,6 +166,8 @@ export class ToolRegistry {
 				durationMs: Date.now() - start,
 			});
 			return { content: `Tool error: ${msg}`, is_error: true };
+		} finally {
+			this.trackEnd(seq);
 		}
 	}
 

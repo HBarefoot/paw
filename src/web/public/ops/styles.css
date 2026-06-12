@@ -1,0 +1,223 @@
+/* ===========================================================================
+   Agent Ops — dark terminal / green console. Ported from the design handoff
+   (ops/styles.css). EVERYTHING is scoped under .ops-app so it can't clobber
+   paw's global design system (which also defines .topbar/.btn/.stat/.chip/etc.)
+   and so a non-green brand never breaks it — the page is self-themed; only the
+   chrome accent flows from the brand (var(--brand-accent, #3fe08f)). The canvas
+   keeps the design green (hardcoded in the lens JS) by design.
+   =========================================================================== */
+
+/* Vendored fonts (offline / CSP parity — served from 'self', no Google CDN). */
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/jetbrains-mono-400.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/jetbrains-mono-500.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/jetbrains-mono-600.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/jetbrains-mono-700.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/space-grotesk-400.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/space-grotesk-500.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/space-grotesk-600.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/space-grotesk-700.woff2") format("woff2"); }
+
+/* Full-bleed the ops console inside paw's Layout content area. */
+.content.ops-content {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #050708;
+}
+
+.ops-app {
+  /* design tokens (scoped) */
+  --ops-bg: #050708;
+  --ops-bg-1: #080b0c;
+  --ops-panel: #0a0e0f;
+  --ops-panel-2: #0d1213;
+  --ops-line: rgba(120, 200, 165, 0.10);
+  --ops-line-2: rgba(120, 200, 165, 0.18);
+  --ops-ink: #d6ddd7;
+  --ops-ink-bright: #eef4ef;
+  --ops-ink-dim: #7c887f;
+  --ops-ink-faint: #4a534c;
+  /* Accent follows the active brand (server-inlined on #ops-root as
+     style="--ops-green:<brand accent>"); the design green is the fallback.
+     Status colors (amber/red/cyan) are fixed below — semantics, not brand. */
+  --ops-green: #3fe08f;
+  --ops-red: #e5604d;
+  --ops-r: 10px;
+  --ops-r-sm: 7px;
+  --ops-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --ops-sans: "Space Grotesk", var(--ops-mono);
+
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 312px;
+  grid-template-rows: 56px 1fr 64px;
+  grid-template-areas:
+    "top   top"
+    "stage insp"
+    "scrub insp";
+  color: var(--ops-ink);
+  font-family: var(--ops-mono);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(63, 224, 143, 0.05), transparent 60%),
+    var(--ops-bg);
+}
+.ops-app.no-insp { grid-template-columns: 1fr 0; }
+.ops-app * { box-sizing: border-box; }
+.ops-app .mono { font-family: var(--ops-mono); }
+.ops-app .dim { color: var(--ops-ink-dim); }
+.ops-app .bright { color: var(--ops-ink-bright); }
+.ops-app .tnum { font-variant-numeric: tabular-nums; }
+
+/* ---- Top bar ---- */
+.ops-app .topbar {
+  grid-area: top; display: flex; align-items: center; gap: 22px;
+  padding: 0 20px; border: none; border-bottom: 1px solid var(--ops-line);
+  background: linear-gradient(180deg, rgba(13, 18, 19, 0.7), rgba(8, 11, 12, 0.4));
+  backdrop-filter: blur(6px); position: static;
+}
+.ops-app .brand { display: flex; align-items: center; gap: 12px; }
+.ops-app .brand .logo {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: radial-gradient(circle at 50% 45%, #0b0f10 0 32%, rgba(63, 224, 143, 0) 33%),
+              radial-gradient(circle at 50% 50%, rgba(63, 224, 143, 0.55), rgba(63, 224, 143, 0) 70%);
+  border: 1px solid var(--ops-line-2); position: relative;
+}
+.ops-app .brand .logo::after {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 8px; height: 5px;
+  background: #050708; border-radius: 3px; box-shadow: -3px 0 0 #050708, 3px 0 0 #050708;
+}
+.ops-app .brand .name { font-family: var(--ops-sans); font-weight: 600; letter-spacing: 0.04em; color: var(--ops-ink-bright); }
+.ops-app .live-pill {
+  display: inline-flex; align-items: center; gap: 7px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid rgba(63, 224, 143, 0.35); background: rgba(63, 224, 143, 0.08);
+  color: var(--ops-green); font-size: 11px; letter-spacing: 0.18em;
+}
+.ops-app .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ops-green); display: inline-block; }
+.ops-app .dot.pulse { animation: opsdotpulse 1.6s ease-in-out infinite; }
+@keyframes opsdotpulse { 0%,100% { box-shadow: 0 0 0 0 rgba(63, 224, 143, 0.6); } 50% { box-shadow: 0 0 0 5px rgba(63, 224, 143, 0); } }
+.ops-app .top-stats { margin-left: auto; display: flex; align-items: center; gap: 26px; }
+.ops-app .stat { display: flex; flex-direction: column; gap: 1px; min-width: 52px; }
+.ops-app .stat .v { font-family: var(--ops-sans); font-size: 17px; color: var(--ops-ink-bright); line-height: 1; }
+.ops-app .stat .k { font-size: 9.5px; letter-spacing: 0.14em; color: var(--ops-ink-dim); text-transform: uppercase; }
+.ops-app .stat .v.err { color: var(--ops-red); }
+.ops-app .model-chip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 11px;
+  border: 1px solid var(--ops-line-2); border-radius: 999px; background: var(--ops-panel-2);
+  color: var(--ops-ink-bright);
+}
+
+/* ---- Control buttons ---- */
+.ops-app .ctrl { display: flex; align-items: center; gap: 6px; }
+.ops-app .btn {
+  font-family: var(--ops-mono); font-size: 11px; color: var(--ops-ink);
+  background: var(--ops-panel-2); border: 1px solid var(--ops-line);
+  border-radius: var(--ops-r-sm); padding: 6px 10px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; transition: all .14s ease; letter-spacing: 0.04em;
+}
+.ops-app .btn:hover { border-color: var(--ops-line-2); color: var(--ops-ink-bright); background-color: #101718; }
+.ops-app .btn.on { color: var(--ops-green); border-color: rgba(63, 224, 143, 0.4); background: rgba(63, 224, 143, 0.08); }
+.ops-app .seg { display: inline-flex; border: 1px solid var(--ops-line); border-radius: var(--ops-r-sm); overflow: hidden; }
+.ops-app .seg .btn { border: none; border-radius: 0; border-right: 1px solid var(--ops-line); }
+.ops-app .seg .btn:last-child { border-right: none; }
+
+/* ---- Lens switcher (top-bar dropdown; replaces the old left rail) ---- */
+.ops-app .lens { position: relative; }
+.ops-app .lens-btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px;
+  font-family: var(--ops-mono); font-size: 11px; color: var(--ops-ink-bright);
+  background: var(--ops-panel-2); border: 1px solid var(--ops-line-2);
+  border-radius: var(--ops-r-sm); cursor: pointer; transition: border-color .14s ease;
+}
+.ops-app .lens-btn:hover { border-color: var(--ops-green); }
+.ops-app .lens-btn .glyph { width: 16px; height: 16px; color: var(--ops-green); }
+.ops-app .lens-btn .cv { color: var(--ops-ink-dim); transition: transform .15s ease; }
+.ops-app .lens.open .lens-btn .cv { transform: rotate(180deg); }
+.ops-app .lens-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 240px;
+  background: rgba(8, 12, 13, 0.98); border: 1px solid var(--ops-line-2);
+  border-radius: var(--ops-r); padding: 6px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  display: none; flex-direction: column; gap: 2px;
+}
+.ops-app .lens.open .lens-menu { display: flex; }
+.ops-app .lens-item {
+  text-align: left; cursor: pointer; border: 1px solid transparent; border-radius: var(--ops-r-sm);
+  background: transparent; color: var(--ops-ink-dim); padding: 9px 10px; display: grid;
+  grid-template-columns: 18px 1fr; gap: 10px; align-items: center; transition: all .13s ease; width: 100%;
+}
+.ops-app .lens-item:hover { background: var(--ops-panel-2); color: var(--ops-ink); }
+.ops-app .lens-item.on { background: var(--ops-panel-2); color: var(--ops-ink-bright); }
+.ops-app .lens-item.soon { opacity: 0.45; cursor: default; }
+.ops-app .lens-item.soon:hover { background: transparent; color: var(--ops-ink-dim); }
+.ops-app .lens-item .glyph { width: 18px; height: 18px; }
+.ops-app .lens-item.on .glyph { color: var(--ops-green); }
+.ops-app .lens-item .t { font-family: var(--ops-sans); font-size: 12.5px; line-height: 1.1; display: block; }
+.ops-app .lens-item .d { font-size: 10px; color: var(--ops-ink-faint); margin-top: 2px; line-height: 1.2; display: block; }
+
+/* ---- Stage ---- */
+.ops-app .stage { grid-area: stage; position: relative; overflow: hidden; }
+.ops-app .viz-root { position: absolute; inset: 0; }
+.ops-app .viz-root canvas { position: absolute; inset: 0; }
+
+/* ---- Scrub timeline ---- */
+.ops-app .scrub {
+  grid-area: scrub; border-top: 1px solid var(--ops-line); border-right: 1px solid var(--ops-line);
+  padding: 9px 18px; display: flex; align-items: center; gap: 14px;
+  background: linear-gradient(180deg, transparent, rgba(10, 14, 15, 0.5));
+}
+.ops-app .scrub .lbl { font-size: 9.5px; letter-spacing: 0.14em; color: var(--ops-ink-dim); text-transform: uppercase; white-space: nowrap; }
+.ops-app .scrub-track { position: relative; flex: 1; height: 34px; cursor: pointer; touch-action: none; }
+.ops-app .scrub-track canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ops-app .scrub .cursor { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ops-green); pointer-events: none; box-shadow: 0 0 8px rgba(63, 224, 143, 0.7); }
+.ops-app .scrub .now-badge { font-size: 10px; color: var(--ops-green); letter-spacing: 0.1em; white-space: nowrap; }
+.ops-app .scrub .live-btn { white-space: nowrap; }
+
+/* ---- Inspector ---- */
+.ops-app .insp {
+  grid-area: insp; border-left: 1px solid var(--ops-line);
+  display: flex; flex-direction: column; min-height: 0;
+  background: linear-gradient(180deg, rgba(10, 14, 15, 0.5), transparent);
+}
+.ops-app.no-insp .insp { display: none; }
+.ops-app .insp .sec { border-bottom: 1px solid var(--ops-line); padding: 14px 16px; }
+.ops-app .insp .sec.grow { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.ops-app .insp .sec-hd { font-size: 9.5px; letter-spacing: 0.16em; color: var(--ops-ink-dim); text-transform: uppercase; margin-bottom: 11px; display: flex; justify-content: space-between; align-items: center; }
+.ops-app .kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 12px; }
+.ops-app .kv .k { color: var(--ops-ink-dim); }
+.ops-app .kv .v { color: var(--ops-ink-bright); font-variant-numeric: tabular-nums; }
+.ops-app .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ops-app .chip {
+  font-size: 10.5px; padding: 4px 9px 4px 8px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--ops-line); background: var(--ops-panel-2); color: var(--ops-ink-dim);
+  display: inline-flex; align-items: center; gap: 6px; transition: all .13s ease; user-select: none;
+}
+.ops-app .chip .sw { width: 7px; height: 7px; border-radius: 50%; }
+.ops-app .chip.on { color: var(--ops-ink-bright); border-color: var(--ops-line-2); }
+.ops-app .chip.off { opacity: 0.4; }
+.ops-app .feed { overflow-y: auto; flex: 1; margin: 0 -4px; }
+.ops-app .feed-row {
+  display: grid; grid-template-columns: 10px 1fr auto; gap: 9px; align-items: center;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; background: transparent;
+}
+.ops-app .feed-row:hover { background: var(--ops-panel-2); }
+.ops-app .feed-row.sel { background: rgba(63, 224, 143, 0.07); }
+.ops-app .feed-row .st { width: 7px; height: 7px; border-radius: 50%; }
+.ops-app .feed-row .nm { color: var(--ops-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ops-app .feed-row .ms { color: var(--ops-ink-faint); font-variant-numeric: tabular-nums; font-size: 10.5px; }
+.ops-app .feed-row.enter { animation: opsfeedin .4s ease; }
+@keyframes opsfeedin { from { background: rgba(63, 224, 143, 0.16); } to { background: transparent; } }
+.ops-app .empty { color: var(--ops-ink-faint); font-size: 11px; padding: 8px; line-height: 1.6; }
+
+/* ---- Tooltip (appended to <body>, outside .ops-app) ---- */
+.ops-tip {
+  position: fixed; z-index: 50; pointer-events: none; background: rgba(8, 12, 13, 0.96);
+  border: 1px solid rgba(120, 200, 165, 0.18); border-radius: 8px; padding: 9px 11px; font-size: 11px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6); max-width: 240px; color: #d6ddd7;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.ops-tip .tt { color: #eef4ef; font-family: "Space Grotesk", "JetBrains Mono", monospace; margin-bottom: 5px; }
+.ops-tip .tr { display: flex; justify-content: space-between; gap: 14px; color: #7c887f; padding: 1px 0; }
+.ops-tip .tr b { color: #d6ddd7; font-weight: 500; }

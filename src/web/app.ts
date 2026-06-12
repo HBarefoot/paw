@@ -46,7 +46,6 @@ import {
 	getSessionWithMessages,
 	listRecentSessions,
 	listRecentSessionsForUser,
-	recentSessionActivity,
 	updateSessionTitle,
 	updateSessionTitleOwnedBy,
 } from "../store/sessions.js";
@@ -59,6 +58,7 @@ import { createSecurityHeaders } from "./middleware/security-headers.js";
 import { canvasContentType, injectCanvasRuntime } from "./canvas-serve.js";
 import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
 import { createFormReceiver } from "./routes/forms.js";
+import { buildOpsFeed } from "./routes/ops-feed.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
 import { BrandPage } from "./views/brand-page.js";
 import { ConfigPage } from "./views/config-page.js";
@@ -68,7 +68,7 @@ import { NotificationsPage } from "./views/notifications-page.js";
 import { KNOWN_SECRET_SLOTS, type VaultScope } from "../security/vault.js";
 // canvas-page.tsx removed — canvas is now merged into chat
 import { CronPage } from "./views/cron-page.js";
-import { DashboardPage } from "./views/dashboard.js";
+import { OpsPage } from "./views/ops-page.js";
 import { HeartbeatPage } from "./views/heartbeat-page.js";
 import { LoginPage } from "./views/login-page.js";
 import { MCPPage } from "./views/mcp-page.js";
@@ -224,113 +224,6 @@ function readTotals(db: import("bun:sqlite").Database): {
 	} catch {
 		return { sessions: 0, messages: 0 };
 	}
-}
-
-interface AgentActivityItem {
-	ts: string;
-	kind: "tool" | "turn" | "note";
-	label: string;
-	sub?: string;
-	ok?: boolean;
-}
-
-function shortSession(id: string): string {
-	return id.length > 14 ? `${id.slice(0, 14)}…` : id;
-}
-
-/** Merge recent tool calls, model turns, and notifications into one time-sorted
- * "what the agent did" stream for the Dashboard live feed. */
-function buildAgentActivity(kernel: Kernel, limit: number): AgentActivityItem[] {
-	const db = kernel.database;
-	const items: AgentActivityItem[] = [];
-	try {
-		for (const t of kernel.tools?.query({ limit: 10 }) ?? []) {
-			items.push({
-				ts: t.created_at,
-				kind: "tool",
-				label: t.tool_name,
-				sub: t.session_id ? shortSession(t.session_id) : undefined,
-				ok: t.is_error === 0,
-			});
-		}
-	} catch {
-		/* ignore */
-	}
-	try {
-		const turns = db
-			.query<
-				{
-					session_id: string;
-					model: string;
-					input_tokens: number;
-					output_tokens: number;
-					created_at: string;
-				},
-				[number]
-			>(
-				"SELECT session_id, model, input_tokens, output_tokens, created_at FROM usage_log ORDER BY id DESC LIMIT ?",
-			)
-			.all(8);
-		for (const u of turns) {
-			items.push({
-				ts: u.created_at,
-				kind: "turn",
-				label: u.model,
-				sub: `${u.input_tokens + u.output_tokens} tok · ${shortSession(u.session_id)}`,
-			});
-		}
-	} catch {
-		/* ignore */
-	}
-	try {
-		for (const n of kernel.notifications.listRecent(6)) {
-			items.push({
-				ts: n.created_at,
-				kind: "note",
-				label: n.title,
-				sub: n.level,
-			});
-		}
-	} catch {
-		/* ignore */
-	}
-	items.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
-	return items.slice(0, limit);
-}
-
-interface TimelineBuckets {
-	requests: number[];
-	tokens: number[];
-	totalRequests: number;
-	totalTokens: number;
-	peak: number;
-}
-
-/** Expand sparse hourly usage rows into a fixed-width (last `hours`) series,
- * filling empty hours with 0 so the Dashboard timeline reads as a real chart. */
-function hourlyBuckets(
-	rows: Array<{ bucket: string; requests: number; tokens: number }>,
-	hours: number,
-): TimelineBuckets {
-	const map = new Map(rows.map((r) => [r.bucket, r]));
-	const pad = (n: number) => String(n).padStart(2, "0");
-	const requests: number[] = [];
-	const tokens: number[] = [];
-	const now = Date.now();
-	for (let i = hours - 1; i >= 0; i--) {
-		const d = new Date(now - i * 3_600_000);
-		const key = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:00`;
-		const row = map.get(key);
-		requests.push(row?.requests ?? 0);
-		tokens.push(row?.tokens ?? 0);
-	}
-	return {
-		requests,
-		tokens,
-		totalRequests: requests.reduce((a, b) => a + b, 0),
-		totalTokens: tokens.reduce((a, b) => a + b, 0),
-		peak: Math.max(...requests, 0),
-	};
 }
 
 export interface SceneNode {
@@ -930,82 +823,36 @@ export function createWebApp(
 
 	// --- Pages ---
 
-	app.get("/", async (c) => {
-		const health = await kernel.healthCheck();
-		const memoryStats = kernel.memory?.getStats() ?? null;
-		const cronJobs = kernel.cron?.listJobs() ?? [];
-		const uptime = process.uptime() * 1000;
-
-		const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-			.toISOString()
-			.replace("T", " ")
-			.replace(/\.\d+Z$/, "");
-		const usage = kernel.costs?.getTotalCost({ since: sevenDaysAgo }) ?? null;
-		const feedbackStats = kernel.feedback?.getFeedbackStats() ?? null;
-		const totals = readTotals(kernel.database);
-
-		// ── Agent operations ────────────────────────────────────────────────
-		const db = kernel.database;
-		const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
-			.toISOString()
-			.replace("T", " ")
-			.replace(/\.\d+Z$/, "");
-		const toolUsage =
-			kernel.tools?.usageCounts({ since: sevenDaysAgo, limit: 8 }) ?? [];
-		// Channel-diverse recents: surface the latest session of each channel first
-		// (so Slack/canvas aren't crowded out by active web sessions), then fill by
-		// recency.
-		const recentPool = recentSessionActivity(db, 50);
-		const firstPerChannel: typeof recentPool = [];
-		const restSessions: typeof recentPool = [];
-		const seenChannel = new Set<string>();
-		for (const s of recentPool) {
-			if (seenChannel.has(s.channel)) {
-				restSessions.push(s);
-			} else {
-				seenChannel.add(s.channel);
-				firstPerChannel.push(s);
-			}
-		}
-		const recentSessions = [...firstPerChannel, ...restSessions].slice(0, 8);
-		const timeline = hourlyBuckets(
-			kernel.costs?.getTimeline({ since: dayAgo }) ?? [],
-			24,
-		);
-		const activity = buildAgentActivity(kernel, 14);
-		const nodes = agentSceneNodes(kernel);
-		const latestTurn = db
+	// Resolve the active model id (latest turn → configured provider model).
+	function currentModel(): string {
+		const latest = kernel.database
 			.query<{ model: string }, []>(
 				"SELECT model FROM usage_log ORDER BY id DESC LIMIT 1",
 			)
 			.get();
-		const cfgModel =
-			config.provider === "ollama"
+		return (
+			latest?.model ??
+			(config.provider === "ollama"
 				? config.ollama.model
 				: config.provider === "openai"
 					? config.openai.model
 					: config.provider === "gemini"
 						? config.gemini.model
-						: config.ai.model;
-		const sceneModel = latestTurn?.model ?? cfgModel;
+						: config.ai.model)
+		);
+	}
 
+	// Dashboard — the Agent Ops console (real operation stream rendered through
+	// canvas lenses). The page shell is OpsPage; all visual logic lives in the
+	// static modules under /ops/static/* reading /api/ops/feed.
+	app.get("/", (c) => {
+		const brand = getActiveBrand(kernel.database);
+		const colors = brand?.data.colors ?? {};
 		return c.html(
-			DashboardPage({
-				health,
-				memoryStats,
-				cronJobs,
-				provider: config.provider,
-				plugins: kernel.pluginNames,
-				uptime,
-				usage,
-				feedback: feedbackStats,
-				totals,
-				activity,
-				timeline,
-				recentSessions,
-				toolUsage,
-				nodes,
-				sceneModel,
+			OpsPage({
+				accent: colors.accent || colors.primary || "",
+				model: currentModel(),
+				uptimeMs: process.uptime() * 1000,
 			}),
 		);
 	});
@@ -1065,6 +912,27 @@ export function createWebApp(
 			turns,
 			agents,
 		});
+	});
+
+	// Agent Ops live feed — real operation stream behind the dashboard canvas
+	// lenses (Swarm/Stream/…). Logic lives in routes/ops-feed.ts (unit-tested);
+	// this only adapts the kernel into its deps. Polled ~2s → `live` rate class.
+	app.get("/api/ops/feed", (c) => {
+		const since = Number.parseInt(c.req.query("since") ?? "0", 10) || 0;
+		return c.json(
+			buildOpsFeed(
+				{
+					toolLog: kernel.tools,
+					inFlight: kernel.toolRegistryPublic?.getInFlight?.() ?? [],
+					nodes: agentSceneNodes(kernel),
+					rowKey: (row) => skillKeyForToolRow(kernel, row),
+					agents: kernel.activeAgents,
+					model: currentModel(),
+					now: Date.now(),
+				},
+				since,
+			),
+		);
 	});
 
 	app.post("/api/credentials/:service", async (c) => {
@@ -1851,6 +1719,34 @@ export function createWebApp(
 	});
 
 	app.get("/favicon.ico", (c) => c.redirect("/favicon.png", 301));
+
+	// Agent Ops static modules + vendored fonts (served from 'self', so they
+	// satisfy the page CSP's script-src/font-src without a CDN). Strict filename
+	// whitelist (no path traversal); real .js/.css/.woff2 files under public/.
+	app.get("/ops/static/:file", async (c) => {
+		const file = c.req.param("file");
+		if (!/^[a-z0-9_-]+\.(js|css)$/.test(file)) return c.text("Not found", 404);
+		const p = resolve(import.meta.dir, "public/ops", file);
+		if (!existsSync(p)) return c.text("Not found", 404);
+		c.header(
+			"Content-Type",
+			file.endsWith(".css")
+				? "text/css; charset=utf-8"
+				: "application/javascript; charset=utf-8",
+		);
+		c.header("Cache-Control", "public, max-age=3600");
+		return c.body(await Bun.file(p).arrayBuffer());
+	});
+
+	app.get("/fonts/:file", async (c) => {
+		const file = c.req.param("file");
+		if (!/^[a-z0-9_-]+\.woff2$/.test(file)) return c.text("Not found", 404);
+		const p = resolve(import.meta.dir, "public/fonts", file);
+		if (!existsSync(p)) return c.text("Not found", 404);
+		c.header("Content-Type", "font/woff2");
+		c.header("Cache-Control", "public, max-age=604800");
+		return c.body(await Bun.file(p).arrayBuffer());
+	});
 
 	// --- Canvas ---
 
