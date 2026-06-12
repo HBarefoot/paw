@@ -1938,6 +1938,9 @@ export function getChatScript(): string {
   function renderExplorer() {
     var tree = document.getElementById("explorer-tree");
     if (!tree) return;
+    // Preserve scroll position across a re-render (e.g. a mid-conversation
+    // file-changed refresh) so the tree does not jump to the top.
+    var savedScroll = tree.scrollTop;
     var searchInput = document.getElementById("explorer-search-input");
     var q = searchInput ? searchInput.value.trim().toLowerCase() : "";
     if (q && document.getElementById("explorer-search-content") && document.getElementById("explorer-search-content").checked) {
@@ -1961,6 +1964,7 @@ export function getChatScript(): string {
     renderNode(rootTree, 0, out);
     tree.innerHTML = out.join("");
     bindTreeRows();
+    tree.scrollTop = savedScroll;
   }
 
   function bindTreeRows() {
