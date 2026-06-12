@@ -185,4 +185,10 @@ export interface PawConfig {
 		repoAllowlist: string[];
 		autoInvestigateCi: boolean;
 	};
+	supabase: {
+		enabled: boolean;
+		url: string;
+		serviceKey: string;
+		timeout: number;
+	};
 }

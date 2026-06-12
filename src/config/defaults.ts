@@ -145,4 +145,10 @@ export const defaults: PawConfig = {
 		repoAllowlist: [],
 		autoInvestigateCi: true,
 	},
+	supabase: {
+		enabled: false,
+		url: "",
+		serviceKey: "",
+		timeout: 10_000,
+	},
 };

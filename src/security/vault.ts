@@ -28,6 +28,7 @@ export type VaultScope =
 	| "mcp"
 	| "n8n"
 	| "github"
+	| "supabase"
 	| "custom";
 
 export interface VaultSecretMeta {
@@ -79,6 +80,11 @@ export const KNOWN_SECRET_SLOTS: {
 		name: "github.webhookSecret",
 		scope: "github",
 		label: "GitHub webhook signing secret",
+	},
+	{
+		name: "supabase.serviceKey",
+		scope: "supabase",
+		label: "Supabase service-role key",
 	},
 ];
 
@@ -290,6 +296,9 @@ export class VaultManager {
 		});
 		apply("github.webhookSecret", (v) => {
 			if (config.github) config.github.webhookSecret = v;
+		});
+		apply("supabase.serviceKey", (v) => {
+			if (config.supabase) config.supabase.serviceKey = v;
 		});
 
 		// Per-MCP-server bearer tokens: vault name `mcp.<server>.authToken`.
