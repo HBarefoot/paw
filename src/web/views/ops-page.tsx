@@ -38,6 +38,7 @@ export const OpsPage: FC<OpsPageProps> = ({ accent, model, uptimeMs }) => {
 			{raw(`<script src="/ops/static/ui.js"></script>`)}
 			{raw(`<script src="/ops/static/engine.js"></script>`)}
 			{raw(`<script src="/ops/static/viz-stream.js"></script>`)}
+			{raw(`<script src="/ops/static/viz-swarm.js"></script>`)}
 			{raw(`<script src="/ops/static/shell.js"></script>`)}
 			{raw(`<script>(function(){
   var c = document.querySelector(".content");

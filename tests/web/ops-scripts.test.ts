@@ -7,7 +7,13 @@ function read(file: string): string {
 	return readFileSync(new URL(file, ROOT), "utf8");
 }
 
-const MODULES = ["ui.js", "engine.js", "viz-stream.js", "shell.js"];
+const MODULES = [
+	"ui.js",
+	"engine.js",
+	"viz-stream.js",
+	"viz-swarm.js",
+	"shell.js",
+];
 
 // A 2D-context stub: any method is a no-op returning a gradient stub; property
 // assignments are accepted. Enough to drive a lens frame without a real canvas.
@@ -167,6 +173,73 @@ describe("ops static modules", () => {
 		const lens = VizStream(ctx);
 		expect(() => lens.frame()).not.toThrow();
 		// also exercise the review (scrubbed) path
+		ctx.state.viewTime = 99800;
+		expect(() => lens.frame()).not.toThrow();
+	});
+
+	test("viz-swarm.js draws a frame without throwing (runtime guard)", () => {
+		const win: Record<string, unknown> = { devicePixelRatio: 1 };
+		runModule(win, {}, read("ui.js"));
+		runModule(win, {}, read("viz-swarm.js"));
+		const VizSwarm = win.VizSwarm as (ctx: unknown) => { frame: () => void };
+		expect(typeof VizSwarm).toBe("function");
+
+		const engine = {
+			TOOLS: [
+				{ id: "core", label: "Core", color: "#3fe08f" },
+				{ id: "files", label: "Files", color: "#7ee06a" },
+			],
+			TOOL_BY_ID: { core: { color: "#3fe08f" }, files: { color: "#7ee06a" } },
+			simNow: 100000,
+			model: "test-model",
+			windowStats: () => ({
+				tps: 1,
+				active: 1,
+				errorRate: 0,
+				avgLatency: 10,
+				avgDuration: 100,
+				total: 3,
+			}),
+			ops: [
+				{
+					id: 1,
+					toolId: "files",
+					op: "file_read",
+					status: "ok",
+					startedAt: 99000,
+					endAt: 99200,
+					duration: 200,
+					taskId: 42,
+					taskLabel: "dig",
+				},
+				{
+					id: 2,
+					toolId: "core",
+					op: "plan",
+					status: "running",
+					startedAt: 99600,
+					endAt: 100000,
+					duration: 500,
+					taskId: 42,
+					taskLabel: "dig",
+				},
+			],
+		};
+		const ctx = {
+			canvas: makeCanvas(),
+			size: { w: 900, h: 600, dpr: 1 },
+			engine,
+			ui: win.OpsUI,
+			accent: "#3fe08f",
+			state: {
+				enabled: new Set(["core", "files"]),
+				viewTime: "live" as string | number,
+				selectedId: -1,
+			},
+			actions: { toggleTool() {}, selectOp() {} },
+		};
+		const lens = VizSwarm(ctx);
+		expect(() => lens.frame()).not.toThrow();
 		ctx.state.viewTime = 99800;
 		expect(() => lens.frame()).not.toThrow();
 	});
