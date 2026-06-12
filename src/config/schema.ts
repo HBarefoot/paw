@@ -8,6 +8,18 @@ export const configSchema = z.object({
 		model: z.string().default("claude-sonnet-4-5-20250929"),
 		maxTokens: z.number().int().positive().default(4096),
 		maxToolRoundtrips: z.number().int().positive().default(50),
+		// Optional image-understanding route. When configured, inbound turns that
+		// carry image attachments are served by this provider/model instead of the
+		// (possibly text-only) default; text turns are untouched. Credentials reuse
+		// the chosen provider's existing config/vault path — no new secret storage.
+		// Absent ⇒ no vision routing (text-only deploys behave identically).
+		vision: z
+			.object({
+				provider: z.enum(["claude", "ollama", "openai", "gemini"]),
+				model: z.string().min(1),
+				enabled: z.boolean().default(true),
+			})
+			.optional(),
 	}),
 	ollama: z.object({
 		baseUrl: z.string().default("http://localhost:11434"),

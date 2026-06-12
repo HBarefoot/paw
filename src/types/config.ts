@@ -6,6 +6,13 @@ export interface PawConfig {
 		model: string;
 		maxTokens: number;
 		maxToolRoundtrips: number;
+		/** Optional image-understanding route (mirrors the Zod schema). When set,
+		 * image-bearing turns are served by this provider/model. */
+		vision?: {
+			provider: "claude" | "ollama" | "openai" | "gemini";
+			model: string;
+			enabled: boolean;
+		};
 	};
 	ollama: {
 		baseUrl: string;

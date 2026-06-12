@@ -32,7 +32,13 @@ import {
 } from "../memory/auto-extract.js";
 import { FeedbackStore } from "../feedback/store.js";
 import { detectCorrection } from "../feedback/correction-detector.js";
-import { ProviderRouter } from "../ai/router.js";
+import {
+	ProviderRouter,
+	VISION_ERROR_NOTE,
+	VISION_UNCONFIGURED_NOTE,
+	planImageTurn,
+	withVisionFallback,
+} from "../ai/router.js";
 import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
 import { ToolLog } from "../observability/tool-log.js";
 import { createProactiveTriggerTools } from "../cron/trigger-tools.js";
@@ -70,6 +76,10 @@ export class Kernel {
 	private provider: AIProvider;
 	private allProviders: Map<string, AIProvider> = new Map();
 	private providerRouter: ProviderRouter | null = null;
+	// Optional vision route: a distinct provider instance built with the vision
+	// model (config.ai.vision). Null when vision isn't configured/keyed.
+	private visionProvider: AIProvider | null = null;
+	private visionModel: string | null = null;
 	private costTracker: CostTracker | null = null;
 	private toolLog: ToolLog | null = null;
 	private activeAbortControllers: Map<string, AbortController> = new Map();
@@ -300,18 +310,26 @@ export class Kernel {
 		// Store the primary provider in the provider map
 		this.allProviders.set(config.provider, this.provider);
 
-		// Initialize all other configured providers for routing
-		if (config.routing?.enabled) {
-			this.initSecondaryProviders(config, aiLogger);
+		// Optional vision route (image-bearing turns) — a distinct provider
+		// instance built with the vision model. Independent of general routing.
+		this.visionProvider = this.buildVisionProvider(config, aiLogger);
+
+		// Initialize the router when general routing OR vision is configured.
+		if (config.routing?.enabled || this.visionProvider) {
+			if (config.routing?.enabled) {
+				this.initSecondaryProviders(config, aiLogger);
+			}
 			this.providerRouter = new ProviderRouter({
 				providers: this.allProviders,
-				rules: config.routing.rules,
+				rules: config.routing?.rules ?? [],
 				defaultProvider: this.provider,
+				visionProvider: this.visionProvider,
 				logger: createLogger("router"),
 			});
 			this.logger.info("Provider router initialized", {
 				providers: [...this.allProviders.keys()],
-				rules: config.routing.rules.length,
+				rules: config.routing?.rules?.length ?? 0,
+				vision: this.visionProvider ? config.ai.vision?.model : null,
 			});
 		}
 
@@ -1309,34 +1327,50 @@ export class Kernel {
 		this.activeAbortControllers.set(msg.sessionId, controller);
 
 		try {
-			const response = await this.provider.chat(
-				messages,
-				systemPrompt,
-				msg.sessionId,
-				{ signal: controller.signal },
-			);
+			// Vision routing: image turns go to the vision provider/model when
+			// configured; text turns are untouched. On a vision-provider error we
+			// degrade to the default and keep the user's message (with a note).
+			const route = this.routeInboundTurn(messages);
+			const { value: response, usedFallback } = await withVisionFallback({
+				isVision: route.isVision,
+				primary: () =>
+					route.provider.chat(messages, systemPrompt, msg.sessionId, {
+						signal: controller.signal,
+					}),
+				onFallback: () => {
+					this.logger.warn("Vision provider failed; falling back to default", {});
+					return this.provider.chat(messages, systemPrompt, msg.sessionId, {
+						signal: controller.signal,
+					});
+				},
+			});
+			const usedProvider = usedFallback ? this.provider : route.provider;
+			const usedModel = usedFallback ? this.config.ai.model : route.model;
+			const note = usedFallback ? VISION_ERROR_NOTE : route.note;
 			// B6.4: don't fabricate "Done — canvas updated." for an empty
 			// canvas reply — we can't confirm a canvas_write actually ran here,
 			// and asserting success on a no-op is exactly the hallucination we
 			// want to avoid. (The streaming canvas path already uses the raw
 			// reply text; this keeps both paths honest.)
-			const replyText = response.text || "";
+			let replyText = response.text || "";
+			if (note) replyText = `${note}\n\n${replyText}`;
 			appendMessage(this.db, msg.sessionId, "assistant", replyText);
 
 			// M-NEW-12: record cost in the non-stream path too. If the
 			// provider returned usage, use it; otherwise fall back to a
 			// rough char-based estimate so cost data is non-zero for
-			// non-Claude providers.
+			// non-Claude providers. Tagged with the provider/model that served
+			// the turn (vision model on the vision route, default after fallback).
 			if (this.costTracker) {
 				const usageIn = response.usage?.inputTokens;
 				const usageOut = response.usage?.outputTokens;
 				const inputTokens =
 					usageIn ?? estimateTokens(systemPrompt + "\n" + msg.content);
 				const outputTokens = usageOut ?? estimateTokens(replyText);
-				const model = this.config.ai.model;
+				const model = usedModel;
 				this.costTracker.recordUsage({
 					sessionId: msg.sessionId,
-					provider: this.provider.name ?? this.config.provider,
+					provider: usedProvider.name ?? this.config.provider,
 					model,
 					inputTokens,
 					outputTokens,
@@ -1616,9 +1650,18 @@ export class Kernel {
 		let lastProvider: string | undefined;
 		let lastModel: string | undefined;
 
-		try {
-			if (this.provider.chatStream) {
-				for await (const chunk of this.provider.chatStream(
+		// Vision routing: image turns stream from the vision provider/model when
+		// configured. The chunk loop is extracted so it can be retried on the
+		// default provider if the vision route errors before producing output.
+		const route = this.routeInboundTurn(messages);
+		let effectiveModel = route.model;
+		let effectiveProviderName: string = route.provider.name;
+		let producedModelText = false;
+		const streamWith = async function* (
+			provider: AIProvider,
+		): AsyncGenerator<StreamChunk> {
+			if (provider.chatStream) {
+				for await (const chunk of provider.chatStream(
 					messages,
 					systemPrompt,
 					msg.sessionId,
@@ -1630,6 +1673,7 @@ export class Kernel {
 					}
 					if (chunk.type === "text_delta" && chunk.text) {
 						fullText += chunk.text;
+						producedModelText = true;
 					}
 					if (chunk.type === "usage" && chunk.usage) {
 						inputTokensTotal += chunk.usage.inputTokens ?? 0;
@@ -1655,17 +1699,48 @@ export class Kernel {
 				}
 			} else {
 				yield { type: "thinking" } as StreamChunk;
-				const response = await this.provider.chat(
+				const response = await provider.chat(
 					messages,
 					systemPrompt,
 					msg.sessionId,
 					{ signal: controller.signal },
 				);
-				fullText = response.text;
+				fullText += response.text;
+				producedModelText = true;
 				yield { type: "text_delta", text: response.text };
 				if (response.usage) {
 					inputTokensTotal += response.usage.inputTokens;
 					outputTokensTotal += response.usage.outputTokens;
+				}
+			}
+		};
+
+		try {
+			if (route.note) {
+				yield { type: "text_delta", text: `${route.note}\n\n` };
+				fullText += `${route.note}\n\n`;
+			}
+			try {
+				yield* streamWith(route.provider);
+			} catch (streamErr) {
+				// Vision provider failed before any output → degrade to default,
+				// keep the user's message, and tag cost with the default model.
+				if (route.isVision && !producedModelText) {
+					this.logger.warn(
+						"Vision stream failed; falling back to default",
+						{ error: String(streamErr) },
+					);
+					yield { type: "text_delta", text: `${VISION_ERROR_NOTE}\n\n` };
+					fullText += `${VISION_ERROR_NOTE}\n\n`;
+					effectiveModel = this.config.ai.model;
+					effectiveProviderName = this.provider.name;
+					lastModel = undefined;
+					lastProvider = undefined;
+					inputTokensTotal = 0;
+					outputTokensTotal = 0;
+					yield* streamWith(this.provider);
+				} else {
+					throw streamErr;
 				}
 			}
 
@@ -1690,8 +1765,8 @@ export class Kernel {
 			if (this.costTracker && (inputTokensTotal > 0 || outputTokensTotal > 0)) {
 				try {
 					const resolvedProvider =
-						lastProvider ?? this.provider.name ?? this.config.provider;
-					const resolvedModel = lastModel ?? this.config.ai.model;
+						lastProvider ?? effectiveProviderName ?? this.config.provider;
+					const resolvedModel = lastModel ?? effectiveModel;
 					const estimatedCostUsd = CostTracker.estimateCost(
 						resolvedModel,
 						inputTokensTotal,
@@ -1952,6 +2027,138 @@ export class Kernel {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Build the optional vision provider — a distinct instance configured with the
+	 * vision model (config.ai.vision), reusing the chosen provider's existing
+	 * config + vault/credential key (no new secret storage). Null when unconfigured,
+	 * disabled, or the provider has no key. Sets this.visionModel as a side effect.
+	 */
+	private buildVisionProvider(
+		config: PawConfig,
+		logger: ReturnType<typeof createLogger>,
+	): AIProvider | null {
+		const v = config.ai.vision;
+		if (!v || v.enabled === false) return null;
+		const model = v.model;
+		const maxRoundtrips = config.ai.maxToolRoundtrips;
+		const warnNoKey = (): null => {
+			this.logger.warn("Vision provider not initialized (no API key)", {
+				provider: v.provider,
+			});
+			return null;
+		};
+		try {
+			let provider: AIProvider | null = null;
+			switch (v.provider) {
+				case "claude":
+					if (!config.ai.apiKey) return warnNoKey();
+					provider = new ClaudeProvider(
+						{ ...config.ai, model },
+						this.toolRegistry,
+						logger,
+						this.skillManager,
+					);
+					break;
+				case "openai":
+					if (!config.openai.apiKey) return warnNoKey();
+					provider = new OpenAIProvider(
+						{ ...config.openai, model, maxToolRoundtrips: maxRoundtrips },
+						this.toolRegistry,
+						logger,
+						this.skillManager,
+					);
+					break;
+				case "gemini":
+					if (!config.gemini.apiKey) return warnNoKey();
+					provider = new GeminiProvider(
+						{ ...config.gemini, model, maxToolRoundtrips: maxRoundtrips },
+						this.toolRegistry,
+						logger,
+						this.skillManager,
+					);
+					break;
+				case "ollama":
+					provider = new OllamaProvider(
+						{
+							...config.ollama,
+							model,
+							maxToolRoundtrips: maxRoundtrips,
+							maxTokens: config.ai.maxTokens,
+						},
+						this.toolRegistry,
+						logger,
+						this.skillManager,
+					);
+					break;
+			}
+			if (provider) {
+				this.visionModel = model;
+				this.logger.info("Vision route enabled", {
+					provider: v.provider,
+					model,
+				});
+			}
+			return provider;
+		} catch (err) {
+			this.logger.warn("Failed to init vision provider", {
+				provider: v.provider,
+				error: String(err),
+			});
+			return null;
+		}
+	}
+
+	/** True when the latest user turn carries an image attachment. */
+	private lastUserHasImage(messages: ChatMessage[]): boolean {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].role !== "user") continue;
+			return !!messages[i].attachments?.some((a) => a.type === "image");
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the default provider can natively see images. Heuristic: Claude /
+	 * OpenAI / Gemini can; Ollama is treated as text-only (point ai.vision at a
+	 * vision Ollama model to route there and silence the can't-see note).
+	 */
+	private defaultCanSeeImages(): boolean {
+		return ["claude", "openai", "gemini"].includes(this.config.provider);
+	}
+
+	/**
+	 * Resolve the provider + model + any note for an inbound turn. Image turns go
+	 * to the vision provider when configured; otherwise the default route is
+	 * untouched (a can't-see note is attached only when an image can't be handled).
+	 */
+	private routeInboundTurn(messages: ChatMessage[]): {
+		provider: AIProvider;
+		model: string;
+		isVision: boolean;
+		note: string | null;
+	} {
+		const hasImage = this.lastUserHasImage(messages);
+		const plan = planImageTurn({
+			hasImage,
+			visionConfigured: !!this.visionProvider,
+			defaultCanSeeImages: this.defaultCanSeeImages(),
+		});
+		if (plan.useVision && this.providerRouter && this.visionModel) {
+			return {
+				provider: this.providerRouter.selectForImageTurn(true),
+				model: this.visionModel,
+				isVision: true,
+				note: null,
+			};
+		}
+		return {
+			provider: this.provider,
+			model: this.config.ai.model,
+			isVision: false,
+			note: plan.note === "unconfigured" ? VISION_UNCONFIGURED_NOTE : null,
+		};
 	}
 
 	/**
