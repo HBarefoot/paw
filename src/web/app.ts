@@ -1805,7 +1805,6 @@ export function createWebApp(
 <link rel="stylesheet" href="/companion/static/styles.css"></head>
 <body><div id="companion-root"></div>
 <script src="/companion/static/router.js"></script>
-<script src="/companion/static/dock.js"></script>
 <script src="/companion/static/topology.js"></script>
 <script src="/companion/static/engine.js"></script>
 <script src="/companion/static/shell.js"></script>
