@@ -244,6 +244,92 @@ describe("ops static modules", () => {
 		expect(() => lens.frame()).not.toThrow();
 	});
 
+	test("viz-swarm orthWaypoints: companion-style orthogonal routing", () => {
+		const win: Record<string, unknown> = { devicePixelRatio: 1 };
+		runModule(win, {}, read("viz-swarm.js"));
+		const route = (
+			win.VizSwarm as {
+				_route: (
+					a: number,
+					b: number,
+					c: number,
+					d: number,
+				) => Array<{ x: number; y: number }>;
+			}
+		)._route;
+		// near-aligned pair → straight (2 points)
+		expect(route(0, 50, 100, 52)).toEqual([
+			{ x: 0, y: 50 },
+			{ x: 100, y: 52 },
+		]);
+		// horizontal-dominant → H-V-H corners at the mid-x
+		const h = route(0, 0, 100, 40);
+		expect(h).toHaveLength(4);
+		expect(h[1]).toEqual({ x: 50, y: 0 });
+		expect(h[2]).toEqual({ x: 50, y: 40 });
+		// vertical-dominant → V-H-V corners at the mid-y
+		const v = route(0, 0, 30, 200);
+		expect(v).toHaveLength(4);
+		expect(v[1]).toEqual({ x: 0, y: 100 });
+		expect(v[2]).toEqual({ x: 30, y: 100 });
+	});
+
+	test("engine totals: OPS/SEC, IN FLIGHT, ERROR RATE wired from the feed", () => {
+		const win: Record<string, unknown> = { devicePixelRatio: 1 };
+		runModule(win, {}, read("engine.js"));
+		const eng = win.AgentOps as {
+			ingest: (d: unknown) => void;
+			totals: () => { tps: number; active: number; errorRate: number };
+		};
+		eng.ingest({
+			now: 100000,
+			topology: [
+				{ id: "files", label: "Files", color: "#7ee06a", kind: "tool" },
+				{ id: "core", label: "Core", color: "#3fe08f", kind: "reason" },
+			],
+			ops: [
+				{
+					id: 1,
+					toolId: "files",
+					status: "ok",
+					startedAt: 99000,
+					endAt: 99200,
+					duration: 200,
+				},
+				{
+					id: 2,
+					toolId: "files",
+					status: "ok",
+					startedAt: 99300,
+					endAt: 99500,
+					duration: 200,
+				},
+				{
+					id: 3,
+					toolId: "core",
+					status: "error",
+					startedAt: 99600,
+					endAt: 99800,
+					duration: 200,
+				},
+			],
+			inflight: [
+				{
+					id: -1,
+					toolId: "files",
+					status: "running",
+					startedAt: 99900,
+					endAt: 100000,
+					duration: 100,
+				},
+			],
+		});
+		const t = eng.totals();
+		expect(t.active).toBe(1); // IN FLIGHT = inflight.length
+		expect(t.tps).toBeGreaterThan(0); // OPS/SEC over the 3 completed ops
+		expect(t.errorRate).toBeCloseTo(1 / 3, 5); // 1 error / 3 completed
+	});
+
 	test("shell.js loads and exposes a mount()", () => {
 		const win: Record<string, unknown> = { devicePixelRatio: 1 };
 		runModule(win, {}, read("shell.js"));

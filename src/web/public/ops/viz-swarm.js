@@ -1,14 +1,13 @@
-/* Swarm lens — multi-agent highway network (vanilla port of the design's
-   viz-constellation.jsx; the centerpiece the chat transcript landed on). The
-   orchestrator (center) spawns a swarm of agents — one per live SUB-AGENT task
-   (feed taskId !== 0). Each agent links to the skills it uses over HIGHWAYS:
-   traffic-scaled road beds, edge lines + a moving dashed center line; call
-   particles stream outbound and results stream back in the opposite lane.
-   Agents bud in when spawned and dissolve with a burst when their task ends.
+/* Swarm lens — multi-agent network. The orchestrator (center) spawns a swarm of
+   agents — one per live SUB-AGENT task (feed taskId !== 0). Each agent links to
+   the skills it uses over COMPANION-STYLE TETHERS: orthogonal rounded-elbow
+   routing (mirrors companion router.js orthPath) drawn as a dashed mint flow,
+   with purple particles (#9b87f5) streaming along them. Agents bud in when
+   spawned and dissolve with a burst when their task ends.
 
-   Drawing math is faithful to the prototype; pure brand-green (#3fe08f) is routed
-   through ctx.accent so a brand re-skins the core/command/agents. Per-tool colors
-   and status colors (white/red comets) stay fixed.
+   Brand-green (#3fe08f) is routed through ctx.accent so a brand re-skins the
+   core/command/agents + the mint tethers; the purple particle + the red error
+   particle stay fixed (the companion's tether constants).
 
    ctx = { canvas, size:{w,h,dpr}, engine, ui, accent, state:{enabled:Set,
    viewTime, selectedId}, actions:{toggleTool(id), selectOp(op)} }. */
@@ -19,82 +18,103 @@
 		var n = parseInt(c.slice(1), 16);
 		return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
 	}
-	function qp(g, t) {
-		var mt = 1 - t;
-		return {
-			x: mt * mt * g.x0 + 2 * mt * t * g.cx + t * t * g.x1,
-			y: mt * mt * g.y0 + 2 * mt * t * g.cy + t * t * g.y1,
-		};
+	var PARTICLE = "#9b87f5"; // companion tether particle (fixed, not brand-driven)
+	var ELBOW_R = 12; // rounded-elbow radius (matches companion router.js)
+
+	// Orthogonal connector waypoints — mirrors companion router.js `orthPath`:
+	// dominant-axis H-V-H / V-H-V; near-aligned pairs collapse to a straight line.
+	function orthWaypoints(sx, sy, ex, ey) {
+		var dx = ex - sx,
+			dy = ey - sy;
+		if (Math.abs(dx) >= Math.abs(dy)) {
+			if (Math.abs(dy) < 8) return [{ x: sx, y: sy }, { x: ex, y: ey }];
+			var midX = (sx + ex) / 2;
+			return [{ x: sx, y: sy }, { x: midX, y: sy }, { x: midX, y: ey }, { x: ex, y: ey }];
+		}
+		if (Math.abs(dx) < 8) return [{ x: sx, y: sy }, { x: ex, y: ey }];
+		var midY = (sy + ey) / 2;
+		return [{ x: sx, y: sy }, { x: sx, y: midY }, { x: ex, y: midY }, { x: ex, y: ey }];
 	}
-	function lane(ax, ay, bx, by, bow, off) {
-		var vx = bx - ax,
-			vy = by - ay,
-			len = Math.hypot(vx, vy) || 1;
-		var px = -vy / len,
-			py = vx / len;
-		return {
-			x0: ax + px * off,
-			y0: ay + py * off,
-			cx: (ax + bx) / 2 + px * (bow * len + off),
-			cy: (ay + by) / 2 + py * (bow * len + off),
-			x1: bx + px * off,
-			y1: by + py * off,
-		};
-	}
-	function road(g, gg) {
+	// Trace an orthogonal polyline with rounded elbows (arcTo ≈ the companion's
+	// quadratic elbow).
+	function tracePath(g, pts, r) {
 		g.beginPath();
-		g.moveTo(gg.x0, gg.y0);
-		g.quadraticCurveTo(gg.cx, gg.cy, gg.x1, gg.y1);
+		g.moveTo(pts[0].x, pts[0].y);
+		for (var i = 1; i < pts.length - 1; i++) {
+			g.arcTo(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, r);
+		}
+		g.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
 	}
-	function highway(g, ax, ay, bx, by, bow, traffic, color, T, alpha) {
-		var tr = Math.min(5, traffic);
-		var width = 2.5 + tr * 1.6;
-		var gg = lane(ax, ay, bx, by, bow, 0);
-		road(g, gg);
-		g.strokeStyle = hex(color, (0.045 + tr * 0.012) * alpha);
-		g.lineWidth = width + 7;
+	// Point at fraction t∈[0,1] along the polyline (cumulative-length walk) — so a
+	// particle can flow the tether the same way <animateMotion> walks the SVG path.
+	function ptAt(pts, t) {
+		if (!pts.length) return { x: 0, y: 0 };
+		if (pts.length < 2) return pts[0];
+		var segs = [],
+			total = 0;
+		for (var i = 0; i < pts.length - 1; i++) {
+			var L = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+			segs.push(L);
+			total += L;
+		}
+		if (total === 0) return pts[0];
+		var d = Math.max(0, Math.min(1, t)) * total;
+		for (var j = 0; j < segs.length; j++) {
+			if (d <= segs[j] || j === segs.length - 1) {
+				var f = segs[j] ? d / segs[j] : 0;
+				return {
+					x: pts[j].x + (pts[j + 1].x - pts[j].x) * f,
+					y: pts[j].y + (pts[j + 1].y - pts[j].y) * f,
+				};
+			}
+			d -= segs[j];
+		}
+		return pts[pts.length - 1];
+	}
+	// A dashed mint orthogonal tether (companion .tether-line / .agent-link).
+	function tether(g, sx, sy, ex, ey, kind, active, T, alpha, accent, ui) {
+		var pts = orthWaypoints(sx, sy, ex, ey);
+		var w = kind === "skill" ? 1.6 : 1.4;
+		var aDash = kind === "skill" ? 0.5 : active ? 0.55 : 0.22;
+		// faint under-glow for legibility on the dark bg
+		tracePath(g, pts, ELBOW_R);
+		g.setLineDash([]);
+		g.lineWidth = w + 5;
+		g.strokeStyle = ui.hexToRgba(accent, 0.05 * alpha);
 		g.stroke();
-		road(g, gg);
-		g.strokeStyle = hex(color, (0.1 + tr * 0.05) * alpha);
-		g.lineWidth = width;
-		g.stroke();
-		[-1, 1].forEach(function (s) {
-			var ge = lane(ax, ay, bx, by, bow, s * (width / 2 + 0.8));
-			road(g, ge);
-			g.strokeStyle = hex(color, 0.16 * alpha);
-			g.lineWidth = 0.7;
-			g.stroke();
-		});
-		road(g, gg);
-		g.setLineDash([6, 10]);
-		g.lineDashOffset = -((T * 0.045) % 16);
-		g.strokeStyle = hex(color, 0.4 * alpha);
-		g.lineWidth = 1;
+		// the dashed mint flow
+		tracePath(g, pts, ELBOW_R);
+		g.setLineDash([7, 7]);
+		g.lineDashOffset = -((T * 0.03) % 14);
+		g.lineWidth = w;
+		g.strokeStyle = ui.hexToRgba(accent, aDash * alpha);
 		g.stroke();
 		g.setLineDash([]);
-		return width;
+		return pts;
 	}
-	function comet(g, gg, p, color, sizeMul, alpha, rev) {
-		var tailN = 5;
+	// A glowing particle (+ short tail) at fraction p along the tether polyline.
+	function particle(g, pts, p, color, sizeMul, alpha) {
+		var tailN = 4;
 		for (var k = tailN; k > 0; k--) {
-			var t1 = Math.max(0, Math.min(1, p - k * 0.04)),
-				t2 = Math.max(0, Math.min(1, p - (k - 1) * 0.04));
-			var a = qp(gg, rev ? 1 - t1 : t1),
-				b = qp(gg, rev ? 1 - t2 : t2);
-			g.globalAlpha = (1 - k / tailN) * 0.55 * alpha;
-			g.lineWidth = (1 - k / tailN) * 2 + 0.4;
+			var a = ptAt(pts, p - k * 0.05),
+				b = ptAt(pts, p - (k - 1) * 0.05);
+			g.globalAlpha = (1 - k / tailN) * 0.5 * alpha;
+			g.lineWidth = (1 - k / tailN) * 1.8 + 0.4;
 			g.strokeStyle = color;
 			g.beginPath();
 			g.moveTo(a.x, a.y);
 			g.lineTo(b.x, b.y);
 			g.stroke();
 		}
-		var hd = qp(gg, rev ? 1 - p : p);
+		var hd = ptAt(pts, p);
 		g.globalAlpha = Math.min(1, alpha);
+		g.shadowColor = color;
+		g.shadowBlur = 6 * sizeMul;
 		g.beginPath();
 		g.arc(hd.x, hd.y, 1.9 * sizeMul, 0, 7);
 		g.fillStyle = color;
 		g.fill();
+		g.shadowBlur = 0;
 		g.globalAlpha = 1;
 	}
 
@@ -192,51 +212,41 @@
 				agents.push({ t: t, x: x, y: y, alpha: alpha, active: active, traffic: traffic });
 			});
 
-			// ---- pass 1: highways (core->agent command channel, agent->skill) ----
+			// ---- pass 1: tethers (core->agent command, agent->skill) ----
 			agents.forEach(function (ag) {
-				highway(g, coreX, coreY, ag.x, ag.y, 0.06, 0.6 + Math.min(2, ag.active * 0.7), accent, T, ag.alpha * 0.85);
+				tether(g, coreX, coreY, ag.x, ag.y, "command", ag.active > 0, T, ag.alpha * 0.85, accent, ui);
 				Object.keys(ag.traffic).forEach(function (toolId) {
 					if (!enabled.has(toolId)) return;
 					var sk = skills[idx[toolId]];
 					if (!sk) return;
-					var bow = 0.1 + ((ag.t.id + idx[toolId]) % 5) * 0.025;
-					highway(g, ag.x, ag.y, sk.x, sk.y, bow, ag.traffic[toolId], sk.tool.color, T, ag.alpha);
+					tether(g, ag.x, ag.y, sk.x, sk.y, "skill", true, T, ag.alpha, accent, ui);
 				});
 			});
 
-			// ---- pass 2: traffic particles (ambient streams + real ops) ----
+			// ---- pass 2: purple particles flowing along the tethers ----
 			agents.forEach(function (ag) {
 				Object.keys(ag.traffic).forEach(function (toolId) {
 					if (!enabled.has(toolId)) return;
 					var sk = skills[idx[toolId]];
 					if (!sk) return;
-					var tr = ag.traffic[toolId];
-					var bow = 0.1 + ((ag.t.id + idx[toolId]) % 5) * 0.025;
-					var gOut = lane(ag.x, ag.y, sk.x, sk.y, bow, 2.6);
-					var gRet = lane(ag.x, ag.y, sk.x, sk.y, bow, -2.6);
-					var col = sk.tool.color;
-					var nOut = Math.min(5, Math.ceil(tr));
-					for (var iO = 0; iO < nOut; iO++) {
-						var pO = ((T / 1500) + iO / nOut + ag.t.id * 0.13) % 1;
-						comet(g, gOut, pO, col, 0.8, 0.4 * ag.alpha, false);
-					}
-					var nRet = Math.max(1, nOut - 1);
-					for (var iR = 0; iR < nRet; iR++) {
-						var pR = ((T / 1250) + iR / nRet + ag.t.id * 0.29) % 1;
-						comet(g, gRet, pR, col, 0.65, 0.3 * ag.alpha, true);
+					var pts = orthWaypoints(ag.x, ag.y, sk.x, sk.y);
+					var n = Math.min(5, Math.ceil(ag.traffic[toolId]));
+					for (var iO = 0; iO < n; iO++) {
+						var pO = ((T / 1500) + iO / n + ag.t.id * 0.13) % 1;
+						particle(g, pts, pO, PARTICLE, 0.8, 0.5 * ag.alpha);
 					}
 				});
 				ag.t.ops.forEach(function (o3) {
 					if (!enabled.has(o3.toolId)) return;
 					var sk = skills[idx[o3.toolId]];
 					if (!sk) return;
-					var bow = 0.1 + ((ag.t.id + idx[o3.toolId]) % 5) * 0.025;
+					var opts = orthWaypoints(ag.x, ag.y, sk.x, sk.y);
 					if (o3.status === "running") {
 						var p = Math.max(0, Math.min(1, (now - o3.startedAt) / Math.max(1, o3.duration)));
-						comet(g, lane(ag.x, ag.y, sk.x, sk.y, bow, 2.6), p, "#d8fae8", 1.3, ag.alpha, false);
+						particle(g, opts, p, PARTICLE, 1.3, ag.alpha);
 					} else if (now - o3.endAt < 650) {
 						var p2 = (now - o3.endAt) / 650;
-						comet(g, lane(ag.x, ag.y, sk.x, sk.y, bow, -2.6), p2, o3.status === "error" ? ui.COLORS.red : "#d8fae8", 1.15, ag.alpha, true);
+						particle(g, opts, p2, o3.status === "error" ? ui.COLORS.red : PARTICLE, 1.15, ag.alpha);
 					}
 				});
 			});
@@ -412,4 +422,5 @@
 
 		return { frame: frame, onMove: onMove, onClick: onClick, onLeave: onLeave };
 	};
+	window.VizSwarm._route = orthWaypoints; // exposed for unit tests
 })();

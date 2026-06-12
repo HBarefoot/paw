@@ -240,6 +240,7 @@
 		totals: totals,
 		recent: recent,
 		opsInWindow: opsInWindow,
+		ingest: ingest, // push a feed snapshot directly (poller + tests)
 		start: function () {
 			if (pollTimer) return API;
 			poll();
