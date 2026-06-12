@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 /** A brand's editable definition (stored as JSON in the `brands.data_json` column). */
 export interface BrandDefinition {
 	tagline?: string;
+	chatLabel?: string; // Sidebar nav + chat page label; defaults to "Chat" when unset.
 	colors: Record<string, string>; // e.g. { primary, accent, bg, surface, text, muted }
 	fonts: {
 		display?: string;
@@ -310,7 +311,12 @@ export function renderBrandAppThemeCss(brand: Brand | null): string {
 export function getBrandUi(
 	brand: Brand | null,
 	assetBase = "/api/brand/asset",
-): { name: string; logo: string | null; favicon: string | null } | null {
+): {
+	name: string;
+	logo: string | null;
+	favicon: string | null;
+	chatLabel?: string;
+} | null {
 	if (!brand) return null;
 	const asset = (file?: string) =>
 		file ? `${assetBase}/${brand.id}/${file}` : null;
@@ -319,6 +325,7 @@ export function getBrandUi(
 		name: brand.name,
 		logo: asset(logos.light) ?? asset(logos.icon),
 		favicon: asset(logos.favicon) ?? asset(logos.icon) ?? asset(logos.light),
+		chatLabel: brand.data.chatLabel?.trim() || undefined,
 	};
 }
 

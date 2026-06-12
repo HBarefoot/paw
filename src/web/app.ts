@@ -1820,7 +1820,9 @@ export function createWebApp(
 
 	app.get("/chat", (c) => {
 		const sessionId = c.req.query("session") || crypto.randomUUID();
-		return c.html(ChatPage({ sessionId }));
+		const chatLabel =
+			getActiveBrand(kernel.database)?.data.chatLabel?.trim() || "Chat";
+		return c.html(ChatPage({ sessionId, chatLabel }));
 	});
 
 	app.get("/js/chat.js", (c) => {

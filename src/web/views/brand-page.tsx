@@ -76,6 +76,14 @@ function brandCard(brand: Brand | null) {
 						placeholder="Short brand tagline / positioning"
 					/>
 
+					<label style="margin-top:12px">Chat label</label>
+					<input
+						type="text"
+						class="field w-full brand-chat-label"
+						value={d?.chatLabel ?? ""}
+						placeholder="Sidebar + chat page label (default: Chat)"
+					/>
+
 					<label style="margin-top:12px">Colors</label>
 					<div class="brand-colors">
 						{COLOR_KEYS.map((k) => colorRow(brand, k))}
@@ -264,6 +272,7 @@ function brandScript(): string {
         name: card.querySelector('.brand-name').value.trim(),
         data: {
           tagline: card.querySelector('.brand-tagline').value.trim(),
+          chatLabel: card.querySelector('.brand-chat-label').value.trim(),
           colors: colors,
           fonts: fonts,
           voice: card.querySelector('.brand-voice').value.trim(),
