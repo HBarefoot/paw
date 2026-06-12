@@ -484,6 +484,22 @@ describe("companion static modules", () => {
 		expect(big.overflow).toBe(5);
 	});
 
+	test("engine: ambient unreadByKind is exposed for skill-pill badges", () => {
+		const win: Record<string, unknown> = {};
+		runModule(win, {}, read("expression.js"));
+		runModule(win, {}, read("engine.js"));
+		const Engine = win.CompanionEngine as new () => {
+			setNotifications: (byKind: unknown) => void;
+			getState: (now?: number) => { unreadByKind: Record<string, number> };
+		};
+		const e = new Engine();
+		e.setNotifications({ github: 3, slack: 1 });
+		expect(e.getState(1000).unreadByKind).toEqual({ github: 3, slack: 1 });
+		// a malformed payload resets to an empty map (no badge)
+		e.setNotifications(null);
+		expect(e.getState(1000).unreadByKind).toEqual({});
+	});
+
 	test("ops-feed: response carries pendingApprovals (default 0)", () => {
 		const base = {
 			toolLog: null,

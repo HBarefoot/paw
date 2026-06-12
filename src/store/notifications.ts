@@ -51,7 +51,7 @@ export class NotificationStore {
 		const kind = input.kind ?? "system";
 		const level = input.level ?? "info";
 		this.db.run(
-			`INSERT INTO notifications (id, kind, title, body, url, level) VALUES (?, ?, ?, ?, ?, ?)`,
+			"INSERT INTO notifications (id, kind, title, body, url, level) VALUES (?, ?, ?, ?, ?, ?)",
 			[id, kind, input.title, input.body ?? null, input.url ?? null, level],
 		);
 		this.onAdd?.({
@@ -72,6 +72,19 @@ export class NotificationStore {
 			)
 			.get();
 		return row?.n ?? 0;
+	}
+
+	/** Unread counts grouped by `kind` — the companion badges the skill pill whose
+	 *  key matches a kind (e.g. "github", "slack"). */
+	unreadCountByKind(): Record<string, number> {
+		const rows = this.db
+			.query<{ kind: string; n: number }, []>(
+				"SELECT kind, COUNT(*) AS n FROM notifications WHERE read = 0 GROUP BY kind",
+			)
+			.all();
+		const out: Record<string, number> = {};
+		for (const r of rows) out[r.kind] = r.n;
+		return out;
 	}
 
 	listRecent(limit = 50): NotificationRow[] {

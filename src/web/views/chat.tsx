@@ -1560,12 +1560,12 @@ export function getChatScript(): string {
   // Relay ambient "you have something for you" state (unread notifications +
   // pending GitHub approvals) into the portrait so the face/GitHub node reacts
   // even when the agent isn't actively streaming.
-  function notifyPortraitAmbient(unread, pendingApprovals) {
+  function notifyPortraitAmbient(unread, pendingApprovals, unreadByKind) {
     try {
       for (var i = 0; i < canvasTabs.length; i++) {
         var t = canvasTabs[i];
         if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
-        t.iframeEl.contentWindow.postMessage({ type: "paw:ambient", unread: unread, pendingApprovals: pendingApprovals }, "*");
+        t.iframeEl.contentWindow.postMessage({ type: "paw:ambient", unread: unread, pendingApprovals: pendingApprovals, unreadByKind: unreadByKind || {} }, "*");
       }
     } catch (e) {}
   }
@@ -1620,7 +1620,7 @@ export function getChatScript(): string {
       var notif = res[0] || {};
       var unread = notif.unread || 0;
       var pending = (res[1] && res[1].pending && res[1].pending.length) || 0;
-      notifyPortraitAmbient(unread, pending);
+      notifyPortraitAmbient(unread, pending, notif.unreadByKind || {});
       // Find the newest unread; let the avatar speak it once (skip stale ones on
       // first poll so it doesn't announce everything on page load).
       var list = notif.notifications || [];

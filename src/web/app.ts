@@ -344,6 +344,10 @@ export function createWebApp(
 ): Hono {
 	const app = new Hono();
 	const database = db ?? kernel.database;
+	// Per-boot asset version → cache-busts the companion static modules so each
+	// deploy serves fresh JS/CSS (they ship Cache-Control max-age). Without this,
+	// a stale cached shell.js renders the old UI against the new bootstrap cfg.
+	const ASSET_VERSION = Date.now().toString(36);
 
 	// --- Auth Manager ---
 	const authManager = new WebAuthManager(database, {
@@ -1388,6 +1392,8 @@ export function createWebApp(
 		return c.json({
 			notifications: kernel.notifications.listRecent(50),
 			unread: kernel.notifications.unreadCount(),
+			// Per-kind breakdown → the companion badges the matching skill pill.
+			unreadByKind: kernel.notifications.unreadCountByKind(),
 		});
 	});
 
@@ -1806,16 +1812,17 @@ export function createWebApp(
 			moodScalar,
 			skills,
 		}).replace(/</g, "\\u003c");
+		const v = `?v=${ASSET_VERSION}`;
 		return c.html(`<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="/companion/static/styles.css"></head>
+<link rel="stylesheet" href="/companion/static/styles.css${v}"></head>
 <body><div id="companion-root"></div>
-<script src="/companion/static/router.js"></script>
-<script src="/companion/static/topology.js"></script>
-<script src="/companion/static/expression.js"></script>
-<script src="/companion/static/spring.js"></script>
-<script src="/companion/static/engine.js"></script>
-<script src="/companion/static/shell.js"></script>
+<script src="/companion/static/router.js${v}"></script>
+<script src="/companion/static/topology.js${v}"></script>
+<script src="/companion/static/expression.js${v}"></script>
+<script src="/companion/static/spring.js${v}"></script>
+<script src="/companion/static/engine.js${v}"></script>
+<script src="/companion/static/shell.js${v}"></script>
 <script>window.__COMPANION_CONFIG=${cfg};
 window.Companion.mount(document.getElementById("companion-root"),window.__COMPANION_CONFIG);</script>
 </body></html>`);

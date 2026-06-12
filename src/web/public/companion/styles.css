@@ -353,6 +353,26 @@ body {
 	white-space: nowrap;
 	transition: transform 0.25s, background 0.25s, color 0.25s, box-shadow 0.25s;
 }
+/* Unread-notification badge on a skill pill (notification.kind === skill key). */
+.pill-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 16px;
+	height: 16px;
+	margin-left: 1px;
+	padding: 0 4px;
+	border-radius: 999px;
+	background: #ff5f56;
+	color: #2a0807;
+	font-family: var(--mono);
+	font-size: 9.5px;
+	font-weight: 700;
+	line-height: 1;
+}
+.pill.has-alert {
+	border-color: color-mix(in srgb, #ff5f56 55%, var(--pill-border));
+}
 /* Status encoded by SHAPE, not colour alone (survives colourblindness +
  * monochrome): an idle/available skill is a hollow ring; an active skill fills
  * in (see `.pill.active .pill-dot`). */
