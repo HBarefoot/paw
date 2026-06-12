@@ -252,6 +252,11 @@ export const configSchema = z.object({
 			url: z.string().default(""),
 			// Service-role key — overlaid from vault slot `supabase.serviceKey`.
 			serviceKey: z.string().default(""),
+			// Postgres DSN for the scoped `paw_builder` role (USAGE+CREATE on
+			// schema `canvas` only). Used ONLY by the typed provisioning DDL tools,
+			// never the CRUD path. Overlaid from vault slot `supabase.builderDsn`.
+			// See src/integrations/supabase/migrations/README.md.
+			builderDsn: z.string().default(""),
 			timeout: z.number().int().positive().default(10_000),
 		})
 		.default({}),
