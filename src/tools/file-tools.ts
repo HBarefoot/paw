@@ -1,5 +1,5 @@
-import { resolve, relative } from "node:path";
-import { existsSync, statSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
 
 interface FileToolsConfig {
@@ -8,7 +8,13 @@ interface FileToolsConfig {
 	maxOutputLength: number;
 }
 
-function safePath(filePath: string, workspace: string): string | null {
+/**
+ * Resolve a workspace-relative path, returning null if it escapes the workspace
+ * (`..` traversal, null bytes, or a symlink pointing outside). Exported so other
+ * sandboxed tools (e.g. WordPress media upload) reuse the exact same guard
+ * instead of reinventing it.
+ */
+export function safePath(filePath: string, workspace: string): string | null {
 	const resolved = resolve(workspace, filePath);
 	// Check logical path first (no ".." traversal, no null bytes)
 	const rel = relative(workspace, resolved);

@@ -29,6 +29,7 @@ export type VaultScope =
 	| "n8n"
 	| "github"
 	| "supabase"
+	| "wordpress"
 	| "custom";
 
 export interface VaultSecretMeta {
@@ -85,6 +86,11 @@ export const KNOWN_SECRET_SLOTS: {
 		name: "supabase.serviceKey",
 		scope: "supabase",
 		label: "Supabase service-role key",
+	},
+	{
+		name: "wordpress.appPassword",
+		scope: "wordpress",
+		label: "WordPress Application Password",
 	},
 ];
 
@@ -299,6 +305,9 @@ export class VaultManager {
 		});
 		apply("supabase.serviceKey", (v) => {
 			if (config.supabase) config.supabase.serviceKey = v;
+		});
+		apply("wordpress.appPassword", (v) => {
+			if (config.wordpress) config.wordpress.appPassword = v;
 		});
 
 		// Per-MCP-server bearer tokens: vault name `mcp.<server>.authToken`.

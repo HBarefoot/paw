@@ -191,4 +191,11 @@ export interface PawConfig {
 		serviceKey: string;
 		timeout: number;
 	};
+	wordpress: {
+		enabled: boolean;
+		url: string;
+		username: string;
+		appPassword: string;
+		timeout: number;
+	};
 }
