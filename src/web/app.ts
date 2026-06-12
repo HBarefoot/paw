@@ -20,7 +20,7 @@ import { logger as honoLogger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
 import { readConfigOverrides, saveConfigOverrides } from "../config/writer.js";
 import { isValidCron } from "../cron/parser.js";
-import { isAllowedCronEvent } from "../cron/scheduler.js";
+import { resolveCronAction } from "../cron/scheduler.js";
 import type { StreamChunk } from "../ai/base-provider.js";
 import type { Kernel } from "../kernel/kernel.js";
 import { resolveProjectPath } from "../paths.js";
@@ -3438,9 +3438,21 @@ export function createWebApp(
 
 	// --- Cron Page ---
 
+	// Registered tools for the cron "tool" action dropdown — name + plugin
+	// (label) + description (tooltip), sorted for stable rendering. Includes
+	// on-demand skill tools; the scheduler's permission check governs execution.
+	const cronToolList = () =>
+		[...kernel.toolRegistryPublic.allTools()]
+			.map((t) => ({
+				name: t.name,
+				plugin: t.plugin,
+				description: t.description,
+			}))
+			.sort((a, b) => a.name.localeCompare(b.name));
+
 	app.get("/cron", (c) => {
 		const jobs = kernel.cron?.listJobs() ?? [];
-		return c.html(CronPage({ jobs }));
+		return c.html(CronPage({ jobs, tools: cronToolList() }));
 	});
 
 	// --- Heartbeat Page ---
@@ -4033,82 +4045,71 @@ export function createWebApp(
 		}
 
 		const contentType = c.req.header("Content-Type") ?? "";
+		const isJson = contentType.includes("application/json");
 		let name: string;
 		let expression: string;
 		let actionType: string;
 		let payload: string;
+		let toolArgs: string | undefined;
 
-		if (contentType.includes("application/json")) {
+		if (isJson) {
 			const body = await c.req.json<{
 				name: string;
 				expression: string;
 				actionType: string;
 				payload: string;
+				toolArgs?: string;
 			}>();
 			name = body.name;
 			expression = body.expression;
 			actionType = body.actionType;
 			payload = body.payload;
+			toolArgs = body.toolArgs;
 		} else {
 			const body = await c.req.parseBody();
 			name = String(body.name ?? "");
 			expression = String(body.expression ?? "");
 			actionType = String(body.actionType ?? "prompt");
 			payload = String(body.payload ?? "");
+			toolArgs = body.toolArgs === undefined ? undefined : String(body.toolArgs);
 		}
 
-		if (!name.trim() || !expression.trim() || !payload.trim()) {
-			const jobs = kernel.cron.listJobs();
-			if (!contentType.includes("application/json")) {
-				return c.html(CronPage({ jobs, error: "All fields are required" }));
+		// Render the page with an error for form posts; JSON for API callers.
+		const fail = (message: string) => {
+			if (!isJson) {
+				const jobs = kernel.cron?.listJobs() ?? [];
+				return c.html(
+					CronPage({ jobs, tools: cronToolList(), error: message }),
+				);
 			}
-			return c.json({ error: "All fields are required" }, 400);
+			return c.json({ error: message }, 400);
+		};
+
+		if (!name.trim() || !expression.trim() || !payload.trim()) {
+			return fail("All fields are required");
 		}
 
 		if (!isValidCron(expression.trim())) {
-			const jobs = kernel.cron.listJobs();
-			if (!contentType.includes("application/json")) {
-				return c.html(CronPage({ jobs, error: "Invalid cron expression" }));
-			}
-			return c.json({ error: "Invalid cron expression" }, 400);
+			return fail("Invalid cron expression");
 		}
 
-		const action: Record<string, unknown> = { type: actionType };
-		if (actionType === "prompt") {
-			action.prompt = payload;
-		} else if (actionType === "tool") {
-			action.tool = payload;
-			// H-NEW-2: cron tool actions must include the tool's plugin so
-			// the scheduler can verify the requester has rights to run it.
-			const toolDef = kernel.toolRegistryPublic.get(payload);
-			if (!toolDef) {
-				return c.json({ error: `Unknown tool: ${payload}` }, 400);
-			}
-			action.plugin = toolDef.plugin;
-		} else if (actionType === "event") {
-			// H-NEW-1: validate against the static allowlist at the API
-			// boundary. The scheduler also enforces this at execution time
-			// (defense in depth).
-			if (!isAllowedCronEvent(payload)) {
-				return c.json(
-					{
-						error: `Event "${payload}" is not in the cron event allowlist`,
-					},
-					400,
-				);
-			}
-			action.event = payload;
-		} else {
-			return c.json({ error: `Unknown action type: ${actionType}` }, 400);
+		// H-NEW-1 / H-NEW-2 are enforced here at the API boundary (and again in
+		// the scheduler at addJob/execute time — defense in depth).
+		const resolved = resolveCronAction(actionType, payload, toolArgs, {
+			getTool: (n) => kernel.toolRegistryPublic.get(n),
+			toolNames: () => cronToolList().map((t) => t.name),
+		});
+		if ("error" in resolved) {
+			return fail(resolved.error);
 		}
 
 		const id = kernel.cron.addJob({
 			name: name.trim(),
 			expression: expression.trim(),
-			action: action as any,
+			action: resolved.action,
 		});
 
-		if (!contentType.includes("application/json")) {
+		if (!isJson) {
 			return c.redirect("/cron");
 		}
 		return c.json({ id }, 201);

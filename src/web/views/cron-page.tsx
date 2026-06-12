@@ -1,6 +1,13 @@
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 import { Layout } from "./layout.js";
+import { CRON_ALLOWED_EVENTS } from "../../cron/scheduler.js";
+
+interface CronTool {
+	name: string;
+	plugin: string;
+	description: string;
+}
 
 interface CronJob {
 	id: string;
@@ -22,11 +29,12 @@ interface CronJob {
 
 interface CronPageProps {
 	jobs: CronJob[];
+	tools?: CronTool[];
 	error?: string;
 	success?: string;
 }
 
-function cronScript(): string {
+export function cronScript(): string {
 	return `
     async function toggleJob(id, enable) {
       var action = enable ? 'enable' : 'disable';
@@ -42,10 +50,36 @@ function cronScript(): string {
       if (res.ok) window.location.reload();
       else pawModal.alert("Error", "Failed to delete job.");
     }
+
+    // Show only the payload field that matches the selected action type, and
+    // disable the inactive fields so the browser does not submit them (a
+    // disabled control is omitted from the form post — keeps a single
+    // effective 'payload' value). Plain DOM only: no regex / no backslash
+    // escapes (inline-script-template-trap guard).
+    function pawCronSync() {
+      var sel = document.getElementById('cron-action-type');
+      if (!sel) return;
+      var value = sel.value;
+      var groups = document.querySelectorAll('[data-cron-field]');
+      for (var i = 0; i < groups.length; i++) {
+        var group = groups[i];
+        var on = group.getAttribute('data-cron-field') === value;
+        group.style.display = on ? '' : 'none';
+        var fields = group.querySelectorAll('input, select, textarea');
+        for (var j = 0; j < fields.length; j++) fields[j].disabled = !on;
+      }
+    }
+    pawCronSync();
   `;
 }
 
-export const CronPage: FC<CronPageProps> = ({ jobs, error, success }) => {
+export const CronPage: FC<CronPageProps> = ({
+	jobs,
+	tools = [],
+	error,
+	success,
+}) => {
+	const events = [...CRON_ALLOWED_EVENTS];
 	return (
 		<Layout title="Cron Jobs" currentPath="/cron">
 			{error && <div class="alert alert-error">{error}</div>}
@@ -141,23 +175,69 @@ export const CronPage: FC<CronPageProps> = ({ jobs, error, success }) => {
 					</div>
 					<div>
 						<label>Action Type</label>
-						<select name="actionType" class="w-full">
+						<select
+							id="cron-action-type"
+							name="actionType"
+							class="w-full"
+							onchange="pawCronSync()"
+						>
 							<option value="prompt">Prompt (send to AI)</option>
 							<option value="tool">Tool (execute tool)</option>
 							<option value="event">Event (emit event)</option>
 						</select>
 					</div>
-					<div>
-						<label>Action Payload</label>
+
+					<div data-cron-field="prompt">
+						<label for="cron-prompt">Prompt</label>
 						<textarea
+							id="cron-prompt"
 							name="payload"
 							rows={3}
-							required
-							placeholder="For prompt: the prompt text. For tool: tool name. For event: event name."
+							placeholder="What should the AI do when this fires?"
 							class="w-full"
 							style="resize: vertical"
 						/>
 					</div>
+
+					<div data-cron-field="tool" style="display: none">
+						<label for="cron-tool">Tool</label>
+						<select id="cron-tool" name="payload" class="w-full">
+							{tools.length > 0 ? (
+								tools.map((t) => (
+									<option key={t.name} value={t.name} title={t.description}>
+										{t.name} — {t.plugin}
+									</option>
+								))
+							) : (
+								<option value="" disabled>
+									No tools registered
+								</option>
+							)}
+						</select>
+						<label for="cron-tool-args" class="mt-sm">
+							Arguments (optional JSON)
+						</label>
+						<textarea
+							id="cron-tool-args"
+							name="toolArgs"
+							rows={2}
+							placeholder="{}"
+							class="w-full"
+							style="resize: vertical"
+						/>
+					</div>
+
+					<div data-cron-field="event" style="display: none">
+						<label for="cron-event">Event</label>
+						<select id="cron-event" name="payload" class="w-full">
+							{events.map((e) => (
+								<option key={e} value={e}>
+									{e}
+								</option>
+							))}
+						</select>
+					</div>
+
 					<button type="submit" class="btn-primary self-start">
 						Create Job
 					</button>
