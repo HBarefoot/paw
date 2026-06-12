@@ -44,6 +44,7 @@ function rowToBrand(r: BrandRow): Brand {
 		const parsed = JSON.parse(r.data_json || "{}");
 		data = {
 			tagline: parsed.tagline,
+			chatLabel: parsed.chatLabel,
 			colors: parsed.colors ?? {},
 			fonts: parsed.fonts ?? {},
 			voice: parsed.voice,
