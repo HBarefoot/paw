@@ -245,6 +245,16 @@ export const configSchema = z.object({
 			autoInvestigateCi: z.boolean().default(true),
 		})
 		.default({}),
+	supabase: z
+		.object({
+			enabled: z.boolean().default(false),
+			// Project REST URL, e.g. https://<ref>.supabase.co
+			url: z.string().default(""),
+			// Service-role key — overlaid from vault slot `supabase.serviceKey`.
+			serviceKey: z.string().default(""),
+			timeout: z.number().int().positive().default(10_000),
+		})
+		.default({}),
 });
 
 export type ConfigSchema = z.infer<typeof configSchema>;
