@@ -97,6 +97,15 @@ export function createSupabaseTools(
 				});
 				return { content: JSON.stringify({ rows }) };
 			} catch (err) {
+				// PGRST205 = unknown table. Point the agent at introspection instead
+				// of letting it guess table names into more 404s.
+				const msg = err instanceof Error ? err.message : String(err);
+				if (msg.includes("PGRST205")) {
+					return {
+						content: `Supabase error: ${msg} — use supabase_list_tables to see the available tables.`,
+						is_error: true,
+					};
+				}
 				return errResult(err);
 			}
 		},
@@ -192,6 +201,30 @@ export function createSupabaseTools(
 		},
 	};
 
+	const listTables: ToolDefinition = {
+		name: "supabase_list_tables",
+		description:
+			"List the tables/views exposed by the Supabase project's public schema, with their columns and types (parsed from PostgREST's OpenAPI document). Call this first to discover what exists instead of guessing table names.",
+		plugin: "supabase",
+		input_schema: { type: "object", properties: {} },
+		handler: async (): Promise<ToolResult> => {
+			try {
+				const res = await client.listTables();
+				if (res.tables.length === 0) {
+					return {
+						content: JSON.stringify({
+							tables: [],
+							note: "No tables are exposed on the public schema.",
+						}),
+					};
+				}
+				return { content: JSON.stringify(res) };
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
 	const rpc: ToolDefinition = {
 		name: "supabase_rpc",
 		description:
@@ -221,5 +254,5 @@ export function createSupabaseTools(
 		},
 	};
 
-	return [select, insert, update, del, rpc];
+	return [select, listTables, insert, update, del, rpc];
 }

@@ -149,6 +149,77 @@ describe("SupabaseClient", () => {
 			() => new SupabaseClient({ url: BASE_URL, serviceKey: "" }),
 		).toThrow();
 	});
+
+	test("information_schema access stays blocked (dotted identifier)", async () => {
+		mockFetch(200, []);
+		await expect(
+			makeClient().select("information_schema.tables"),
+		).rejects.toThrow(/Invalid Supabase table/);
+		expect(calls.length).toBe(0); // rejected before any request
+	});
+});
+
+describe("supabase introspection (list_tables)", () => {
+	test("parses tables + columns from the swagger `definitions`", async () => {
+		mockFetch(200, {
+			definitions: {
+				users: {
+					properties: {
+						id: { type: "integer", format: "bigint" },
+						email: { type: "string", format: "text" },
+					},
+				},
+				orders: { properties: { id: { type: "integer", format: "bigint" } } },
+			},
+		});
+		const res = await makeClient().listTables();
+		expect(calls[0].url).toBe(`${BASE_URL}/rest/v1/`);
+		expect(res.tables.map((t) => t.name).sort()).toEqual(["orders", "users"]);
+		const users = res.tables.find((t) => t.name === "users");
+		expect(users?.columns).toEqual([
+			{ name: "id", type: "bigint" },
+			{ name: "email", type: "text" },
+		]);
+	});
+
+	test("also reads OpenAPI 3 `components.schemas`", async () => {
+		mockFetch(200, {
+			components: {
+				schemas: { widgets: { properties: { sku: { type: "string" } } } },
+			},
+		});
+		const res = await makeClient().listTables();
+		expect(res.tables[0].name).toBe("widgets");
+		expect(res.tables[0].columns[0]).toEqual({ name: "sku", type: "string" });
+	});
+
+	test("empty schema → no tables (the fresh-project case)", async () => {
+		mockFetch(200, { swagger: "2.0", definitions: {} });
+		const res = await makeClient().listTables();
+		expect(res.tables).toEqual([]);
+
+		// ...and the tool surfaces it cleanly
+		const tool = createSupabaseTools(makeClient()).find(
+			(t) => t.name === "supabase_list_tables",
+		);
+		mockFetch(200, { definitions: {} });
+		const out = await tool?.handler({});
+		expect(out?.is_error).toBeFalsy();
+		expect(JSON.parse(out?.content ?? "{}").note).toMatch(/No tables/i);
+	});
+
+	test("supabase_select on an unknown table hints at list_tables (PGRST205)", async () => {
+		const tool = createSupabaseTools(makeClient()).find(
+			(t) => t.name === "supabase_select",
+		);
+		mockFetch(404, {
+			code: "PGRST205",
+			message: "Could not find the table 'public.nope' in the schema cache",
+		});
+		const out = await tool?.handler({ table: "nope" });
+		expect(out?.is_error).toBe(true);
+		expect(out?.content).toMatch(/supabase_list_tables/);
+	});
 });
 
 describe("supabase skill registration", () => {
@@ -163,6 +234,7 @@ describe("supabase skill registration", () => {
 		expect(skill?.toolNames.sort()).toEqual([
 			"supabase_delete",
 			"supabase_insert",
+			"supabase_list_tables",
 			"supabase_rpc",
 			"supabase_select",
 			"supabase_update",
