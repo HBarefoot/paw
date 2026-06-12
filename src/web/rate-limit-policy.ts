@@ -52,6 +52,7 @@ const CHROME_ASSET_PREFIX = "/api/brand/asset/";
 const LIVE_EXACT = new Set([
 	"/api/notifications",
 	"/api/agent-ops",
+	"/api/ops/feed",
 	"/api/canvas/events",
 	"/api/canvas/files",
 	"/api/github/events",
