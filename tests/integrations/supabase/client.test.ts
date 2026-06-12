@@ -57,6 +57,41 @@ function makeClient() {
 	return new SupabaseClient({ url: BASE_URL, serviceKey: KEY });
 }
 
+// Profile-aware mock: PostgREST returns a different OpenAPI doc per schema,
+// selected by the `Accept-Profile` header (default `public`). Lets us exercise
+// the multi-schema listTables merge.
+function mockFetchByProfile(
+	byProfile: Record<string, unknown>,
+	statusByProfile: Record<string, number> = {},
+) {
+	globalThis.fetch = (async (
+		input: string | URL | Request,
+		init?: RequestInit,
+	) => {
+		const url =
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.toString()
+					: input.url;
+		const headers = init?.headers as Record<string, string> | undefined;
+		const profile = headers?.["Accept-Profile"] ?? "public";
+		calls.push({
+			url,
+			method: init?.method,
+			headers,
+			body: init?.body as string,
+		});
+		const status = statusByProfile[profile] ?? 200;
+		const payload =
+			profile in byProfile ? byProfile[profile] : { definitions: {} };
+		return new Response(JSON.stringify(payload), {
+			status,
+			headers: { "Content-Type": "application/json" },
+		});
+	}) as typeof globalThis.fetch;
+}
+
 describe("SupabaseClient", () => {
 	test("select encodes columns, filters, and auth headers", async () => {
 		mockFetch(200, [{ id: 1, name: "Ada" }]);
@@ -172,10 +207,11 @@ describe("supabase introspection (list_tables)", () => {
 				orders: { properties: { id: { type: "integer", format: "bigint" } } },
 			},
 		});
-		const res = await makeClient().listTables();
+		const res = await makeClient().listTables(["public"]);
 		expect(calls[0].url).toBe(`${BASE_URL}/rest/v1/`);
 		expect(res.tables.map((t) => t.name).sort()).toEqual(["orders", "users"]);
 		const users = res.tables.find((t) => t.name === "users");
+		expect(users?.schema).toBe("public");
 		expect(users?.columns).toEqual([
 			{ name: "id", type: "bigint" },
 			{ name: "email", type: "text" },
@@ -188,9 +224,35 @@ describe("supabase introspection (list_tables)", () => {
 				schemas: { widgets: { properties: { sku: { type: "string" } } } },
 			},
 		});
-		const res = await makeClient().listTables();
+		const res = await makeClient().listTables(["public"]);
 		expect(res.tables[0].name).toBe("widgets");
 		expect(res.tables[0].columns[0]).toEqual({ name: "sku", type: "string" });
+	});
+
+	test("merges public + canvas, tagging each table with its schema", async () => {
+		mockFetchByProfile({
+			public: { definitions: { users: { properties: { id: {} } } } },
+			canvas: {
+				definitions: { waitlist_signups: { properties: { email: {} } } },
+			},
+		});
+		const res = await makeClient().listTables();
+		// Two fetches: default (public) + Accept-Profile: canvas.
+		expect(calls).toHaveLength(2);
+		expect(calls[1].headers?.["Accept-Profile"]).toBe("canvas");
+		const bySchema = Object.fromEntries(
+			res.tables.map((t) => [t.name, t.schema]),
+		);
+		expect(bySchema).toEqual({ users: "public", waitlist_signups: "canvas" });
+	});
+
+	test("a schema that isn't exposed (406) is skipped, not fatal", async () => {
+		mockFetchByProfile(
+			{ public: { definitions: { users: { properties: { id: {} } } } } },
+			{ canvas: 406 },
+		);
+		const res = await makeClient().listTables();
+		expect(res.tables.map((t) => t.name)).toEqual(["users"]);
 	});
 
 	test("empty schema → no tables (the fresh-project case)", async () => {

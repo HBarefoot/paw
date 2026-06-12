@@ -103,6 +103,9 @@ export class Kernel {
 	hubspotClient:
 		| import("../integrations/hubspot/client.js").HubSpotClient
 		| null = null;
+	private supabaseProvisioner:
+		| import("../integrations/supabase/provisioner.js").SupabaseProvisioner
+		| null = null;
 	private githubClient:
 		| import("../integrations/github/client.js").GitHubClient
 		| null = null;
@@ -689,6 +692,34 @@ export class Kernel {
 						audit: (action, details) => sbAudit.log(action, null, details),
 					}),
 				);
+
+				// Typed provisioning tools (DDL) — only when the scoped paw_builder
+				// DSN is configured. These use a SEPARATE, least-privilege Postgres
+				// connection (USAGE+CREATE on schema `canvas` only); the CRUD tools
+				// above keep using PostgREST + the service key. The agent never
+				// supplies SQL — DDL is generated from validated specs.
+				if (this.config.supabase.builderDsn) {
+					const { SupabaseProvisioner } = await import(
+						"../integrations/supabase/provisioner.js"
+					);
+					const { createSupabaseProvisioningTools } = await import(
+						"../integrations/supabase/provisioning-tools.js"
+					);
+					this.supabaseProvisioner = new SupabaseProvisioner(
+						this.config.supabase.builderDsn,
+						{ timeout: this.config.supabase.timeout },
+					);
+					this.toolRegistry.register(
+						createSupabaseProvisioningTools({
+							exec: this.supabaseProvisioner,
+							audit: (action, details) => sbAudit.log(action, null, details),
+						}),
+					);
+					this.logger.info(
+						"Supabase provisioning tools initialized (canvas yard)",
+					);
+				}
+
 				this.logger.info("Supabase integration initialized");
 			} catch (err) {
 				this.logger.warn("Supabase init failed — degrading gracefully", {
@@ -2307,6 +2338,15 @@ export class Kernel {
 		this.heartbeatChecker?.stop();
 		this.cronScheduler?.stop();
 		await this.mcpClientManager.disconnectAll();
+		if (this.supabaseProvisioner) {
+			try {
+				await this.supabaseProvisioner.close();
+			} catch (err) {
+				this.logger.error("Supabase provisioner close failed", {
+					error: String(err),
+				});
+			}
+		}
 		for (const plugin of this.plugins) {
 			try {
 				await plugin.stop();

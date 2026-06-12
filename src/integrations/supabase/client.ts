@@ -113,37 +113,66 @@ export class SupabaseClient {
 	}
 
 	/**
-	 * Introspect the exposed schema via PostgREST's OpenAPI document at the REST
-	 * root (`<url>/rest/v1/`). Returns the tables/views on the exposed (public)
-	 * schema with their columns + types — so the agent can discover what exists
-	 * instead of guessing names into 404s. Read-only; queries the root, so it
-	 * never touches the table-identifier guard, and `information_schema` stays
+	 * Introspect the exposed schemas via PostgREST's OpenAPI document at the REST
+	 * root (`<url>/rest/v1/`). Returns the tables/views on each requested schema
+	 * with their columns + types — so the agent can discover what exists instead
+	 * of guessing names into 404s. Read-only; queries the root, so it never
+	 * touches the table-identifier guard, and `information_schema` stays
 	 * unreachable (PostgREST doesn't expose it and dotted names are rejected).
+	 *
+	 * Each schema is fetched separately via PostgREST's `Accept-Profile` header
+	 * (the root OpenAPI doc describes one schema at a time). `public` plus the
+	 * agent's yard (`canvas`) by default. A schema that isn't exposed yet (e.g.
+	 * `canvas` before the operator flips the dashboard setting) is skipped rather
+	 * than failing the whole listing, so the tool degrades gracefully.
 	 */
-	async listTables(): Promise<{
+	async listTables(schemas: string[] = ["public", "canvas"]): Promise<{
 		tables: Array<{
+			schema: string;
 			name: string;
 			columns: Array<{ name: string; type: string }>;
 		}>;
 	}> {
-		const doc = await this.request<OpenApiDoc>(`${this.baseUrl}/`, "GET");
-		// PostgREST v2 swagger uses `definitions`; OpenAPI 3 uses
-		// `components.schemas`. Each key is an exposed table/view; RPC functions
-		// live under `paths` (/rpc/*), not here.
-		const defs: Record<string, OpenApiSchema> = {
-			...(doc?.definitions ?? {}),
-			...(doc?.components?.schemas ?? {}),
-		};
-		const tables = Object.entries(defs).map(([name, def]) => {
-			const props = def?.properties ?? {};
-			const columns = Object.entries(props).map(([col, p]) => ({
-				name: col,
-				// `format` carries the Postgres type (e.g. uuid, timestamp with time
-				// zone); `type` is the coarser JSON type — prefer format.
-				type: String(p?.format ?? p?.type ?? "unknown"),
-			}));
-			return { name, columns };
-		});
+		const tables: Array<{
+			schema: string;
+			name: string;
+			columns: Array<{ name: string; type: string }>;
+		}> = [];
+		for (const schema of schemas) {
+			let doc: OpenApiDoc;
+			try {
+				// `public` is the default profile; only send the header for others so
+				// an old PostgREST without profile support keeps working for public.
+				const headers =
+					schema === "public" ? undefined : { "Accept-Profile": schema };
+				doc = await this.request<OpenApiDoc>(
+					`${this.baseUrl}/`,
+					"GET",
+					undefined,
+					headers,
+				);
+			} catch {
+				// Schema not exposed (406) or unreachable — skip it, keep the rest.
+				continue;
+			}
+			// PostgREST v2 swagger uses `definitions`; OpenAPI 3 uses
+			// `components.schemas`. Each key is an exposed table/view; RPC functions
+			// live under `paths` (/rpc/*), not here.
+			const defs: Record<string, OpenApiSchema> = {
+				...(doc?.definitions ?? {}),
+				...(doc?.components?.schemas ?? {}),
+			};
+			for (const [name, def] of Object.entries(defs)) {
+				const props = def?.properties ?? {};
+				const columns = Object.entries(props).map(([col, p]) => ({
+					name: col,
+					// `format` carries the Postgres type (e.g. uuid, timestamp with
+					// time zone); `type` is the coarser JSON type — prefer format.
+					type: String(p?.format ?? p?.type ?? "unknown"),
+				}));
+				tables.push({ schema, name, columns });
+			}
+		}
 		return { tables };
 	}
 
