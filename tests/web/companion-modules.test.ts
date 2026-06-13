@@ -351,13 +351,52 @@ describe("companion static modules", () => {
 	});
 
 	test("gaze: pupils glide toward the target (lerp), snap only under reduced-motion", () => {
-		// Guard against re-introducing the instant per-frame snap: applyGaze must
+		// Guard against re-introducing the instant per-frame snap: the face step must
 		// ease the rendered offset toward the target and use a full step when reduced.
+		// (The gel-face refactor moved the per-face gaze easing into stepFace.)
 		const src = read("shell.js");
-		const body = src.slice(src.indexOf("function applyGaze"));
+		const body = src.slice(src.indexOf("function stepFace"));
 		expect(body).toContain("(dx - gazeX)");
 		expect(body).toContain("(dy - gazeY)");
 		expect(body).toContain("reduced ? 1 :"); // reduced-motion → instant
+	});
+
+	// ── gel-sphere face upgrade (drop-in, faces only) ──
+	test("the avatar is the glossy gel-sphere face, not the old flat orb", () => {
+		const js = read("shell.js");
+		const css = read("styles.css");
+		// new face layers are built + styled…
+		for (const cls of [
+			"cmp-sphere",
+			"cmp-gloss",
+			"cmp-spark",
+			"cmp-aura",
+			"cmp-mouth",
+		]) {
+			expect(js).toContain(cls);
+			expect(css).toContain(`.${cls}`);
+		}
+		// the gel gradient reads the per-instance theme vars
+		expect(css).toContain("var(--s1)");
+		expect(css).toContain('.cmp[data-exp="working"]');
+		// …and the old flat orb is gone
+		expect(js).not.toContain("avatar-ball");
+		expect(js).not.toContain("SUB_GRADS");
+		expect(css).not.toContain(".avatar-ball {");
+	});
+
+	test("the face is theme-able per instance; sub-agents get distinct colours", () => {
+		const js = read("shell.js");
+		// five gel presets incl. the sub-agent colours
+		for (const th of ["mint", "blue", "violet", "cyan"]) {
+			expect(js).toMatch(new RegExp(`\\b${th}:\\s*\\{`));
+		}
+		expect(js).toContain("SUB_THEME_CYCLE");
+		expect(js).toContain("themeFace"); // each face gets its own --s1..--s4/--glow
+		// the morphing mouth has a per-expression shape (incl. success/error)
+		expect(js).toContain("function mouthFor");
+		expect(js).toContain("success");
+		expect(js).toContain("error");
 	});
 
 	// ── Gaze + dynamic caption (PR A) — pure helpers exported on Companion ──

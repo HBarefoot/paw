@@ -22,24 +22,47 @@
 	const SVGNS = "http://www.w3.org/2000/svg";
 	const DEFAULT_SUBTITLE =
 		"Ask me to build something and it'll show up right here.";
-	// Sub-agent orb gradients (cycled), verbatim from the design's skills-data.js.
-	const SUB_GRADS = [
-		{
-			grad:
-				"radial-gradient(120% 120% at 32% 24%, #cdd6f7 0%, #8fb2ef 45%, #5b8df0 78%)",
-			glow: "rgba(91,141,240,.45)",
-		},
-		{
-			grad:
-				"radial-gradient(120% 120% at 32% 24%, #e3d2f7 0%, #b794ec 45%, #9163e8 78%)",
-			glow: "rgba(145,99,232,.45)",
-		},
-		{
-			grad:
-				"radial-gradient(120% 120% at 32% 24%, #c8f0f4 0%, #7fdbe8 45%, #2ec3e6 78%)",
-			glow: "rgba(46,195,230,.45)",
-		},
-	];
+	// Gel-sphere theme presets (verbatim stops from the design's companion.jsx).
+	// One face can be mint (the brand orchestrator), another blue/violet/cyan
+	// (the spawned sub-agents) — so each little agent reads as its own colour.
+	const THEMES = {
+		mint: { s1: "#b9c2f5", s2: "#7fc9dd", s3: "#3fe08f", s4: "#14b87e", glow: "rgba(46,230,168,.5)", accent: "#2ee6a8", mouth: "rgba(5,38,26,.92)" },
+		teal: { s1: "#b3c1f2", s2: "#74cbe4", s3: "#34d6e0", s4: "#119fc0", glow: "rgba(37,196,220,.5)", accent: "#25c4dc", mouth: "rgba(6,36,42,.92)" },
+		blue: { s1: "#cdd6f7", s2: "#9bb6ef", s3: "#6f8ff0", s4: "#4f6fe0", glow: "rgba(91,141,240,.5)", accent: "#6f8ff0", mouth: "rgba(12,20,52,.92)" },
+		violet: { s1: "#ddd0f7", s2: "#c0a2ec", s3: "#a06fe8", s4: "#8a4fe0", glow: "rgba(145,99,232,.5)", accent: "#a06fe8", mouth: "rgba(28,14,52,.92)" },
+		cyan: { s1: "#c8f0f4", s2: "#88dbe8", s3: "#34cfe0", s4: "#14a6c4", glow: "rgba(46,195,230,.5)", accent: "#34cfe0", mouth: "rgba(6,34,42,.92)" },
+	};
+	// Distinct colour per spawned sub-agent (cycled in spawn order).
+	const SUB_THEME_CYCLE = ["blue", "violet", "cyan"];
+
+	// expression → facial params. eyeSY squashes the eyes, pupil scales them,
+	// biasY tilts the resting gaze, mouth picks the SVG mouth shape. Covers all
+	// nine states the CompanionExpression machine can resolve.
+	const FACE_EXP = {
+		idle: { eyeSY: 1.0, pupil: 1.0, biasY: 0.0, mouth: "idle" },
+		sleepy: { eyeSY: 0.55, pupil: 0.92, biasY: 0.2, mouth: "idle" },
+		listening: { eyeSY: 1.02, pupil: 1.12, biasY: -0.1, mouth: "idle" },
+		thinking: { eyeSY: 0.95, pupil: 1.0, biasY: -0.85, mouth: "thinking" },
+		working: { eyeSY: 0.88, pupil: 0.86, biasY: 0.0, mouth: "working" },
+		waiting: { eyeSY: 0.92, pupil: 1.04, biasY: -0.3, mouth: "thinking" },
+		success: { eyeSY: 0.52, pupil: 1.02, biasY: -0.22, mouth: "success" },
+		worried: { eyeSY: 1.12, pupil: 0.78, biasY: 0.14, mouth: "error" },
+		wince: { eyeSY: 1.16, pupil: 0.72, biasY: 0.16, mouth: "error" },
+	};
+	const TREMOR_EXP = { error: 1, wince: 1, worried: 1 };
+
+	// SVG mouth path per shape key (viewBox 0..100), verbatim from the design.
+	function mouthFor(key) {
+		switch (key) {
+			case "thinking": return { d: "M41.5 62 Q50 59.5 58.5 62", fill: false, sw: 4.2 };
+			case "working": return { d: "M39 61 Q50 68.5 61 61", fill: false, sw: 5 };
+			case "success": return { d: "M30 56.5 Q50 63 70 56.5 Q64.5 83 50 83 Q35.5 83 30 56.5 Z", fill: true };
+			case "error": return { d: "M35 61 Q50 71 65 61", fill: false, sw: 4.8 };
+			// TTS lip-flap: a small open oval, alternated with the resting mouth.
+			case "talk": return { d: "M41 60 Q50 57 59 60 Q59 71 50 71 Q41 71 41 60 Z", fill: true };
+			default: return { d: "M33 59 Q50 73 67 59", fill: false, sw: 5 };
+		}
+	}
 
 	function el(tag, cls, text) {
 		const e = document.createElement(tag);
@@ -49,6 +72,186 @@
 	}
 	function svg(tag) {
 		return document.createElementNS(SVGNS, tag);
+	}
+
+	// ── the glossy "gel sphere" living face ─────────────────────────────────────
+	// Builds one face (main OR a sub-agent). Geometry is % of the sphere (sized by
+	// --sz), so the same DOM works at 178px and 54px. Refs + per-face animation
+	// state are cached on node._face; stepFace() drives it each rAF frame.
+	function buildFace(size) {
+		const cmp = el("div", "cmp");
+		cmp.style.setProperty("--sz", `${size}px`);
+		cmp.appendChild(el("div", "cmp-aura"));
+		cmp.appendChild(el("div", "cmp-ring"));
+		const sphere = el("div", "cmp-sphere");
+		const face = el("div", "cmp-face");
+		const mkEye = (cls) => {
+			const eye = el("div", `cmp-eye eye ${cls}`);
+			// keep `.pupil` so the test-pinned gaze query (querySelectorAll(".pupil"))
+			// still finds the pupils.
+			const pup = el("div", "cmp-pupil pupil");
+			pup.appendChild(el("div", "cmp-catch"));
+			eye.appendChild(pup);
+			return { eye, pup };
+		};
+		const L = mkEye("eye-l");
+		const Rr = mkEye("eye-r");
+		face.appendChild(L.eye);
+		face.appendChild(Rr.eye);
+		sphere.appendChild(face);
+		const ms = svg("svg");
+		ms.setAttribute("class", "cmp-mouth");
+		ms.setAttribute("viewBox", "0 0 100 100");
+		ms.setAttribute("preserveAspectRatio", "none");
+		const mp = svg("path");
+		ms.appendChild(mp);
+		sphere.appendChild(ms);
+		sphere.appendChild(el("div", "cmp-tint"));
+		sphere.appendChild(el("div", "cmp-gloss"));
+		sphere.appendChild(el("div", "cmp-spark"));
+		cmp.appendChild(sphere);
+		cmp._face = {
+			sphere,
+			eyeL: L.eye,
+			eyeR: Rr.eye,
+			pupL: L.pup,
+			pupR: Rr.pup,
+			mouthPath: mp,
+			size,
+			gazeX: 0,
+			gazeY: 0,
+			cur: { x: 0, y: 0 },
+			sacc: { x: 0, y: 0 },
+			nextSacc: 0,
+			blinkStart: -9999,
+			nextBlink: 700 + Math.random() * 800,
+			lastMouth: "",
+		};
+		return cmp;
+	}
+
+	// Paint a face with a theme preset (mint | teal | blue | violet | cyan) via the
+	// per-instance CSS vars the gel gradient + glow + mouth colour read.
+	function themeFace(cmp, themeKey) {
+		const th = THEMES[themeKey] || THEMES.mint;
+		const s = cmp.style;
+		s.setProperty("--s1", th.s1);
+		s.setProperty("--s2", th.s2);
+		s.setProperty("--s3", th.s3);
+		s.setProperty("--s4", th.s4);
+		s.setProperty("--glow", th.glow);
+		s.setProperty("--accent", th.accent);
+		s.setProperty("--mouth", th.mouth);
+	}
+
+	// One frame of face physics: gaze easing, blink (+ double-blink), breathing,
+	// squash pop, error tremor, per-expression eye-squash + pupil-scale, and the
+	// morphing mouth. `popValue` is the externally-stepped squash (the main face
+	// gets it from CompanionSpring; sub-agents pass 0 and breathe only). `gaze` is
+	// a viewport target {x,y} or null (→ idle saccades). Honours reduced-motion.
+	function stepFace(cmp, expr, now, opts) {
+		const f = cmp._face;
+		if (!f) return;
+		const reduced = opts.reduced;
+		const ep = FACE_EXP[expr] || FACE_EXP.idle;
+		const t = now / 1000;
+
+		// ── desired gaze (fraction -1..1) ──
+		let desX = 0;
+		let desY = 0;
+		const tgt = !reduced && opts.gaze ? opts.gaze : null;
+		if (tgt) {
+			const r = f.sphere.getBoundingClientRect();
+			const cx = r.left + r.width / 2;
+			const cy = r.top + r.height / 2;
+			const vx = tgt.x - cx;
+			const vy = tgt.y - cy;
+			const dist = Math.hypot(vx, vy) || 1;
+			const mg = Math.min(1, dist / 260);
+			desX = (vx / dist) * mg;
+			desY = (vy / dist) * mg;
+		} else if (!reduced) {
+			if (now > f.nextSacc) {
+				if (Math.random() < 0.32) { f.sacc.x = 0; f.sacc.y = 0; }
+				else { f.sacc.x = (Math.random() * 2 - 1) * 0.7; f.sacc.y = (Math.random() * 2 - 1) * 0.45; }
+				f.nextSacc = now + 1300 + Math.random() * 2200;
+			}
+			desX = f.sacc.x;
+			desY = f.sacc.y;
+		}
+		desY += ep.biasY;
+		const dlen = Math.hypot(desX, desY);
+		if (dlen > 1.05) { desX = (desX / dlen) * 1.05; desY = (desY / dlen) * 1.05; }
+		f.cur.x += (desX - f.cur.x) * 0.16;
+		f.cur.y += (desY - f.cur.y) * 0.16;
+		// pupil travel in px (17% of eye width), then glide via the lerp below.
+		const ew = f.size * 0.185;
+		const dx = f.cur.x * 0.17 * ew;
+		const dy = f.cur.y * 0.17 * ew;
+		// Ease toward the target; snap instantly under reduced-motion.
+		const k = reduced ? 1 : 0.18;
+		let gazeX = f.gazeX;
+		let gazeY = f.gazeY;
+		gazeX += (dx - gazeX) * k;
+		gazeY += (dy - gazeY) * k;
+		f.gazeX = gazeX;
+		f.gazeY = gazeY;
+
+		// ── blink (occasional double) ──
+		if (now > f.nextBlink) {
+			f.blinkStart = now;
+			f.nextBlink = now + (Math.random() < 0.18 ? 220 : 2600 + Math.random() * 3600);
+		}
+		const bAge = now - f.blinkStart;
+		let blink = 1;
+		if (bAge >= 0 && bAge < 150 && !reduced) blink = 1 - Math.sin((bAge / 150) * Math.PI) * 0.93;
+
+		// ── breathing + external pop + tremor → sphere transform ──
+		let sx = 1;
+		let sy = 1;
+		let ty = 0;
+		let tx = 0;
+		if (!reduced) {
+			const b = Math.sin(t * 1.5);
+			sx = 1 + b * 0.013;
+			sy = 1 - b * 0.013;
+			ty = Math.sin(t + 0.4) * (f.size * 0.022);
+		}
+		const e = Math.max(-0.12, Math.min(0.12, (opts.popValue || 0) * 0.04));
+		sx *= 1 + e;
+		sy *= 1 - e;
+		if (TREMOR_EXP[expr] && !reduced) tx += Math.sin(now / 45) * 1.5;
+		f.sphere.style.transform = `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`;
+
+		// ── eyes / pupils ──
+		const eyeT = `scaleY(${(blink * ep.eyeSY).toFixed(3)})`;
+		f.eyeL.style.transform = eyeT;
+		f.eyeR.style.transform = eyeT;
+		const pupT = `translate(-50%, -50%) translate(${gazeX.toFixed(2)}px, ${gazeY.toFixed(2)}px) scale(${ep.pupil.toFixed(3)})`;
+		f.pupL.style.transform = pupT;
+		f.pupR.style.transform = pupT;
+
+		// ── state class for the aura / ring / tint layers (normalised to the 5 mouth
+		// categories: idle | thinking | working | success | error) ──
+		if (ep.mouth !== f.lastExp) {
+			f.lastExp = ep.mouth;
+			cmp.setAttribute("data-exp", ep.mouth);
+		}
+
+		// ── mouth (only re-paint on shape change; TTS flap overrides) ──
+		const mouthKey = f.speaking && f.talkOpen ? "talk" : ep.mouth;
+		if (mouthKey !== f.lastMouth) {
+			f.lastMouth = mouthKey;
+			const m = mouthFor(mouthKey);
+			f.mouthPath.setAttribute("d", m.d);
+			if (m.fill) {
+				f.mouthPath.setAttribute("class", "fill");
+				f.mouthPath.removeAttribute("stroke-width");
+			} else {
+				f.mouthPath.setAttribute("class", "");
+				f.mouthPath.setAttribute("stroke-width", String(m.sw));
+			}
+		}
 	}
 
 	/** Strip control chars + clamp length on text that can embed remote tool
@@ -120,24 +323,19 @@
 		return { kind: "center" };
 	}
 
-	function buildAvatar() {
+	function buildAvatar(themeKey) {
 		const wrap = el("div", "avatar");
-		wrap.appendChild(el("div", "avatar-glow"));
 		const antenna = el("div", "antenna");
 		antenna.appendChild(el("span"));
 		antenna.appendChild(el("span"));
 		antenna.appendChild(el("span"));
 		wrap.appendChild(antenna);
-		const ball = el("div", "avatar-ball");
-		ball.setAttribute("data-avatar", "1");
-		const eyeL = el("div", "eye eye-l");
-		eyeL.appendChild(el("div", "pupil"));
-		const eyeR = el("div", "eye eye-r");
-		eyeR.appendChild(el("div", "pupil"));
-		ball.appendChild(eyeL);
-		ball.appendChild(eyeR);
-		ball.appendChild(el("div", "smile"));
-		wrap.appendChild(ball);
+		const cmp = buildFace(178);
+		themeFace(cmp, themeKey || "mint");
+		// data-avatar stays on the transformed/visible orb (the sphere) so the mood
+		// filter, the physics transform, and the gaze/tether lookups all target it.
+		cmp._face.sphere.setAttribute("data-avatar", "1");
+		wrap.appendChild(cmp);
 		return wrap;
 	}
 
@@ -161,7 +359,7 @@
 		// Wrap-dock composition: centered avatar → sub-agents → skills wrapping →
 		// greeting → dynamic subtitle → ops feed (no stat cards).
 		const avatarZone = el("div", "avatar-zone");
-		avatarZone.appendChild(buildAvatar());
+		avatarZone.appendChild(buildAvatar(cfg.faceTheme));
 		// Mood layer: a slow real-telemetry health scalar (0..1, injected from the
 		// 1-hour tool_log failure rate) varies SATURATION / BRIGHTNESS / POSTURE
 		// only — the avatar hue stays brand-driven (the white-label rule).
@@ -205,18 +403,22 @@
 			else if (d.type === "paw:speak") onSpeak(d.phase);
 		});
 
-		// TTS mouth-sync: lip-flap the smile while speaking (masks the MOUTH only —
-		// eyes/antenna keep their expression). Driven by real SpeechSynthesis events.
+		// TTS mouth-sync: lip-flap the SVG mouth while speaking (masks the MOUTH only
+		// — eyes keep their expression). Sets flags read by stepFace's mouth morph.
+		// Driven by real SpeechSynthesis events relayed via postMessage.
 		function onSpeak(phase) {
 			const av = avatarZone.firstChild;
-			const smile = av.querySelector(".smile");
+			const f = av && av.querySelector(".cmp") && av.querySelector(".cmp")._face;
+			if (!f) return;
 			if (phase === "start") {
+				f.speaking = true;
 				av.classList.add("speaking");
 			} else if (phase === "boundary") {
-				if (smile) smile.classList.toggle("talk");
+				f.talkOpen = !f.talkOpen;
 			} else if (phase === "end") {
+				f.speaking = false;
+				f.talkOpen = false;
 				av.classList.remove("speaking");
-				if (smile) smile.classList.remove("talk");
 			}
 		}
 
@@ -303,18 +505,12 @@
 
 		function buildSubagent(a) {
 			const node = el("div", "subagent");
-			const ball = el("div", "subagent-ball");
-			const g = SUB_GRADS[a.gradIndex % SUB_GRADS.length];
-			ball.style.background = g.grad;
-			ball.style.boxShadow = `0 0 26px ${g.glow}`;
-			const eyeL = el("div", "eye eye-l sm");
-			eyeL.appendChild(el("div", "pupil"));
-			const eyeR = el("div", "eye eye-r sm");
-			eyeR.appendChild(el("div", "pupil"));
-			ball.appendChild(eyeL);
-			ball.appendChild(eyeR);
-			ball.appendChild(el("div", "smile sm"));
-			node.appendChild(ball);
+			// Each little agent is the SAME gel face, just small (54px) and themed a
+			// distinct colour (blue/violet/cyan) by spawn order — so it reads as its
+			// own agent, linked to the mint orchestrator.
+			const cmp = buildFace(54);
+			themeFace(cmp, SUB_THEME_CYCLE[a.gradIndex % SUB_THEME_CYCLE.length]);
+			node.appendChild(cmp); // node.firstChild = the face (carries data-subagent)
 			node.appendChild(el("span", "subagent-name", a.name));
 			node.appendChild(el("span", "subagent-status", "idle"));
 			return node;
@@ -452,70 +648,79 @@
 			}
 		}
 
+		// Resolve the MAIN face's gaze target to viewport px (null → idle saccades).
+		// Mirrors gazeTarget()'s priority: active pill > acting sub > input; the
+		// per-face easing lives in stepFace.
+		function mainGazePx(st) {
+			const av = avatarZone.firstChild;
+			const cmp = av && av.querySelector(".cmp");
+			if (!cmp || !cmp._face) return null;
+			const t = gazeTarget(st, st.expression);
+			const ctr = (el2) => {
+				const r = el2.getBoundingClientRect();
+				return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+			};
+			if (t.kind === "pill") {
+				const p = pillByKey.get(t.key);
+				if (p) return ctr(p);
+			} else if (t.kind === "sub") {
+				const node = subRow.children[t.idx];
+				if (node?.firstChild) return ctr(node.firstChild);
+			} else if (t.kind === "input") {
+				const b = cmp._face.sphere.getBoundingClientRect();
+				return { x: b.left + b.width / 2, y: b.top + b.height / 2 + 220 };
+			}
+			return null;
+		}
+
+		// Each little agent gets its own physics: it looks toward the orchestrator
+		// (or, while acting, toward the skill pill that tethers to it), wears an
+		// expression from its live status (working / success / wince), and blinks.
+		function stepSubs(st, now) {
+			const nodes = subRow.querySelectorAll("[data-subagent]");
+			if (!nodes || !nodes.length) return;
+			const mainSphere = avatarZone.firstChild.querySelector("[data-avatar]");
+			let mainCtr = null;
+			if (mainSphere) {
+				const r = mainSphere.getBoundingClientRect();
+				mainCtr = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+			}
+			nodes.forEach((cmp) => {
+				if (!cmp._face) return;
+				const idx = Number.parseInt(cmp.getAttribute("data-subagent"), 10);
+				const a = st.agents && st.agents[idx];
+				let expr = "idle";
+				let gaze = mainCtr;
+				if (a) {
+					if (a.status === "done") expr = a.ok === false ? "wince" : "success";
+					else if (a.working) {
+						expr = "working";
+						const pill = home.querySelector(`[data-tether="sub${idx}"]`);
+						if (pill) {
+							const r = pill.getBoundingClientRect();
+							gaze = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+						}
+					}
+				}
+				stepFace(cmp, expr, now, { gaze, popValue: 0, reduced });
+			});
+		}
+
 		function applyPhysics(st) {
 			const now = Date.now();
 			const dt = lastTs ? (now - lastTs) / 1000 : 0;
 			lastTs = now;
 			if (SP) SP.step(pop, 0, dt, { reduced });
-			const ball = avatarZone.firstChild.querySelector("[data-avatar]");
-			if (ball) {
-				const e = Math.max(-0.12, Math.min(0.12, pop.value * 0.04));
-				ball.style.transform = `scale(${(1 + e).toFixed(3)}, ${(1 - e).toFixed(3)})`;
+			const av = avatarZone.firstChild;
+			const mainCmp = av && av.querySelector(".cmp");
+			if (mainCmp) {
+				stepFace(mainCmp, st.expression || "idle", now, {
+					gaze: mainGazePx(st),
+					popValue: pop.value,
+					reduced,
+				});
 			}
-			applyGaze(st);
-		}
-
-		// Smoothed pupil offset — the eyes GLIDE toward the gaze target each frame
-		// instead of snapping to it (reduced-motion snaps; see below).
-		let gazeX = 0;
-		let gazeY = 0;
-		function applyGaze(st) {
-			const ball = avatarZone.firstChild.querySelector("[data-avatar]");
-			if (!ball) return;
-			const pupils = ball.querySelectorAll(".pupil");
-			if (!pupils || !pupils.length) return;
-			const t = gazeTarget(st, st.expression);
-			const br = ball.getBoundingClientRect();
-			const bx = br.left + br.width / 2;
-			const by = br.top + br.height / 2;
-			let tx = null;
-			let ty = null;
-			if (t.kind === "pill") {
-				const p = pillByKey.get(t.key);
-				if (p) {
-					const r = p.getBoundingClientRect();
-					tx = r.left + r.width / 2;
-					ty = r.top + r.height / 2;
-				}
-			} else if (t.kind === "sub") {
-				const node = subRow.children[t.idx];
-				if (node?.firstChild) {
-					const r = node.firstChild.getBoundingClientRect();
-					tx = r.left + r.width / 2;
-					ty = r.top + r.height / 2;
-				}
-			} else if (t.kind === "input") {
-				// the chat input lives below the companion (parent doc) → look down
-				tx = bx;
-				ty = by + 220;
-			}
-			let dx = 0;
-			let dy = 0;
-			if (tx != null && !reduced) {
-				const vx = tx - bx;
-				const vy = ty - by;
-				const len = Math.hypot(vx, vy) || 1;
-				const max = 4; // px of travel within the eye
-				dx = (vx / len) * max;
-				dy = (vy / len) * max;
-			}
-			// Ease toward the target; snap instantly under reduced-motion.
-			const k = reduced ? 1 : 0.18;
-			gazeX += (dx - gazeX) * k;
-			gazeY += (dy - gazeY) * k;
-			for (const pu of pupils) {
-				pu.style.transform = `translate(calc(-50% + ${gazeX.toFixed(2)}px), calc(-50% + ${gazeY.toFixed(2)}px))`;
-			}
+			stepSubs(st, now);
 		}
 
 		function computeTethers(st) {
