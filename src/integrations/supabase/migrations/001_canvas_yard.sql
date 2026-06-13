@@ -75,6 +75,16 @@ grant usage on schema canvas to anon, authenticated, service_role;
 --                      write-only through the receiver and ship no Supabase
 --                      credentials; anonymous direct reads are out of scope
 --                      (phase 2 would add explicit RLS policies + anon SELECT).
+--
+-- IMPORTANT (hosted Supabase quirk): `ALTER DEFAULT PRIVILEGES FOR ROLE X`
+-- requires the executing role to be a MEMBER of X — owning/having created X is
+-- not enough. On hosted Supabase the project `postgres` role created paw_builder
+-- (CREATEROLE) but is NOT automatically a member, so these statements fail with
+-- `42501: permission denied` and abort the whole migration. Granting membership
+-- first fixes it; it does not widen paw_builder's blast radius (postgres can
+-- already manage any role it created). The membership is harmless and idempotent.
+grant paw_builder to postgres;
+
 alter default privileges for role paw_builder in schema canvas
   grant select, insert, update, delete on tables to service_role, authenticated;
 

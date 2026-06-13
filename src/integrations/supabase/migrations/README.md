@@ -32,6 +32,24 @@ Creates:
 
 The migration is idempotent — safe to re-run.
 
+### Hosted-Supabase compatibility
+
+Two statements are shaped specifically so the file applies cleanly as the
+project `postgres` role in the Supabase SQL editor (where `postgres` is **not** a
+true superuser):
+
+- **No `ALTER ROLE … NOSUPERUSER`.** Changing the `SUPERUSER` attribute of any
+  role — even to `NO` — needs real superuser, so this would fail `42501` and
+  abort the migration. `NOSUPERUSER` is set at `CREATE ROLE` time (allowed) and
+  is the default; non-superuser-ness is **verified** via the `pg_roles` check
+  below (`rolsuper = f`), never re-applied.
+- **`grant paw_builder to postgres;` before the `ALTER DEFAULT PRIVILEGES FOR
+  ROLE paw_builder` statements.** Altering another role's default privileges
+  requires the executing role to be a **member** of that role — creating it
+  (via `CREATEROLE`) is not enough. Without the membership grant those two
+  statements fail `42501` and abort. The grant does not widen `paw_builder`'s
+  blast radius (`postgres` can already manage any role it created).
+
 ## Apply it (once)
 
 ### Step 1 — run the migration as the project owner
