@@ -69,16 +69,27 @@ export class SupabaseClient {
 		return this.request<unknown[]>(url, "GET");
 	}
 
-	/** Insert one or many rows; returns the inserted representation. */
+	/**
+	 * Insert one or many rows; returns the inserted representation.
+	 *
+	 * `opts.schema` targets a non-default PostgREST schema via the `Content-Profile`
+	 * header. The form receiver uses this to write into the agent's `canvas` yard
+	 * (PostgREST's default profile is `public`, so a `canvas`-only table is
+	 * otherwise unreachable for writes). Omitted → the default `public` schema,
+	 * so existing callers are unchanged.
+	 */
 	async insert(
 		table: string,
 		rows: Record<string, unknown> | Record<string, unknown>[],
+		opts: { schema?: string } = {},
 	): Promise<unknown[]> {
 		assertIdentifier("table", table);
+		const headers: Record<string, string> = { Prefer: "return=representation" };
+		if (opts.schema) {
+			headers["Content-Profile"] = assertIdentifier("schema", opts.schema);
+		}
 		const url = `${this.baseUrl}/${table}`;
-		return this.request<unknown[]>(url, "POST", rows, {
-			Prefer: "return=representation",
-		});
+		return this.request<unknown[]>(url, "POST", rows, headers);
 	}
 
 	/** Update rows matching `filters` (REQUIRED) with `values`. */
@@ -221,6 +232,42 @@ export class SupabaseClient {
 		} finally {
 			clearTimeout(timer);
 		}
+	}
+}
+
+/** The yard schema the agent provisions into and the only schema forms may target. */
+export const CANVAS_SCHEMA = "canvas";
+
+/** Structural subset of SupabaseClient needed to introspect exposed tables. */
+export interface SchemaIntrospector {
+	listTables(
+		schemas?: string[],
+	): Promise<{ tables: Array<{ schema: string; name: string }> }>;
+}
+
+/**
+ * Throw unless `table` exists in the `canvas` schema (the agent's fenced yard).
+ *
+ * Called at BOTH form-binding creation and submission time so a `supabase` form
+ * action can only ever point at a table inside the fence: a name outside `canvas`
+ * (or in a privileged schema like `public`/`auth`) is refused at creation, and a
+ * table that later disappears fails closed at submission with this structured,
+ * loggable error — never an unexpected write. Reuses the identifier guard so a
+ * malformed name is rejected before any network call.
+ */
+export async function assertCanvasTable(
+	client: SchemaIntrospector,
+	table: string,
+): Promise<void> {
+	assertIdentifier("table", table);
+	const { tables } = await client.listTables([CANVAS_SCHEMA]);
+	const inYard = tables.some(
+		(t) => t.schema === CANVAS_SCHEMA && t.name === table,
+	);
+	if (!inYard) {
+		throw new Error(
+			`Table "${table}" is not in the canvas schema. Provision it with supabase_create_table and ensure the canvas schema is exposed in the Supabase API settings (PostgREST exposed schemas).`,
+		);
 	}
 }
 

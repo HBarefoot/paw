@@ -573,6 +573,7 @@ export function createWebApp(
 			toolRegistry: kernel.toolRegistryPublic,
 			strapi: kernel.strapi,
 			hubspotClient: kernel.hubspotClient,
+			supabase: kernel.supabase,
 			getClientIp,
 			isAuthenticated: (c) => {
 				const sessionToken = getCookie(c, "paw_session");
@@ -2128,7 +2129,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			"Do NOT use file_write — only canvas_write works for the live preview.",
 			"Write complete, self-contained HTML files with inline CSS and JS when possible.",
 			"Organize related pages into folders with canvas_mkdir / canvas_move (e.g. 'sales-campaign/', 'blog/', 'cms/') so the workspace stays a tidy operations hub.",
-			"REAL BACKEND WIRING: to make a page's form/button actually capture data (leads, signups, contacts), FIRST call canvas_action_create (type 'strapi' for a CMS content-type, or 'hubspot' for a CRM contact) with a fieldMap, then build the page's <form action> to POST to the returned submitUrl with <input name> matching the fieldMap keys. Never fake a form that goes nowhere — wire it to a real action so submissions route to the CRM/CMS and appear in Submissions.",
+			"REAL BACKEND WIRING: to make a page's form/button actually capture data (leads, signups, contacts), FIRST call canvas_action_create (type 'strapi' for a CMS content-type, 'hubspot' for a CRM contact, or 'supabase' to insert a row into one of YOUR canvas-yard tables — create it with supabase_create_table first, then map fields to its columns) with a fieldMap, then build the page's <form action> to POST to the returned submitUrl with <input name> matching the fieldMap keys. Never fake a form that goes nowhere — wire it to a real action so submissions route to the backend and appear in Submissions.",
 			...brandDirective,
 			// Reliability for weaker tool-callers: always emit the full
 			// document inline too. If the model forgets to call canvas_write,

@@ -1,5 +1,6 @@
-import { type Context, Hono } from "hono";
 import type { Database } from "bun:sqlite";
+import { type Context, Hono } from "hono";
+import { assertCanvasTable } from "../../integrations/supabase/client.js";
 import type { ToolResult } from "../../types/message.js";
 
 // The public canvas form receiver, extracted from createWebApp so it can be
@@ -23,6 +24,20 @@ interface StrapiLike {
 interface HubspotLike {
 	createContact(data: Record<string, unknown>): Promise<{ id: unknown }>;
 }
+/**
+ * Structural subset of SupabaseClient the receiver needs: introspect the canvas
+ * yard (for the submission-time fence check) and insert a row pinned to it.
+ */
+interface SupabaseLike {
+	listTables(
+		schemas?: string[],
+	): Promise<{ tables: Array<{ schema: string; name: string }> }>;
+	insert(
+		table: string,
+		rows: Record<string, unknown> | Record<string, unknown>[],
+		opts?: { schema?: string },
+	): Promise<unknown[]>;
+}
 interface ToolRunner {
 	execute(name: string, input: Record<string, unknown>): Promise<ToolResult>;
 }
@@ -35,6 +50,8 @@ export interface FormReceiverDeps {
 	strapi: StrapiLike | null;
 	/** kernel.hubspotClient (null when not configured). */
 	hubspotClient: HubspotLike | null;
+	/** kernel.supabase — service-key CRUD client (null when not configured). */
+	supabase: SupabaseLike | null;
 	/** True when the request carries a valid session cookie or bearer token. */
 	isAuthenticated: (c: Context) => boolean;
 	/** Resolve the client IP (respects trustedProxy config). */
@@ -64,12 +81,23 @@ const FORM_CORS = {
  * so it stays public (the require_auth gate is per-action, via isAuthenticated).
  */
 export function createFormReceiver(deps: FormReceiverDeps): Hono {
-	const { db, toolRegistry, strapi, hubspotClient, isAuthenticated, getClientIp } =
-		deps;
+	const {
+		db,
+		toolRegistry,
+		strapi,
+		hubspotClient,
+		supabase,
+		isAuthenticated,
+		getClientIp,
+	} = deps;
 
 	// Per-action + per-IP submission rate limiting (in-memory, sliding window).
 	const formRateLimit = new Map<string, { count: number; resetAt: number }>();
-	function checkFormRate(key: string, limit: number, windowMs: number): boolean {
+	function checkFormRate(
+		key: string,
+		limit: number,
+		windowMs: number,
+	): boolean {
 		const now = Date.now();
 		const e = formRateLimit.get(key);
 		if (!e || now > e.resetAt) {
@@ -172,6 +200,7 @@ export function createFormReceiver(deps: FormReceiverDeps): Hono {
 			const cfg = JSON.parse(action.config_json || "{}") as {
 				contentType?: string;
 				tool?: string;
+				table?: string;
 			};
 			if (action.type === "strapi") {
 				if (!strapi) throw new Error("Strapi not configured");
@@ -196,6 +225,27 @@ export function createFormReceiver(deps: FormReceiverDeps): Hono {
 					);
 				}
 				targetRef = `tool:${toolName}`;
+				status = "routed";
+			} else if (action.type === "supabase") {
+				// Insert the mapped fields as a row into a table in the agent's
+				// `canvas` yard. assertCanvasTable re-validates membership at SUBMIT
+				// time (the binding was checked at creation too), so an action whose
+				// table later disappeared — or was somehow pointed outside the fence —
+				// fails closed here with a structured error that lands in target_ref
+				// via the catch below, rather than writing anywhere unexpected. The
+				// insert itself is pinned to the canvas schema (Content-Profile), so a
+				// public table of the same name can never be hit.
+				if (!supabase) throw new Error("Supabase not configured");
+				const table = String(cfg.table ?? "");
+				if (!table) throw new Error("supabase action missing config.table");
+				await assertCanvasTable(supabase, table);
+				const inserted = await supabase.insert(table, mapped, {
+					schema: "canvas",
+				});
+				const first = Array.isArray(inserted)
+					? (inserted[0] as { id?: unknown } | undefined)
+					: undefined;
+				targetRef = `supabase:${table}${first?.id !== undefined ? `:${first.id}` : ""}`;
 				status = "routed";
 			} else {
 				throw new Error(`Unknown action type: ${action.type}`);
