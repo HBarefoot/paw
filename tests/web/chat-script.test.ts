@@ -56,4 +56,39 @@ describe("chat client script", () => {
 		expect(script).not.toContain('sid.indexOf("canvas-") === 0) return');
 		expect(script).not.toContain('!sessionId.startsWith("canvas-")');
 	});
+
+	test("prompt picker builds DOM nodes, not an HTML string (pawModal escapes strings)", () => {
+		// Regression: pawModal._show escapes a string body via textContent, so the
+		// old `'<div class="prompt-pick-list">' + items` string rendered the markup
+		// as literal text and the rows were unclickable. The picker must be built
+		// from real DOM nodes and passed as a Node.
+		expect(script).not.toContain('<div class="prompt-pick" data-pid="');
+		expect(script).not.toContain('<div class="prompt-pick-list">');
+		// Built via DOM + passed as a Node, with Cancel as a structured action.
+		expect(script).toContain('list.className = "prompt-pick-list"');
+		expect(script).toContain("row.dataset.pid = p.id");
+		expect(script).toContain('pawModal._show("Insert a prompt", list, [');
+		expect(script).toContain('label: "Cancel"');
+		// The per-row click still records usage and inserts the body.
+		expect(script).toContain('/use", { method: "POST" }');
+	});
+
+	test("memory citation viewer builds DOM nodes, not an HTML string", () => {
+		// Same pawModal trap: the memory popover passed an HTML string body, so it
+		// rendered <div>/<code> as literal text. Now built from DOM nodes.
+		expect(script).not.toContain("<div style='max-height");
+		expect(script).not.toContain('"ID: <code>"');
+		expect(script).toContain('idCode = document.createElement("code")');
+		expect(script).toContain("idCode.textContent = id");
+		expect(script).toContain(
+			'pawModal.alert("Memory " + id.slice(0, 6), panel)',
+		);
+	});
+
+	test("export-format prompt is plain text, no <code> markup", () => {
+		// pawModal.prompt sets its message via textContent; the <code> tags showed
+		// as literal markup. The hint is plain text now.
+		expect(script).not.toContain("<code>md</code>");
+		expect(script).toContain("Choose format: md (default), html, or json.");
+	});
 });

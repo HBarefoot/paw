@@ -80,7 +80,14 @@ window.pawModal = {
     if (body instanceof Node) {
       bodyEl.appendChild(body);
     } else {
-      bodyEl.textContent = body == null ? "" : String(body);
+      var bodyStr = body == null ? "" : String(body);
+      // Dev guard: a string body is escaped to text. If it carries a closing
+      // tag it's almost certainly HTML the caller expected to render — warn so
+      // the "raw markup in a modal" trap can't recur silently. Pass a DOM Node.
+      if (bodyStr.indexOf("</") !== -1 && typeof console !== "undefined" && console.warn) {
+        console.warn("pawModal: string body looks like HTML; markup is escaped to text. Pass a DOM Node to render it. Body starts: " + bodyStr.slice(0, 48));
+      }
+      bodyEl.textContent = bodyStr;
     }
     modal.appendChild(bodyEl);
     var actionsEl = document.createElement("div");

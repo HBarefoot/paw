@@ -1060,23 +1060,35 @@ export function getChatScript(): string {
       if (create) window.location.href = "/prompts";
       return;
     }
-    var items = prompts.map(function(p) {
+    // Build the picker as real DOM nodes (NOT an HTML string): pawModal
+    // escapes a string body via textContent, so a string would render the
+    // markup literally and the rows would be unclickable. textContent is
+    // inherently XSS-safe, so no escapeHtml is needed here.
+    var list = document.createElement("div");
+    list.className = "prompt-pick-list";
+    prompts.forEach(function(p) {
       var tags = p.tags ? " · " + p.tags : "";
       var preview = (p.body || "").slice(0, 80).replace(/\\s+/g, " ");
-      return '<div class="prompt-pick" data-pid="' + p.id + '">'
-        + '<div><strong>' + escapeHtml(p.title) + '</strong>'
-        + '<span class="text-xs text-muted" style="margin-left:6px">' + escapeHtml(tags) + '</span></div>'
-        + '<div class="text-xs text-muted" style="margin-top:4px">' + escapeHtml(preview) + '...</div></div>';
-    }).join("");
-    pawModal._show(
-      "Insert a prompt",
-      '<div class="prompt-pick-list">' + items + '</div>',
-      '<button class="btn-cancel">Cancel</button>'
-    );
-    pawModal._overlay.querySelector(".btn-cancel").onclick = function() { pawModal._close(); };
-    pawModal._overlay.querySelectorAll(".prompt-pick").forEach(function(el) {
-      el.onclick = async function() {
-        var pid = el.dataset.pid;
+      var row = document.createElement("div");
+      row.className = "prompt-pick";
+      row.dataset.pid = p.id;
+      var head = document.createElement("div");
+      var strong = document.createElement("strong");
+      strong.textContent = p.title;
+      head.appendChild(strong);
+      var tagSpan = document.createElement("span");
+      tagSpan.className = "text-xs text-muted";
+      tagSpan.style.marginLeft = "6px";
+      tagSpan.textContent = tags;
+      head.appendChild(tagSpan);
+      row.appendChild(head);
+      var prev = document.createElement("div");
+      prev.className = "text-xs text-muted";
+      prev.style.marginTop = "4px";
+      prev.textContent = preview + "...";
+      row.appendChild(prev);
+      row.onclick = async function() {
+        var pid = row.dataset.pid;
         pawModal._close();
         var useRes = await fetch("/api/prompts/" + encodeURIComponent(pid) + "/use", { method: "POST" });
         if (!useRes.ok) return;
@@ -1086,7 +1098,11 @@ export function getChatScript(): string {
         autoResizeInput();
         input.focus();
       };
+      list.appendChild(row);
     });
+    pawModal._show("Insert a prompt", list, [
+      { label: "Cancel", cls: "btn-cancel", onclick: function() { pawModal._close(); } }
+    ]);
   };
 
   window.exportSession = async function exportSession() {
@@ -1094,9 +1110,11 @@ export function getChatScript(): string {
       await pawModal.alert("Export", "Select or send a message first to export.");
       return;
     }
+    // Plain text: pawModal.prompt sets the message via textContent, so the old
+    // <code> tags rendered as literal markup. The hint reads fine as text.
     var format = await pawModal.prompt(
       "Export conversation",
-      'Choose format: <code>md</code> (default), <code>html</code>, or <code>json</code>.',
+      "Choose format: md (default), html, or json.",
       "md"
     );
     if (!format) return;
@@ -1470,13 +1488,25 @@ export function getChatScript(): string {
       }
       var data = await res.json();
       var mem = data.memory || {};
-      var body = "<div style='max-height:40vh;overflow:auto;font-size:14px;line-height:1.5'>"
-        + "<div class='text-xs text-muted' style='margin-bottom:8px'>"
-        + "ID: <code>" + id + "</code> \\u00B7 category: " + escapeHtml(mem.category || "?")
-        + (mem.source ? " \\u00B7 source: " + escapeHtml(mem.source) : "")
-        + "</div>"
-        + "<div>" + escapeHtml(mem.text || "") + "</div></div>";
-      await pawModal.alert("Memory " + id.slice(0, 6), body);
+      // Real DOM nodes (not an HTML string): pawModal escapes a string body via
+      // textContent, so the old markup rendered literally. textContent is XSS-safe
+      // by construction, so the memory text/category/source need no escapeHtml.
+      var panel = document.createElement("div");
+      panel.style.cssText = "max-height:40vh;overflow:auto;font-size:14px;line-height:1.5";
+      var meta = document.createElement("div");
+      meta.className = "text-xs text-muted";
+      meta.style.marginBottom = "8px";
+      meta.appendChild(document.createTextNode("ID: "));
+      var idCode = document.createElement("code");
+      idCode.textContent = id;
+      meta.appendChild(idCode);
+      meta.appendChild(document.createTextNode(" \\u00B7 category: " + (mem.category || "?")));
+      if (mem.source) meta.appendChild(document.createTextNode(" \\u00B7 source: " + mem.source));
+      panel.appendChild(meta);
+      var textDiv = document.createElement("div");
+      textDiv.textContent = mem.text || "";
+      panel.appendChild(textDiv);
+      await pawModal.alert("Memory " + id.slice(0, 6), panel);
     } catch (err) {
       await pawModal.alert("Memory unavailable", String(err));
     }
