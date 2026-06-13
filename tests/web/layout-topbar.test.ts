@@ -25,4 +25,21 @@ describe("Layout hideTopbar", () => {
 		// The title only ever appears in the topbar, so its chrome is gone too.
 		expect(html).not.toContain('class="page-title"');
 	});
+
+	test("no-topbar chat fills the viewport via flex, not a fixed calc", () => {
+		// REGRESSION: the panels used `height: calc(100vh - 133px)`, which
+		// over-subtracted and left a gap below both panes. They now flex-fill the
+		// content column so they reach the viewport bottom with even margins.
+		const css = String(
+			Layout({ title: "Chat", hideTopbar: true, children: "x" }),
+		);
+		// The fragile magic number is gone…
+		expect(css).not.toContain("100vh - 133px");
+		// …replaced by a flex-fill on the chat+canvas card, and a column .content
+		// so the card can grow into the space under the (hidden) topbar.
+		expect(css).toMatch(/\.no-topbar \.chat-with-canvas \{[^}]*flex: 1[^}]*\}/);
+		expect(css).toMatch(
+			/\.no-topbar \.content \{[^}]*flex-direction: column[^}]*\}/,
+		);
+	});
 });

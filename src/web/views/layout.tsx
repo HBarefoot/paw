@@ -1522,10 +1522,15 @@ const cssDesignSystem = `
     background: var(--bg-card);
     box-shadow: var(--shadow-sm);
   }
-  /* When the page-title topbar is hidden (/chat), reclaim its ~52px so the
-     chat + canvas grow taller. Mirrors the base heights above minus the topbar. */
-  .no-topbar .chat-container { height: calc(100vh - 88px); }
-  .no-topbar .chat-with-canvas { height: calc(100vh - 133px); }
+  /* When the page-title topbar is hidden (/chat — the only page that sets
+     hideTopbar), let the chat + canvas FILL the viewport instead of a fixed
+     calc that over-subtracts and leaves a gap at the bottom. .main-area is a
+     flex column and .content is flex:1, so making .content a column lets the
+     card take the remaining height below the toolbar — even top/bottom margin
+     from .content's padding, both panels reaching the bottom. */
+  .no-topbar .content { display: flex; flex-direction: column; }
+  .no-topbar .chat-with-canvas { flex: 1; min-height: 0; height: auto; }
+  .no-topbar .chat-container { height: auto; }
   /* When inside the unified wrapper, chat-container loses its own card styles */
   .chat-with-canvas .chat-container {
     flex: 1;
