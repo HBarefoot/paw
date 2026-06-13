@@ -1,0 +1,9 @@
+{
+  "name": "example-plugin",
+  "version": "0.1.0",
+  "description": "Example plugin demonstrating Paw skill structure and tool patterns",
+  "permissions": [
+    "net:api.example.com",
+    "memory:read"
+  ]
+}
