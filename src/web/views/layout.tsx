@@ -690,6 +690,10 @@ const cssDesignSystem = `
 
   .chat-messages {
     flex: 1;
+    /* min-height:0 lets this flex child shrink below its content's min-content
+       (a long conversation) so its own overflow-y:auto scroll engages instead of
+       forcing the column — and the page — taller. */
+    min-height: 0;
     overflow-y: auto;
     padding: 24px;
     display: flex;
@@ -1538,6 +1542,14 @@ const cssDesignSystem = `
     flex-direction: column;
     height: 100vh;
     height: 100dvh;
+    /* HARD cap, not just height: .content inherits flex:1 (flex-basis 0%), and
+       flex-basis overrides the height property for a flex item's main size — so
+       the height above is ignored and .content grows with the flex chain (the
+       outer .app-layout is only min-height:100vh). max-height is applied AFTER
+       flex sizing, so it cannot be overridden — it physically caps .content at
+       the viewport, and overflow:hidden means the page can never scroll. */
+    max-height: 100vh;
+    max-height: 100dvh;
     overflow: hidden;
   }
   .no-topbar .chat-with-canvas { flex: 1; min-height: 0; height: auto; }
@@ -1575,7 +1587,7 @@ const cssDesignSystem = `
 
   /* ===== CANVAS BODY (explorer | main) ===== */
   .canvas-body { flex: 1; display: flex; min-height: 0; }
-  .canvas-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .canvas-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
   /* ===== WORKSPACE EXPLORER ===== */
   .canvas-explorer {
@@ -1662,7 +1674,7 @@ const cssDesignSystem = `
   @keyframes save-flash { 0% { transform: scale(1.8); opacity: 0.5; } 100% { transform: scale(1); opacity: 1; } }
   .canvas-tab-add { color: var(--text-tertiary); font-size: 16px; font-weight: 500; padding: 4px 10px; font-family: var(--font-sans); }
   .canvas-tab-add:hover { color: var(--accent); background: var(--bg-hover); }
-  .canvas-tab-content { flex: 1; position: relative; }
+  .canvas-tab-content { flex: 1; position: relative; min-height: 0; }
   .canvas-tab-content iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: none; }
   .canvas-tab-content iframe.hidden { display: none; }
 
