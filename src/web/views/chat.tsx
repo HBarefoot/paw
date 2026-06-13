@@ -1110,9 +1110,11 @@ export function getChatScript(): string {
       await pawModal.alert("Export", "Select or send a message first to export.");
       return;
     }
+    // Plain text: pawModal.prompt sets the message via textContent, so the old
+    // <code> tags rendered as literal markup. The hint reads fine as text.
     var format = await pawModal.prompt(
       "Export conversation",
-      'Choose format: <code>md</code> (default), <code>html</code>, or <code>json</code>.',
+      "Choose format: md (default), html, or json.",
       "md"
     );
     if (!format) return;
@@ -1486,13 +1488,25 @@ export function getChatScript(): string {
       }
       var data = await res.json();
       var mem = data.memory || {};
-      var body = "<div style='max-height:40vh;overflow:auto;font-size:14px;line-height:1.5'>"
-        + "<div class='text-xs text-muted' style='margin-bottom:8px'>"
-        + "ID: <code>" + id + "</code> \\u00B7 category: " + escapeHtml(mem.category || "?")
-        + (mem.source ? " \\u00B7 source: " + escapeHtml(mem.source) : "")
-        + "</div>"
-        + "<div>" + escapeHtml(mem.text || "") + "</div></div>";
-      await pawModal.alert("Memory " + id.slice(0, 6), body);
+      // Real DOM nodes (not an HTML string): pawModal escapes a string body via
+      // textContent, so the old markup rendered literally. textContent is XSS-safe
+      // by construction, so the memory text/category/source need no escapeHtml.
+      var panel = document.createElement("div");
+      panel.style.cssText = "max-height:40vh;overflow:auto;font-size:14px;line-height:1.5";
+      var meta = document.createElement("div");
+      meta.className = "text-xs text-muted";
+      meta.style.marginBottom = "8px";
+      meta.appendChild(document.createTextNode("ID: "));
+      var idCode = document.createElement("code");
+      idCode.textContent = id;
+      meta.appendChild(idCode);
+      meta.appendChild(document.createTextNode(" \\u00B7 category: " + (mem.category || "?")));
+      if (mem.source) meta.appendChild(document.createTextNode(" \\u00B7 source: " + mem.source));
+      panel.appendChild(meta);
+      var textDiv = document.createElement("div");
+      textDiv.textContent = mem.text || "";
+      panel.appendChild(textDiv);
+      await pawModal.alert("Memory " + id.slice(0, 6), panel);
     } catch (err) {
       await pawModal.alert("Memory unavailable", String(err));
     }

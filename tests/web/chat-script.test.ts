@@ -72,4 +72,23 @@ describe("chat client script", () => {
 		// The per-row click still records usage and inserts the body.
 		expect(script).toContain('/use", { method: "POST" }');
 	});
+
+	test("memory citation viewer builds DOM nodes, not an HTML string", () => {
+		// Same pawModal trap: the memory popover passed an HTML string body, so it
+		// rendered <div>/<code> as literal text. Now built from DOM nodes.
+		expect(script).not.toContain("<div style='max-height");
+		expect(script).not.toContain('"ID: <code>"');
+		expect(script).toContain('idCode = document.createElement("code")');
+		expect(script).toContain("idCode.textContent = id");
+		expect(script).toContain(
+			'pawModal.alert("Memory " + id.slice(0, 6), panel)',
+		);
+	});
+
+	test("export-format prompt is plain text, no <code> markup", () => {
+		// pawModal.prompt sets its message via textContent; the <code> tags showed
+		// as literal markup. The hint is plain text now.
+		expect(script).not.toContain("<code>md</code>");
+		expect(script).toContain("Choose format: md (default), html, or json.");
+	});
 });
