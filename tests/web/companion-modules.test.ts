@@ -324,6 +324,42 @@ describe("companion static modules", () => {
 		expect(r.velocity).toBe(0);
 	});
 
+	test("spring: softened defaults glide with low overshoot (smoother motion)", () => {
+		// The shipped SPRING constants were softened (170/16 → 130/18) so the orb
+		// pop settles with a gentle glide instead of a hard bounce. Step the DEFAULT
+		// spring (no cfg overrides) and assert the peak overshoot is small — the
+		// pre-change constants peaked ~1.063, the softened ones ~1.005.
+		const win: Record<string, unknown> = {};
+		runModule(win, {}, read("spring.js"));
+		const S = win.CompanionSpring as {
+			make: (v: number) => { value: number; velocity: number };
+			step: (
+				s: { value: number; velocity: number },
+				t: number,
+				dt: number,
+			) => { value: number; velocity: number };
+		};
+		const s = S.make(0);
+		let peak = 0;
+		for (let i = 0; i < 240; i++) {
+			S.step(s, 1, 1 / 60);
+			peak = Math.max(peak, s.value);
+		}
+		expect(peak).toBeGreaterThan(1); // still under-damped (has life)
+		expect(peak).toBeLessThan(1.03); // minimal overshoot — old 170/16 exceeded this
+		expect(Math.abs(s.value - 1)).toBeLessThan(0.01); // settles on target
+	});
+
+	test("gaze: pupils glide toward the target (lerp), snap only under reduced-motion", () => {
+		// Guard against re-introducing the instant per-frame snap: applyGaze must
+		// ease the rendered offset toward the target and use a full step when reduced.
+		const src = read("shell.js");
+		const body = src.slice(src.indexOf("function applyGaze"));
+		expect(body).toContain("(dx - gazeX)");
+		expect(body).toContain("(dy - gazeY)");
+		expect(body).toContain("reduced ? 1 :"); // reduced-motion → instant
+	});
+
 	// ── Gaze + dynamic caption (PR A) — pure helpers exported on Companion ──
 	function loadShellEnv(): Record<string, unknown> {
 		const win: Record<string, unknown> = {};

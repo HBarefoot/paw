@@ -3061,7 +3061,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
             box-shadow: 0 0 8px -1px var(--accent); animation: thinkdot 1.15s ease-in-out infinite; }
           .think span:nth-child(2){ animation-delay:.18s; } .think span:nth-child(3){ animation-delay:.36s; }
           @keyframes thinkdot { 0%,75%,100%{ transform:translateY(0); opacity:.4; } 38%{ transform:translateY(-7px); opacity:1; } }
-          .face.thinking { animation: thinkbob 2.6s ease-in-out infinite !important; }
+          .face.thinking { animation: thinkbob 3.2s ease-in-out infinite !important; }
           .face.thinking .mouth { width:15px; height:6px; }
           @keyframes thinkbob { 0%,100%{ transform: translateY(0) rotate(-1.5deg); } 50%{ transform: translateY(-3px) rotate(1.5deg); } }
           /* ===== sub-agent satellites (mini faces for spawned agents) ===== */
@@ -3072,7 +3072,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
             background: linear-gradient(150deg, var(--accent-bright), var(--accent) 60%, var(--accent-press));
             box-shadow: 0 8px 20px -8px var(--soft), inset 0 2px 0 rgba(255,255,255,.28);
             display:flex; align-items:center; justify-content:center; gap:5px; }
-          .subagent.run .mini { animation: workbob 1.2s ease-in-out infinite; }
+          .subagent.run .mini { animation: workbob 1.6s ease-in-out infinite; }
           .subagent .mini .me { width:7px; height:8px; background:#fff; border-radius:50%; position:relative; }
           .subagent .mini .me::after { content:""; position:absolute; width:3.5px; height:3.5px; background:#11131d; border-radius:50%; left:1.6px; top:2.4px; }
           .subagent.done .mini { box-shadow: 0 0 0 1px var(--accent), 0 0 14px -2px var(--accent); }
@@ -3102,17 +3102,17 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
             display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
             background: linear-gradient(150deg, var(--accent-bright), var(--accent) 55%, var(--accent-press));
             box-shadow: 0 22px 60px -14px var(--soft), 0 10px 28px -10px rgba(0,0,0,.45), inset 0 3px 0 rgba(255,255,255,.28);
-            position: relative; cursor: pointer; animation: float 4s ease-in-out infinite; user-select: none;
+            position: relative; cursor: pointer; animation: float 6s ease-in-out infinite; user-select: none;
           }
           .face::before { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
             background: radial-gradient(120% 80% at 30% 12%, rgba(255,255,255,.42), transparent 55%); }
           .face.happy { animation: bounce .6s ease; }
           .eyes { display:flex; gap:18px; z-index:1; }
           .eye { width:26px; height:30px; background:#fff; border-radius:50%; position:relative; overflow:hidden;
-            box-shadow: inset 0 -2px 5px rgba(0,0,0,.10), 0 0 0 1px rgba(0,0,0,.06); transition: transform .12s ease; }
+            box-shadow: inset 0 -2px 5px rgba(0,0,0,.10), 0 0 0 1px rgba(0,0,0,.06); transition: transform .16s ease; }
           .face.blink .eye { transform: scaleY(.08); }
           .pupil { width:12px; height:12px; background:#11131d; border-radius:50%; position:absolute;
-            left:calc(50% - 6px); top:calc(54% - 6px); transition: transform .1s ease; }
+            left:calc(50% - 6px); top:calc(54% - 6px); transition: transform .38s cubic-bezier(.22,.61,.36,1); }
           .mouth { width:30px; height:14px; border:3.5px solid var(--ink); border-top:0; border-radius:0 0 30px 30px;
             margin-top:9px; z-index:1; transition: width .25s ease, height .25s ease; }
           .face:hover .mouth, .face.happy .mouth { width:44px; height:23px; }
@@ -3148,7 +3148,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
           .speech.show { opacity:1; transform:translate(-50%,0); pointer-events:auto; }
           .speech::after { content:""; position:absolute; left:50%; bottom:-6px; width:12px; height:12px; transform:translateX(-50%) rotate(45deg); background:inherit; border-right:1px solid var(--line,#2a2b33); border-bottom:1px solid var(--line,#2a2b33); }
           .speech.error { border-color:#f87171; } .speech.warning { border-color:#f59e0b; } .speech.success { border-color:#34d399; }
-          .face.working { animation: workbob 1.2s ease-in-out infinite !important; }
+          .face.working { animation: workbob 1.6s ease-in-out infinite !important; }
           .face.working .mouth { width: 22px; height: 8px; border-radius: 0 0 22px 22px; }
           .spark { position:absolute; inset:-8px; border-radius:inherit; pointer-events:none; opacity:0;
             box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); }
