@@ -1,6 +1,30 @@
 import type { Logger } from "../types/plugin.js";
 
 /**
+ * Classify an error as transient (worth retrying / failing over) vs fatal.
+ * Matches HTTP 429/5xx, explicit rate-limit messages, and network timeouts.
+ * Deliberately does NOT match user-level refusals, tool errors, or auth (4xx
+ * other than 429) — those are fatal and must not trigger retry/fallback.
+ * Shared by `withRetry` and the provider-fallback chain so both react to the
+ * exact same error class.
+ */
+export function isTransientError(err: unknown): boolean {
+	const msg = err instanceof Error ? err.message : String(err);
+	return (
+		msg.includes("429") ||
+		msg.includes("500") ||
+		msg.includes("502") ||
+		msg.includes("503") ||
+		msg.includes("529") ||
+		msg.includes("rate_limit") ||
+		msg.includes("ETIMEDOUT") ||
+		msg.includes("ECONNRESET") ||
+		msg.includes("TimeoutError") ||
+		msg.includes("AbortError")
+	);
+}
+
+/**
  * Retry a function with exponential backoff on rate-limit or transient errors.
  * Retries on HTTP 429, 502, 503, 529 or network errors.
  *
@@ -35,17 +59,7 @@ export async function withRetry<T>(
 			if (signal?.aborted) throw err;
 			lastError = err;
 			const msg = err instanceof Error ? err.message : String(err);
-			const isRetryable =
-				msg.includes("429") ||
-				msg.includes("500") ||
-				msg.includes("502") ||
-				msg.includes("503") ||
-				msg.includes("529") ||
-				msg.includes("rate_limit") ||
-				msg.includes("ETIMEDOUT") ||
-				msg.includes("ECONNRESET") ||
-				msg.includes("TimeoutError") ||
-				msg.includes("AbortError");
+			const isRetryable = isTransientError(err);
 			if (!isRetryable || attempt === maxRetries) throw err;
 			// Exponential backoff with ±20% jitter (M-NEW-7).
 			const baseDelay = Math.min(1000 * Math.pow(2, attempt), 30_000);

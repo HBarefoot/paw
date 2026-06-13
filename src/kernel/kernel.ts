@@ -7,6 +7,7 @@ import type { AgentDefinition, AgentRunResult } from "../agents/types.js";
 import type {
 	AIProvider,
 	ChatMessage,
+	ChatResponse,
 	StreamChunk,
 } from "../ai/base-provider.js";
 import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
@@ -16,12 +17,16 @@ import { OllamaProvider } from "../ai/ollama-provider.js";
 import { OpenAIProvider } from "../ai/openai-provider.js";
 import { ClaudeProvider } from "../ai/provider.js";
 import {
+	type FallbackAttempt,
+	PROVIDER_FALLBACK_NOTE,
 	ProviderRouter,
 	VISION_ERROR_NOTE,
 	VISION_UNCONFIGURED_NOTE,
 	planImageTurn,
+	withProviderFallback,
 	withVisionFallback,
 } from "../ai/router.js";
+import { isTransientError } from "../ai/retry.js";
 import { SkillManager } from "../ai/skills.js";
 import { buildSystemPrompt } from "../ai/system-prompt.js";
 import { ToolRegistry } from "../ai/tools.js";
@@ -82,6 +87,13 @@ export class Kernel {
 	// model (config.ai.vision). Null when vision isn't configured/keyed.
 	private visionProvider: AIProvider | null = null;
 	private visionModel: string | null = null;
+	// Ordered main-chat fallback chain (config.ai.fallback): one provider+model
+	// instance per entry, tried in order when the primary errors transiently.
+	private fallbackChain: Array<{
+		provider: AIProvider;
+		model: string;
+		name: string;
+	}> = [];
 	private costTracker: CostTracker | null = null;
 	private toolLog: ToolLog | null = null;
 	private activeAbortControllers: Map<string, AbortController> = new Map();
@@ -322,6 +334,9 @@ export class Kernel {
 		// Optional vision route (image-bearing turns) — a distinct provider
 		// instance built with the vision model. Independent of general routing.
 		this.visionProvider = this.buildVisionProvider(config, aiLogger);
+
+		// Build the ordered main-chat fallback chain (config.ai.fallback).
+		this.fallbackChain = this.buildFallbackChain(config, aiLogger);
 
 		// Initialize the router when general routing OR vision is configured.
 		if (config.routing?.enabled || this.visionProvider) {
@@ -1487,25 +1502,73 @@ export class Kernel {
 			// configured; text turns are untouched. On a vision-provider error we
 			// degrade to the default and keep the user's message (with a note).
 			const route = this.routeInboundTurn(messages);
-			const { value: response, usedFallback } = await withVisionFallback({
-				isVision: route.isVision,
-				primary: () =>
-					route.provider.chat(messages, systemPrompt, msg.sessionId, {
-						signal: controller.signal,
-					}),
-				onFallback: () => {
-					this.logger.warn(
-						"Vision provider failed; falling back to default",
-						{},
-					);
-					return this.provider.chat(messages, systemPrompt, msg.sessionId, {
-						signal: controller.signal,
+			// Inner layer (unchanged): the vision route degrades to the default
+			// provider if the vision model errors. Outer layer: the configured
+			// main-chat fallback chain (config.ai.fallback), tried only on transient
+			// errors. The two compose — a vision degrade that still fails flows on
+			// into the fallback chain.
+			let visionFellBack = false;
+			const primaryAttempt: FallbackAttempt<ChatResponse> = {
+				providerName: route.provider.name,
+				model: route.model,
+				run: async () => {
+					const { value, usedFallback } = await withVisionFallback({
+						isVision: route.isVision,
+						primary: () =>
+							route.provider.chat(messages, systemPrompt, msg.sessionId, {
+								signal: controller.signal,
+							}),
+						onFallback: () => {
+							this.logger.warn(
+								"Vision provider failed; falling back to default",
+								{},
+							);
+							return this.provider.chat(messages, systemPrompt, msg.sessionId, {
+								signal: controller.signal,
+							});
+						},
 					});
+					visionFellBack = usedFallback;
+					return value;
 				},
+			};
+			const fallbackAttempts: FallbackAttempt<ChatResponse>[] =
+				this.fallbackChain.map((fb) => ({
+					providerName: fb.name,
+					model: fb.model,
+					run: () =>
+						fb.provider.chat(messages, systemPrompt, msg.sessionId, {
+							signal: controller.signal,
+						}),
+				}));
+			const {
+				value: response,
+				used,
+				usedFallback: providerFellBack,
+			} = await withProviderFallback({
+				primary: primaryAttempt,
+				fallbacks: fallbackAttempts,
+				signal: controller.signal,
+				logger: this.logger,
 			});
-			const usedProvider = usedFallback ? this.provider : route.provider;
-			const usedModel = usedFallback ? this.config.ai.model : route.model;
-			const note = usedFallback ? VISION_ERROR_NOTE : route.note;
+			// Resolve which provider/model actually served the turn (for cost tags)
+			// and the single note to prepend, in priority order.
+			let usedProviderName: string;
+			let usedModel: string;
+			let note: string | null | undefined;
+			if (providerFellBack) {
+				usedProviderName = used.providerName;
+				usedModel = used.model;
+				note = PROVIDER_FALLBACK_NOTE;
+			} else if (visionFellBack) {
+				usedProviderName = this.provider.name;
+				usedModel = this.config.ai.model;
+				note = VISION_ERROR_NOTE;
+			} else {
+				usedProviderName = route.provider.name;
+				usedModel = route.model;
+				note = route.note;
+			}
 			// B6.4: don't fabricate "Done — canvas updated." for an empty
 			// canvas reply — we can't confirm a canvas_write actually ran here,
 			// and asserting success on a no-op is exactly the hallucination we
@@ -1529,7 +1592,7 @@ export class Kernel {
 				const model = usedModel;
 				this.costTracker.recordUsage({
 					sessionId: msg.sessionId,
-					provider: usedProvider.name ?? this.config.provider,
+					provider: usedProviderName ?? this.config.provider,
 					model,
 					inputTokens,
 					outputTokens,
@@ -1885,28 +1948,72 @@ export class Kernel {
 				yield { type: "text_delta", text: `${route.note}\n\n` };
 				fullText += `${route.note}\n\n`;
 			}
-			try {
-				yield* streamWith(route.provider);
-			} catch (streamErr) {
-				// Vision provider failed before any output → degrade to default,
-				// keep the user's message, and tag cost with the default model.
-				if (route.isVision && !producedModelText) {
-					this.logger.warn("Vision stream failed; falling back to default", {
+			// Ordered stream attempts for this turn: the route (vision or default)
+			// first, then — only on a vision route — the vision degrade to the
+			// default provider, then the configured fallback chain. We can only
+			// advance before the first model token (a partial stream can't be
+			// un-rendered); the vision degrade fires on any pre-token error, the
+			// fallback chain only on transient errors.
+			const streamAttempts: Array<{
+				name: string;
+				model: string;
+				provider: AIProvider;
+				visionDegrade?: boolean;
+			}> = [
+				{
+					name: route.provider.name,
+					model: route.model,
+					provider: route.provider,
+				},
+			];
+			if (route.isVision) {
+				streamAttempts.push({
+					name: this.provider.name,
+					model: this.config.ai.model,
+					provider: this.provider,
+					visionDegrade: true,
+				});
+			}
+			for (const fb of this.fallbackChain) {
+				streamAttempts.push({
+					name: fb.name,
+					model: fb.model,
+					provider: fb.provider,
+				});
+			}
+
+			let attemptIdx = 0;
+			while (true) {
+				try {
+					yield* streamWith(streamAttempts[attemptIdx].provider);
+					break;
+				} catch (streamErr) {
+					const next = streamAttempts[attemptIdx + 1];
+					const canAdvance =
+						!!next &&
+						!producedModelText &&
+						!controller.signal.aborted &&
+						(next.visionDegrade === true || isTransientError(streamErr));
+					if (!canAdvance) throw streamErr;
+					const advanceNote = next.visionDegrade
+						? VISION_ERROR_NOTE
+						: PROVIDER_FALLBACK_NOTE;
+					this.logger.warn("Stream attempt failed; advancing", {
+						from: `${streamAttempts[attemptIdx].name}:${streamAttempts[attemptIdx].model}`,
+						to: `${next.name}:${next.model}`,
 						error: String(streamErr),
 					});
-					yield { type: "text_delta", text: `${VISION_ERROR_NOTE}\n\n` };
-					fullText += `${VISION_ERROR_NOTE}\n\n`;
-					effectiveModel = this.config.ai.model;
-					effectiveProviderName = this.provider.name;
+					yield { type: "text_delta", text: `${advanceNote}\n\n` };
+					fullText += `${advanceNote}\n\n`;
+					effectiveModel = next.model;
+					effectiveProviderName = next.provider.name;
 					lastModel = undefined;
 					lastProvider = undefined;
 					inputTokensTotal = 0;
 					outputTokensTotal = 0;
 					cacheCreationTotal = 0;
 					cacheReadTotal = 0;
-					yield* streamWith(this.provider);
-				} else {
-					throw streamErr;
+					attemptIdx++;
 				}
 			}
 
@@ -2203,6 +2310,61 @@ export class Kernel {
 	 * config + vault/credential key (no new secret storage). Null when unconfigured,
 	 * disabled, or the provider has no key. Sets this.visionModel as a side effect.
 	 */
+	/**
+	 * Construct a fresh provider instance for `name`, overridden to `model`,
+	 * reusing that provider's existing config + credential key (no new secret
+	 * storage). Returns null if the provider needs a key it doesn't have. Shared
+	 * by the vision route and the fallback chain so both build instances the same
+	 * way — the model lives on the provider at construction, so a different model
+	 * always means a distinct instance.
+	 */
+	private instantiateProvider(
+		name: "claude" | "ollama" | "openai" | "gemini",
+		model: string,
+		config: PawConfig,
+		logger: ReturnType<typeof createLogger>,
+	): AIProvider | null {
+		const maxRoundtrips = config.ai.maxToolRoundtrips;
+		switch (name) {
+			case "claude":
+				if (!config.ai.apiKey) return null;
+				return new ClaudeProvider(
+					{ ...config.ai, model },
+					this.toolRegistry,
+					logger,
+					this.skillManager,
+				);
+			case "openai":
+				if (!config.openai.apiKey) return null;
+				return new OpenAIProvider(
+					{ ...config.openai, model, maxToolRoundtrips: maxRoundtrips },
+					this.toolRegistry,
+					logger,
+					this.skillManager,
+				);
+			case "gemini":
+				if (!config.gemini.apiKey) return null;
+				return new GeminiProvider(
+					{ ...config.gemini, model, maxToolRoundtrips: maxRoundtrips },
+					this.toolRegistry,
+					logger,
+					this.skillManager,
+				);
+			case "ollama":
+				return new OllamaProvider(
+					{
+						...config.ollama,
+						model,
+						maxToolRoundtrips: maxRoundtrips,
+						maxTokens: config.ai.maxTokens,
+					},
+					this.toolRegistry,
+					logger,
+					this.skillManager,
+				);
+		}
+	}
+
 	private buildVisionProvider(
 		config: PawConfig,
 		logger: ReturnType<typeof createLogger>,
@@ -2210,64 +2372,16 @@ export class Kernel {
 		const v = config.ai.vision;
 		if (!v || v.enabled === false) return null;
 		const model = v.model;
-		const maxRoundtrips = config.ai.maxToolRoundtrips;
-		const warnNoKey = (): null => {
-			this.logger.warn("Vision provider not initialized (no API key)", {
-				provider: v.provider,
-			});
-			return null;
-		};
 		try {
-			let provider: AIProvider | null = null;
-			switch (v.provider) {
-				case "claude":
-					if (!config.ai.apiKey) return warnNoKey();
-					provider = new ClaudeProvider(
-						{ ...config.ai, model },
-						this.toolRegistry,
-						logger,
-						this.skillManager,
-					);
-					break;
-				case "openai":
-					if (!config.openai.apiKey) return warnNoKey();
-					provider = new OpenAIProvider(
-						{ ...config.openai, model, maxToolRoundtrips: maxRoundtrips },
-						this.toolRegistry,
-						logger,
-						this.skillManager,
-					);
-					break;
-				case "gemini":
-					if (!config.gemini.apiKey) return warnNoKey();
-					provider = new GeminiProvider(
-						{ ...config.gemini, model, maxToolRoundtrips: maxRoundtrips },
-						this.toolRegistry,
-						logger,
-						this.skillManager,
-					);
-					break;
-				case "ollama":
-					provider = new OllamaProvider(
-						{
-							...config.ollama,
-							model,
-							maxToolRoundtrips: maxRoundtrips,
-							maxTokens: config.ai.maxTokens,
-						},
-						this.toolRegistry,
-						logger,
-						this.skillManager,
-					);
-					break;
-			}
-			if (provider) {
-				this.visionModel = model;
-				this.logger.info("Vision route enabled", {
+			const provider = this.instantiateProvider(v.provider, model, config, logger);
+			if (!provider) {
+				this.logger.warn("Vision provider not initialized (no API key)", {
 					provider: v.provider,
-					model,
 				});
+				return null;
 			}
+			this.visionModel = model;
+			this.logger.info("Vision route enabled", { provider: v.provider, model });
 			return provider;
 		} catch (err) {
 			this.logger.warn("Failed to init vision provider", {
@@ -2276,6 +2390,48 @@ export class Kernel {
 			});
 			return null;
 		}
+	}
+
+	/**
+	 * Build the ordered main-chat fallback chain from config.ai.fallback. Each
+	 * entry becomes its own provider+model instance (skipped if its provider has
+	 * no key). The chain is tried in order when the primary errors transiently
+	 * (see withProviderFallback). Empty config ⇒ empty chain ⇒ today's behavior.
+	 */
+	private buildFallbackChain(
+		config: PawConfig,
+		logger: ReturnType<typeof createLogger>,
+	): Array<{ provider: AIProvider; model: string; name: string }> {
+		const chain: Array<{ provider: AIProvider; model: string; name: string }> =
+			[];
+		for (const entry of config.ai.fallback ?? []) {
+			try {
+				const provider = this.instantiateProvider(
+					entry.provider,
+					entry.model,
+					config,
+					logger,
+				);
+				if (provider) {
+					chain.push({ provider, model: entry.model, name: entry.provider });
+				} else {
+					this.logger.warn("Fallback provider skipped (no API key)", {
+						provider: entry.provider,
+					});
+				}
+			} catch (err) {
+				this.logger.warn("Failed to init fallback provider", {
+					provider: entry.provider,
+					error: String(err),
+				});
+			}
+		}
+		if (chain.length > 0) {
+			this.logger.info("Provider fallback chain ready", {
+				chain: chain.map((c) => `${c.name}:${c.model}`),
+			});
+		}
+		return chain;
 	}
 
 	/** True when the latest user turn carries an image attachment. */

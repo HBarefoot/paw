@@ -9,6 +9,7 @@ export const defaults: PawConfig = {
 		maxTokens: 4096,
 		maxToolRoundtrips: 50,
 		promptCache: true,
+		fallback: [],
 	},
 	ollama: {
 		baseUrl: "http://localhost:11434",
