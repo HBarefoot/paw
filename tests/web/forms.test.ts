@@ -1,8 +1,8 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import type { Context } from "hono";
-import { createFormReceiver } from "../../src/web/routes/forms.js";
 import type { ToolResult } from "../../src/types/message.js";
+import { createFormReceiver } from "../../src/web/routes/forms.js";
 
 function freshDb(): Database {
 	const db = new Database(":memory:");
@@ -53,6 +53,11 @@ interface Harness {
 	db: Database;
 	app: ReturnType<typeof createFormReceiver>;
 	toolCalls: Array<{ name: string; input: Record<string, unknown> }>;
+	supabaseInserts: Array<{
+		table: string;
+		rows: unknown;
+		opts?: { schema?: string };
+	}>;
 }
 
 function makeApp(opts?: {
@@ -60,9 +65,20 @@ function makeApp(opts?: {
 	toolResult?: ToolResult;
 	strapi?: boolean;
 	hubspot?: boolean;
+	/** Enable a fake Supabase CRUD client. */
+	supabase?: boolean;
+	/** Canvas tables the fake reports via listTables (default ['leads']). */
+	supabaseTables?: string[];
+	/** When set, the fake insert throws this message (simulate PostgREST error). */
+	supabaseInsertError?: string;
 }): Harness {
 	const db = freshDb();
 	const toolCalls: Array<{ name: string; input: Record<string, unknown> }> = [];
+	const supabaseInserts: Array<{
+		table: string;
+		rows: unknown;
+		opts?: { schema?: string };
+	}> = [];
 	const app = createFormReceiver({
 		db,
 		toolRegistry: {
@@ -72,15 +88,40 @@ function makeApp(opts?: {
 			},
 		},
 		strapi: opts?.strapi
-			? { async create() { return { data: { id: 7 } }; } }
+			? {
+					async create() {
+						return { data: { id: 7 } };
+					},
+				}
 			: null,
 		hubspotClient: opts?.hubspot
-			? { async createContact() { return { id: "hs9" }; } }
+			? {
+					async createContact() {
+						return { id: "hs9" };
+					},
+				}
+			: null,
+		supabase: opts?.supabase
+			? {
+					async listTables() {
+						const names = opts.supabaseTables ?? ["leads"];
+						return {
+							tables: names.map((name) => ({ schema: "canvas", name })),
+						};
+					},
+					async insert(table, rows, o) {
+						supabaseInserts.push({ table, rows, opts: o });
+						if (opts.supabaseInsertError) {
+							throw new Error(opts.supabaseInsertError);
+						}
+						return [{ id: 1, ...(rows as Record<string, unknown>) }];
+					},
+				}
 			: null,
 		isAuthenticated: () => opts?.authed === true,
 		getClientIp: (_c: Context) => "1.2.3.4",
 	});
-	return { db, app, toolCalls };
+	return { db, app, toolCalls, supabaseInserts };
 }
 
 async function post(
@@ -138,7 +179,10 @@ describe("form receiver", () => {
 		// Sandbox-denied tool: execute returns is_error → submission marked failed,
 		// and ONLY the action's config.tool is ever called (never a client value).
 		const h = makeApp({
-			toolResult: { content: "Permission denied: kernel cannot use evil", is_error: true },
+			toolResult: {
+				content: "Permission denied: kernel cannot use evil",
+				is_error: true,
+			},
 		});
 		insertAction(h.db, {
 			type: "tool",
@@ -212,13 +256,22 @@ describe("form receiver", () => {
 			secret: "s3cret",
 		});
 		expect((await post(h.app, "act1", { a: "1" })).status).toBe(403);
-		const ok = await post(h.app, "act1", { a: "1" }, { "X-Paw-Form-Secret": "s3cret" });
+		const ok = await post(
+			h.app,
+			"act1",
+			{ a: "1" },
+			{ "X-Paw-Form-Secret": "s3cret" },
+		);
 		expect(ok.status).toBe(200);
 	});
 
 	test("per-IP rate limit → 429 after 20/min", async () => {
 		const h = makeApp();
-		insertAction(h.db, { type: "tool", config: { tool: "t" }, fieldMap: { a: "a" } });
+		insertAction(h.db, {
+			type: "tool",
+			config: { tool: "t" },
+			fieldMap: { a: "a" },
+		});
 		let got429 = false;
 		let early200 = 0;
 		for (let i = 0; i < 25; i++) {
@@ -262,6 +315,68 @@ describe("form receiver", () => {
 			.get() as { status: string; target_ref: string };
 		expect(row.status).toBe("failed");
 		expect(row.target_ref).toContain("Strapi not configured");
+	});
+
+	test("supabase action inserts a row into the canvas table → routed", async () => {
+		const h = makeApp({ supabase: true, supabaseTables: ["leads"] });
+		insertAction(h.db, {
+			type: "supabase",
+			config: { table: "leads" },
+			fieldMap: { email: "email", name: "full_name" },
+		});
+		const r = await post(h.app, "act1", { email: "a@b.com", name: "Ada" });
+		expect(await r.json()).toMatchObject({ ok: true, status: "routed" });
+		// Insert was pinned to the canvas schema with the field-mapped row.
+		expect(h.supabaseInserts.length).toBe(1);
+		expect(h.supabaseInserts[0].table).toBe("leads");
+		expect(h.supabaseInserts[0].opts?.schema).toBe("canvas");
+		expect(h.supabaseInserts[0].rows).toEqual({
+			email: "a@b.com",
+			full_name: "Ada",
+		});
+		const row = h.db
+			.query("SELECT status, target_ref, data_json FROM canvas_submissions")
+			.get() as { status: string; target_ref: string; data_json: string };
+		expect(row.status).toBe("routed");
+		expect(row.target_ref).toBe("supabase:leads:1");
+		expect(JSON.parse(row.data_json).full_name).toBe("Ada");
+	});
+
+	test("supabase action whose table disappeared → failed, fails safe (no crash)", async () => {
+		// listTables no longer reports the canvas table → assertCanvasTable throws →
+		// caught → failed with the structured error in target_ref, receiver 200s,
+		// and the insert is NEVER attempted (no write outside the fence).
+		const h = makeApp({ supabase: true, supabaseTables: [] });
+		insertAction(h.db, {
+			type: "supabase",
+			config: { table: "leads" },
+			fieldMap: { email: "email" },
+		});
+		const r = await post(h.app, "act1", { email: "a@b.com" });
+		expect(r.status).toBe(200);
+		expect(await r.json()).toMatchObject({ ok: false, status: "failed" });
+		expect(h.supabaseInserts.length).toBe(0);
+		const row = h.db
+			.query("SELECT status, target_ref FROM canvas_submissions")
+			.get() as { status: string; target_ref: string };
+		expect(row.status).toBe("failed");
+		expect(row.target_ref).toContain("not in the canvas schema");
+	});
+
+	test("supabase action with no client configured → failed", async () => {
+		const h = makeApp({ supabase: false });
+		insertAction(h.db, {
+			type: "supabase",
+			config: { table: "leads" },
+			fieldMap: { email: "email" },
+		});
+		const r = await post(h.app, "act1", { email: "a@b.com" });
+		expect(await r.json()).toMatchObject({ ok: false, status: "failed" });
+		const row = h.db
+			.query("SELECT status, target_ref FROM canvas_submissions")
+			.get() as { status: string; target_ref: string };
+		expect(row.status).toBe("failed");
+		expect(row.target_ref).toContain("Supabase not configured");
 	});
 
 	test("form-encoded body parses like JSON", async () => {

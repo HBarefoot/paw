@@ -1,11 +1,22 @@
 import type { Database } from "bun:sqlite";
+import { sanitizePromptText } from "../ai/system-prompt.js";
+import {
+	type SchemaIntrospector,
+	assertCanvasTable,
+} from "../integrations/supabase/client.js";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
 
 interface ActionToolsConfig {
 	database: Database;
+	/**
+	 * Resolve the Supabase CRUD client (or null when the integration is off).
+	 * A getter, not the client itself, because action tools are constructed
+	 * before the Supabase integration boots — it is read lazily at call time.
+	 */
+	getSupabase?: () => SchemaIntrospector | null;
 }
 
-const ACTION_TYPES = ["strapi", "hubspot", "tool"] as const;
+const ACTION_TYPES = ["strapi", "hubspot", "tool", "supabase"] as const;
 
 /**
  * Tools that let the agent wire a canvas page's form/button to a real backend.
@@ -15,6 +26,7 @@ const ACTION_TYPES = ["strapi", "hubspot", "tool"] as const;
  */
 export function createActionTools(config: ActionToolsConfig): ToolDefinition[] {
 	const db = config.database;
+	const getSupabase = config.getSupabase ?? (() => null);
 
 	const create: ToolDefinition = {
 		name: "canvas_action_create",
@@ -35,18 +47,18 @@ export function createActionTools(config: ActionToolsConfig): ToolDefinition[] {
 					type: "string",
 					enum: [...ACTION_TYPES],
 					description:
-						"'strapi' (CMS content-type), 'hubspot' (CRM contact), or 'tool' (run a single allowlisted built-in tool with the mapped fields as its input).",
+						"'strapi' (CMS content-type), 'hubspot' (CRM contact), 'tool' (run a single allowlisted built-in tool with the mapped fields as its input), or 'supabase' (insert a row into one of YOUR tables in the canvas yard — make it first with supabase_create_table).",
 				},
 				config: {
 					type: "object",
 					description:
-						"Target config. strapi: { contentType: 'leads' }. hubspot: {} (uses configured token). tool: { tool: 'the_tool_name' } — the single tool this action may invoke (still subject to the sandbox permission check).",
+						"Target config. strapi: { contentType: 'leads' }. hubspot: {} (uses configured token). tool: { tool: 'the_tool_name' } — the single tool this action may invoke (still subject to the sandbox permission check). supabase: { table: 'leads' } — a table you already created in the canvas schema; the fieldMap destinations must be its column names.",
 					additionalProperties: true,
 				},
 				requireAuth: {
 					type: "boolean",
 					description:
-						"Require an authenticated session to submit. Defaults to TRUE for 'tool' actions (the public receiver refuses anonymous submits) and FALSE for strapi/hubspot lead capture. Set true for any mutation touching money/PII.",
+						"Require an authenticated session to submit. Defaults to TRUE for 'tool' actions (the public receiver refuses anonymous submits) and FALSE for strapi/hubspot/supabase lead capture. Set true for any mutation touching money/PII.",
 				},
 				fieldMap: {
 					type: "object",
@@ -97,6 +109,37 @@ export function createActionTools(config: ActionToolsConfig): ToolDefinition[] {
 						"Error: tool actions require config.tool (the single tool name to invoke)",
 					is_error: true,
 				};
+			}
+			if (type === "supabase") {
+				const table = typeof cfg.table === "string" ? cfg.table.trim() : "";
+				if (!table) {
+					return {
+						content:
+							"Error: supabase actions require config.table (a table you created in the canvas schema)",
+						is_error: true,
+					};
+				}
+				cfg.table = table;
+				const sb = getSupabase();
+				if (!sb) {
+					return {
+						content:
+							"Error: the Supabase integration is not enabled, so a form cannot be wired to a Supabase table.",
+						is_error: true,
+					};
+				}
+				// Validate AT CREATION that the target is a real table inside the
+				// canvas yard (it is re-checked at every submission too). Fails the
+				// binding rather than letting a form point at a missing/out-of-fence
+				// table and only discovering it when leads arrive.
+				try {
+					await assertCanvasTable(sb, table);
+				} catch (err) {
+					return {
+						content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+						is_error: true,
+					};
+				}
 			}
 			// Safe default: 'tool' actions require auth unless explicitly opted out;
 			// strapi/hubspot lead capture is public by default.
@@ -174,6 +217,99 @@ export function createActionTools(config: ActionToolsConfig): ToolDefinition[] {
 		},
 	};
 
+	const SUBMISSION_STATUSES = ["received", "routed", "failed"] as const;
+
+	const submissionsList: ToolDefinition = {
+		name: "canvas_submissions_list",
+		description:
+			"Read recent rows from the durable form-submission inbox (the same rows shown on the /submissions page). Use this to inspect what was captured and WHY a routing failed — not just how many. Returns each row's timestamp, action, mapped field data, status (received/routed/failed), and target_ref (the destination id on success, or the structured error on failure). Filter by actionId and/or status.",
+		plugin: "kernel",
+		input_schema: {
+			type: "object",
+			properties: {
+				actionId: {
+					type: "string",
+					description: "Only submissions for this action binding.",
+				},
+				status: {
+					type: "string",
+					enum: [...SUBMISSION_STATUSES],
+					description:
+						"Only submissions with this status. 'failed' surfaces the routing error in target_ref.",
+				},
+				limit: {
+					type: "number",
+					description: "Max rows to return (default 20, max 100).",
+				},
+			},
+		},
+		handler: async (input): Promise<ToolResult> => {
+			const limit = Math.min(Math.max(1, Number(input.limit) || 20), 100);
+			const where: string[] = [];
+			const params: (string | number)[] = [];
+			if (typeof input.actionId === "string" && input.actionId) {
+				where.push("s.action_id = ?");
+				params.push(input.actionId);
+			}
+			if (
+				typeof input.status === "string" &&
+				(SUBMISSION_STATUSES as readonly string[]).includes(input.status)
+			) {
+				where.push("s.status = ?");
+				params.push(input.status);
+			}
+			const rows = db
+				.query<
+					{
+						created_at: string;
+						action_id: string;
+						action_name: string | null;
+						type: string | null;
+						status: string;
+						target_ref: string | null;
+						data_json: string;
+					},
+					(string | number)[]
+				>(
+					`SELECT s.created_at, s.action_id, a.name AS action_name, a.type,
+					        s.status, s.target_ref, s.data_json
+					   FROM canvas_submissions s
+					   LEFT JOIN canvas_actions a ON a.id = s.action_id
+					   ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+					  ORDER BY s.created_at DESC, s.id DESC
+					  LIMIT ?`,
+				)
+				.all(...params, limit);
+			// Submission data + target_ref carry untrusted, externally-supplied
+			// content back into the model's context — run every string through
+			// sanitizePromptText (the same strip the system prompt uses) so a
+			// crafted field value can't smuggle markup/control chars or injection.
+			const submissions = rows.map((r) => {
+				let data: Record<string, unknown> = {};
+				try {
+					data = JSON.parse(r.data_json || "{}") as Record<string, unknown>;
+				} catch {
+					data = {};
+				}
+				const safeData: Record<string, unknown> = {};
+				for (const [k, v] of Object.entries(data)) {
+					safeData[sanitizePromptText(k)] =
+						typeof v === "string" ? sanitizePromptText(v) : v;
+				}
+				return {
+					timestamp: r.created_at,
+					actionId: r.action_id,
+					action: r.action_name ? sanitizePromptText(r.action_name) : null,
+					type: r.type,
+					status: r.status,
+					targetRef: r.target_ref ? sanitizePromptText(r.target_ref) : null,
+					data: safeData,
+				};
+			});
+			return { content: JSON.stringify({ submissions }) };
+		},
+	};
+
 	const del: ToolDefinition = {
 		name: "canvas_action_delete",
 		description: "Delete a canvas action binding by id.",
@@ -191,5 +327,5 @@ export function createActionTools(config: ActionToolsConfig): ToolDefinition[] {
 		},
 	};
 
-	return [create, list, del];
+	return [create, list, submissionsList, del];
 }

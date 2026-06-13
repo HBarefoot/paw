@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { SkillManager } from "../../../src/ai/skills.js";
 import { ToolRegistry } from "../../../src/ai/tools.js";
-import { SupabaseClient } from "../../../src/integrations/supabase/client.js";
+import {
+	SupabaseClient,
+	assertCanvasTable,
+} from "../../../src/integrations/supabase/client.js";
 import { createSupabaseTools } from "../../../src/integrations/supabase/tools.js";
 import { SupabaseError } from "../../../src/integrations/supabase/types.js";
 
@@ -128,6 +131,27 @@ describe("SupabaseClient", () => {
 			"return=representation",
 		);
 		expect(JSON.parse(calls[0].body ?? "")).toEqual([{ name: "Grace" }]);
+		// Default insert carries no profile header → targets the public schema.
+		expect(
+			(calls[0].headers as Record<string, string | undefined>)[
+				"Content-Profile"
+			],
+		).toBeUndefined();
+	});
+
+	test("insert with schema pins the write to that schema via Content-Profile", async () => {
+		mockFetch(201, [{ id: 1 }]);
+		await makeClient().insert(
+			"leads",
+			{ email: "a@b.com" },
+			{
+				schema: "canvas",
+			},
+		);
+		expect(
+			(calls[0].headers as Record<string, string>)["Content-Profile"],
+		).toBe("canvas");
+		expect(calls[0].url).toBe(`${BASE_URL}/rest/v1/leads`);
 	});
 
 	test("update sends PATCH with the filter in the query", async () => {
@@ -308,5 +332,36 @@ describe("supabase skill registration", () => {
 		const skills = new SkillManager();
 		skills.buildFromRegistry(registry);
 		expect(skills.getSkill("supabase")).toBeUndefined();
+	});
+});
+
+describe("assertCanvasTable (form-action fence check)", () => {
+	test("passes when the table exists in the canvas schema", async () => {
+		mockFetchByProfile({
+			canvas: { definitions: { leads: { properties: { email: {} } } } },
+		});
+		await expect(
+			assertCanvasTable(makeClient(), "leads"),
+		).resolves.toBeUndefined();
+		// Only the canvas schema is introspected (one fetch, Accept-Profile: canvas).
+		expect(calls).toHaveLength(1);
+		expect(calls[0].headers?.["Accept-Profile"]).toBe("canvas");
+	});
+
+	test("throws a structured error when the table is not in the yard", async () => {
+		mockFetchByProfile({
+			canvas: { definitions: { other: { properties: { id: {} } } } },
+		});
+		await expect(assertCanvasTable(makeClient(), "leads")).rejects.toThrow(
+			/not in the canvas schema/,
+		);
+	});
+
+	test("rejects a malformed identifier before any network call", async () => {
+		mockFetch(200, {});
+		await expect(
+			assertCanvasTable(makeClient(), "public.users"),
+		).rejects.toThrow(/Invalid Supabase table/);
+		expect(calls.length).toBe(0);
 	});
 });

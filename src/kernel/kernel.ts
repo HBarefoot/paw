@@ -103,6 +103,9 @@ export class Kernel {
 	hubspotClient:
 		| import("../integrations/hubspot/client.js").HubSpotClient
 		| null = null;
+	private supabaseClient:
+		| import("../integrations/supabase/client.js").SupabaseClient
+		| null = null;
 	private supabaseProvisioner:
 		| import("../integrations/supabase/provisioner.js").SupabaseProvisioner
 		| null = null;
@@ -398,7 +401,11 @@ export class Kernel {
 			);
 			// Canvas action tools: let the agent wire forms to real backends.
 			this.toolRegistry.register(
-				createActionTools({ database: this.database }),
+				createActionTools({
+					database: this.database,
+					// Lazy: the Supabase client boots later in start(); read at call time.
+					getSupabase: () => this.supabaseClient,
+				}),
 			);
 			this.logger.info("Canvas tools registered", { canvasRoot });
 		}
@@ -680,6 +687,7 @@ export class Kernel {
 				);
 				const { AuditLogger } = await import("../security/audit-log.js");
 				const client = new SupabaseClient(this.config.supabase);
+				this.supabaseClient = client;
 				this.sandbox.registerManifest({
 					name: "supabase",
 					version: "1.0.0",
@@ -2475,6 +2483,13 @@ export class Kernel {
 	/** Strapi client for routing canvas action submissions (null if disabled). */
 	get strapi(): import("../integrations/strapi/client.js").StrapiClient | null {
 		return this.strapiClient;
+	}
+
+	/** Supabase CRUD client for routing 'supabase' canvas actions (null if disabled). */
+	get supabase():
+		| import("../integrations/supabase/client.js").SupabaseClient
+		| null {
+		return this.supabaseClient;
 	}
 
 	/** GitHub App client (null if disabled or not configured). */
