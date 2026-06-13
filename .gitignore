@@ -7,5 +7,9 @@ data/
 .DS_Store
 test.txt
 paw_logo_blue_border_*.jpg
+# Local Claude Code MCP config (points at a specific project ref — env-specific)
+.mcp.json
+# Security-scan scratch output (probe artifacts, never source)
+.probe/
 # Bun project — the npm lockfile shouldn't be committed (use bun.lockb)
 package-lock.json
