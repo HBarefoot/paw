@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Canvas</title>
+<!--
+  Neutral placeholder for an empty canvas (no root index.html yet). Rendered
+  inside the sandboxed, null-origin canvas iframe, so: system fonts only, no
+  external resources, no script. Deliberately faceless — the live agent face is
+  the /companion Home tab. Replaces the old ~530-line inline portrait that used
+  to paint here (a recurring template-literal backtick trap).
+-->
+<style>
+  :root {
+    --bg: transparent;
+    --fg: #6b7079;
+    --title: #14151a;
+    --line: rgba(20, 21, 26, 0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #6b7079; --title: #e8e9ee; --line: rgba(255, 255, 255, 0.08); }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    padding: 32px;
+  }
+  .empty {
+    text-align: center; max-width: 360px;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+  }
+  .mark {
+    width: 46px; height: 46px; border-radius: 12px;
+    border: 1px dashed var(--line);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--fg); opacity: 0.7;
+  }
+  .mark svg { width: 22px; height: 22px; }
+  .title { font-size: 16px; font-weight: 600; color: var(--title); letter-spacing: -0.01em; }
+  .sub { font-size: 13.5px; line-height: 1.55; }
+</style>
+</head>
+<body>
+  <div class="empty">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 3v4a1 1 0 0 0 1 1h4"></path>
+        <path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"></path>
+      </svg>
+    </div>
+    <div class="title">Nothing here yet</div>
+    <p class="sub">Ask me to build something and it'll show up right here.</p>
+  </div>
+</body>
+</html>
