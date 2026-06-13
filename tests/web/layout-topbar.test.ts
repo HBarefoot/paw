@@ -26,20 +26,25 @@ describe("Layout hideTopbar", () => {
 		expect(html).not.toContain('class="page-title"');
 	});
 
-	test("no-topbar chat fills the viewport via flex, not a fixed calc", () => {
-		// REGRESSION: the panels used `height: calc(100vh - 133px)`, which
-		// over-subtracted and left a gap below both panes. They now flex-fill the
-		// content column so they reach the viewport bottom with even margins.
+	test("no-topbar chat fills the viewport and is bounded so the page never scrolls", () => {
+		// REGRESSION 1: the panels used `height: calc(100vh - 133px)`, which
+		// over-subtracted and left a gap below both panes.
+		// REGRESSION 2: replacing that with bare flex (no definite height) let the
+		// chain grow with content — the page scrolled and the canvas iframe
+		// stretched — because the outer .app-layout is min-height:100vh, so flex:1
+		// had nothing to bound against. .content needs a DEFINITE viewport height.
 		const css = String(
 			Layout({ title: "Chat", hideTopbar: true, children: "x" }),
 		);
 		// The fragile magic number is gone…
 		expect(css).not.toContain("100vh - 133px");
-		// …replaced by a flex-fill on the chat+canvas card, and a column .content
-		// so the card can grow into the space under the (hidden) topbar.
+		// …the card flex-fills…
 		expect(css).toMatch(/\.no-topbar \.chat-with-canvas \{[^}]*flex: 1[^}]*\}/);
-		expect(css).toMatch(
-			/\.no-topbar \.content \{[^}]*flex-direction: column[^}]*\}/,
-		);
+		// …and .content is a bounded flex column (definite viewport height +
+		// overflow:hidden) so the chat scrolls internally and the page does not.
+		const content = css.match(/\.no-topbar \.content \{[^}]*\}/)?.[0] ?? "";
+		expect(content).toContain("flex-direction: column");
+		expect(content).toMatch(/height: 100dvh|height: 100vh/);
+		expect(content).toContain("overflow: hidden");
 	});
 });

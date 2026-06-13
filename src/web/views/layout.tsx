@@ -1523,12 +1523,23 @@ const cssDesignSystem = `
     box-shadow: var(--shadow-sm);
   }
   /* When the page-title topbar is hidden (/chat — the only page that sets
-     hideTopbar), let the chat + canvas FILL the viewport instead of a fixed
-     calc that over-subtracts and leaves a gap at the bottom. .main-area is a
-     flex column and .content is flex:1, so making .content a column lets the
-     card take the remaining height below the toolbar — even top/bottom margin
-     from .content's padding, both panels reaching the bottom. */
-  .no-topbar .content { display: flex; flex-direction: column; }
+     hideTopbar), the chat + canvas FILL the viewport instead of a fixed calc
+     that over-subtracts and leaves a gap at the bottom.
+     IMPORTANT: .content needs a DEFINITE height here, not just flex. The outer
+     .app-layout is min-height:100vh (NOT height), so the flex chain above
+     (.main-area then .content then .chat-with-canvas) has nothing to resolve
+     flex:1 against — it would grow with content and scroll the whole page (and
+     stretch the inset:0 canvas iframe). A 100dvh bound + overflow:hidden makes
+     the card fill exactly, the chat list scroll internally, page never scrolls.
+     Safe to clip: the toolbar session picker is a native select and Prompts
+     opens a body-appended modal — both escape ancestor overflow. */
+  .no-topbar .content {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
   .no-topbar .chat-with-canvas { flex: 1; min-height: 0; height: auto; }
   .no-topbar .chat-container { height: auto; }
   /* When inside the unified wrapper, chat-container loses its own card styles */
