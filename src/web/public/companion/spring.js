@@ -9,8 +9,10 @@
  * kills declarative animation; this is the JS half).
  */
 (() => {
-	// Under-damped (ratio < 1) → a little overshoot before it settles.
-	const SPRING = { stiffness: 170, damping: 16 };
+	// Gently under-damped (ratio ~0.79) → a soft glide with minimal overshoot.
+	// Softer than the original 170/16 (ratio ~0.61): lower stiffness eases the
+	// snap, higher damping trims the bounce, so the squash/stretch reads smoother.
+	const SPRING = { stiffness: 130, damping: 18 };
 	const MAX_DT = 0.064; // clamp long frames so a tab-switch can't explode it
 
 	/** A fresh spring sitting at `value` (velocity 0). */

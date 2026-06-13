@@ -465,6 +465,10 @@
 			applyGaze(st);
 		}
 
+		// Smoothed pupil offset — the eyes GLIDE toward the gaze target each frame
+		// instead of snapping to it (reduced-motion snaps; see below).
+		let gazeX = 0;
+		let gazeY = 0;
 		function applyGaze(st) {
 			const ball = avatarZone.firstChild.querySelector("[data-avatar]");
 			if (!ball) return;
@@ -505,8 +509,12 @@
 				dx = (vx / len) * max;
 				dy = (vy / len) * max;
 			}
+			// Ease toward the target; snap instantly under reduced-motion.
+			const k = reduced ? 1 : 0.18;
+			gazeX += (dx - gazeX) * k;
+			gazeY += (dy - gazeY) * k;
 			for (const pu of pupils) {
-				pu.style.transform = `translate(calc(-50% + ${dx.toFixed(1)}px), calc(-50% + ${dy.toFixed(1)}px))`;
+				pu.style.transform = `translate(calc(-50% + ${gazeX.toFixed(2)}px), calc(-50% + ${gazeY.toFixed(2)}px))`;
 			}
 		}
 

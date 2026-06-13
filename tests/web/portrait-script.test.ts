@@ -152,4 +152,20 @@ describe("canvas portrait inline script", () => {
 		// way, the lifecycle must run clean.
 		expect(warns).toEqual([]);
 	});
+
+	it("uses smoothed motion (gliding gaze) while keeping the reduced-motion guard", () => {
+		// The pupils glide via a longer eased transition instead of the old snappy
+		// .1s, and the idle float is gentler. Reduced-motion must still null these
+		// transitions so the guard isn't lost.
+		expect(src).toContain(
+			"transition: transform .38s cubic-bezier(.22,.61,.36,1)",
+		);
+		expect(src).toContain("animation: float 6s ease-in-out infinite");
+		// the old snap is gone
+		expect(src).not.toContain("transition: transform .1s ease; }");
+		// reduced-motion still kills the pupil/eye transitions
+		expect(src).toContain(
+			".pupil, .mouth, .eye, .node, .subagent { transition: none !important; }",
+		);
+	});
 });
