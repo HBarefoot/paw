@@ -399,6 +399,20 @@ describe("companion static modules", () => {
 		expect(js).toContain("error");
 	});
 
+	test("status chip shows the live skill count; the working face smiles", () => {
+		const js = read("shell.js");
+		const css = read("styles.css");
+		// on-brand status chip with the REAL skill count
+		expect(js).toContain('el("div", "status-chip")');
+		expect(js).toContain("statusText.textContent = `Online ·");
+		expect(css).toContain(".status-chip");
+		expect(css).toContain("ledBreathe");
+		// the face smiles while using a skill (working → a smile mouth, not the
+		// focused concentration arc)
+		expect(js).toMatch(/working:\s*\{[^}]*mouth:\s*"smile"/);
+		expect(js).toContain('case "smile":');
+	});
+
 	// ── Gaze + dynamic caption (PR A) — pure helpers exported on Companion ──
 	function loadShellEnv(): Record<string, unknown> {
 		const win: Record<string, unknown> = {};

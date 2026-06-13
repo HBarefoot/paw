@@ -39,15 +39,18 @@
 	// biasY tilts the resting gaze, mouth picks the SVG mouth shape. Covers all
 	// nine states the CompanionExpression machine can resolve.
 	const FACE_EXP = {
-		idle: { eyeSY: 1.0, pupil: 1.0, biasY: 0.0, mouth: "idle" },
-		sleepy: { eyeSY: 0.55, pupil: 0.92, biasY: 0.2, mouth: "idle" },
-		listening: { eyeSY: 1.02, pupil: 1.12, biasY: -0.1, mouth: "idle" },
-		thinking: { eyeSY: 0.95, pupil: 1.0, biasY: -0.85, mouth: "thinking" },
-		working: { eyeSY: 0.88, pupil: 0.86, biasY: 0.0, mouth: "working" },
-		waiting: { eyeSY: 0.92, pupil: 1.04, biasY: -0.3, mouth: "thinking" },
-		success: { eyeSY: 0.52, pupil: 1.02, biasY: -0.22, mouth: "success" },
-		worried: { eyeSY: 1.12, pupil: 0.78, biasY: 0.14, mouth: "error" },
-		wince: { eyeSY: 1.16, pupil: 0.72, biasY: 0.16, mouth: "error" },
+		// `state` is the CSS state category (idle | thinking | working | success |
+		// error) that drives the aura / ring / tint layers — kept SEPARATE from
+		// `mouth` so the working face can smile while still showing the working ring.
+		idle: { eyeSY: 1.0, pupil: 1.0, biasY: 0.0, mouth: "idle", state: "idle" },
+		sleepy: { eyeSY: 0.55, pupil: 0.92, biasY: 0.2, mouth: "idle", state: "idle" },
+		listening: { eyeSY: 1.02, pupil: 1.12, biasY: -0.1, mouth: "idle", state: "idle" },
+		thinking: { eyeSY: 0.95, pupil: 1.0, biasY: -0.85, mouth: "thinking", state: "thinking" },
+		working: { eyeSY: 0.9, pupil: 0.92, biasY: 0.0, mouth: "smile", state: "working" },
+		waiting: { eyeSY: 0.92, pupil: 1.04, biasY: -0.3, mouth: "thinking", state: "thinking" },
+		success: { eyeSY: 0.52, pupil: 1.02, biasY: -0.22, mouth: "success", state: "success" },
+		worried: { eyeSY: 1.12, pupil: 0.78, biasY: 0.14, mouth: "error", state: "error" },
+		wince: { eyeSY: 1.16, pupil: 0.72, biasY: 0.16, mouth: "error", state: "error" },
 	};
 	const TREMOR_EXP = { error: 1, wince: 1, worried: 1 };
 
@@ -56,6 +59,9 @@
 		switch (key) {
 			case "thinking": return { d: "M41.5 62 Q50 59.5 58.5 62", fill: false, sw: 4.2 };
 			case "working": return { d: "M39 61 Q50 68.5 61 61", fill: false, sw: 5 };
+			// happy open smile while using a skill (the face stays friendly/engaged,
+			// not just concentrating) — a touch gentler than the success grin.
+			case "smile": return { d: "M34 58 Q50 65 66 58 Q61 78 50 78 Q39 78 34 58 Z", fill: true };
 			case "success": return { d: "M30 56.5 Q50 63 70 56.5 Q64.5 83 50 83 Q35.5 83 30 56.5 Z", fill: true };
 			case "error": return { d: "M35 61 Q50 71 65 61", fill: false, sw: 4.8 };
 			// TTS lip-flap: a small open oval, alternated with the resting mouth.
@@ -231,11 +237,11 @@
 		f.pupL.style.transform = pupT;
 		f.pupR.style.transform = pupT;
 
-		// ── state class for the aura / ring / tint layers (normalised to the 5 mouth
-		// categories: idle | thinking | working | success | error) ──
-		if (ep.mouth !== f.lastExp) {
-			f.lastExp = ep.mouth;
-			cmp.setAttribute("data-exp", ep.mouth);
+		// ── state class for the aura / ring / tint layers (idle | thinking |
+		// working | success | error) — independent of the mouth shape ──
+		if (ep.state !== f.lastExp) {
+			f.lastExp = ep.state;
+			cmp.setAttribute("data-exp", ep.state);
 		}
 
 		// ── mouth (only re-paint on shape change; TTS flap overrides) ──
@@ -388,6 +394,14 @@
 		home.appendChild(subtitle);
 		home.appendChild(opsFeed);
 
+		// On-brand status chip (top-left): a breathing LED + the REAL live skill
+		// count. Peripheral to the greeting; count refreshed in buildDock.
+		const statusChip = el("div", "status-chip");
+		statusChip.appendChild(el("span", "led"));
+		const statusText = el("span", "status-text", "Online");
+		statusChip.appendChild(statusText);
+		home.appendChild(statusChip);
+
 		fit.appendChild(home);
 		root.appendChild(fit);
 
@@ -448,6 +462,8 @@
 			// Density tier by count (prototype WrapDock): bigger pills when there
 			// are few, shrinking as the set grows so everything stays on screen.
 			const n = st.skills.length;
+			// Keep the status chip's count in sync with the live skill set.
+			statusText.textContent = `Online · ${n} ${n === 1 ? "skill" : "skills"}`;
 			const tier = n <= 20 ? "lg" : n <= 48 ? "md" : "sm";
 			for (const s of st.skills) {
 				const p = el("span", `pill ${tier}`);
