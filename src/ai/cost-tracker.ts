@@ -21,6 +21,9 @@ export interface UsageRecord {
 	inputTokens: number;
 	outputTokens: number;
 	estimatedCostUsd: number;
+	/** Anthropic prompt-cache accounting (Claude only; undefined elsewhere). */
+	cacheCreationInputTokens?: number;
+	cacheReadInputTokens?: number;
 }
 
 /**
@@ -43,8 +46,8 @@ export class CostTracker {
 
 	recordUsage(record: UsageRecord): void {
 		this.db.run(
-			`INSERT INTO usage_log (session_id, provider, model, input_tokens, output_tokens, estimated_cost_usd)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO usage_log (session_id, provider, model, input_tokens, output_tokens, estimated_cost_usd, cache_creation_input_tokens, cache_read_input_tokens)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			[
 				record.sessionId,
 				record.provider,
@@ -52,6 +55,8 @@ export class CostTracker {
 				record.inputTokens,
 				record.outputTokens,
 				record.estimatedCostUsd,
+				record.cacheCreationInputTokens ?? null,
+				record.cacheReadInputTokens ?? null,
 			],
 		);
 	}

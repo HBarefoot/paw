@@ -13,6 +13,9 @@ export interface ChatResponse {
 	usage?: {
 		inputTokens: number;
 		outputTokens: number;
+		/** Anthropic prompt-cache accounting (Claude only; undefined elsewhere). */
+		cacheCreationInputTokens?: number;
+		cacheReadInputTokens?: number;
 	};
 }
 
@@ -51,6 +54,9 @@ export interface StreamChunk {
 		estimatedCostUsd?: number;
 		provider?: string;
 		model?: string;
+		/** Anthropic prompt-cache accounting (Claude only; undefined elsewhere). */
+		cacheCreationInputTokens?: number;
+		cacheReadInputTokens?: number;
 	};
 }
 

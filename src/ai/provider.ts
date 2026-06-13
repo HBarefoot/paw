@@ -4,6 +4,9 @@ import type {
 	ContentBlockParam,
 	ToolUseBlock,
 	ToolResultBlockParam,
+	MessageCreateParamsBase,
+	TextBlockParam,
+	Tool,
 } from "@anthropic-ai/sdk/resources/messages";
 import { ToolRegistry } from "./tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
@@ -30,6 +33,65 @@ export interface ClaudeProviderConfig {
 	model: string;
 	maxTokens: number;
 	maxToolRoundtrips: number;
+	/** Anthropic prompt caching for the stable prefix. Defaults to true. */
+	promptCache?: boolean;
+}
+
+/**
+ * Build the Claude `messages.stream(...)` request params. Pure + exported so the
+ * cache-control wiring is unit-testable without a live client.
+ *
+ * When `promptCache` is on we mark the stable prefix with `cache_control:
+ * ephemeral` so Anthropic bills it once per ~5-min window instead of every turn:
+ *   - the system prompt becomes a single cached text block, and
+ *   - the LAST tool carries the breakpoint (one breakpoint covers the whole
+ *     tool-definitions prefix).
+ * The moving conversation history is intentionally left uncached — it changes
+ * every turn, and the system + tools prefix is the bulk of the win.
+ *
+ * When `promptCache` is off the returned object is byte-identical to the legacy
+ * shape (string `system`, untouched tools) so disabling it is a true no-op.
+ */
+export function buildClaudeRequest(opts: {
+	model: string;
+	maxTokens: number;
+	systemPrompt: string;
+	tools: Tool[];
+	conversation: MessageParam[];
+	promptCache: boolean;
+}): MessageCreateParamsBase {
+	const { model, maxTokens, systemPrompt, tools, conversation, promptCache } =
+		opts;
+
+	const system: string | TextBlockParam[] = promptCache
+		? [
+				{
+					type: "text",
+					text: systemPrompt,
+					cache_control: { type: "ephemeral" },
+				},
+			]
+		: systemPrompt;
+
+	let toolsField: Tool[] | undefined;
+	if (tools.length > 0) {
+		toolsField =
+			promptCache && tools.length > 0
+				? tools.map((t, i) =>
+						i === tools.length - 1
+							? { ...t, cache_control: { type: "ephemeral" } }
+							: t,
+					)
+				: tools;
+	}
+
+	return {
+		model,
+		max_tokens: maxTokens,
+		system,
+		messages: conversation,
+		...(toolsField ? { tools: toolsField } : {}),
+	};
 }
 
 export class ClaudeProvider implements AIProvider {
@@ -38,6 +100,7 @@ export class ClaudeProvider implements AIProvider {
 	private model: string;
 	private maxTokens: number;
 	private maxToolRoundtrips: number;
+	private promptCache: boolean;
 	readonly toolRegistry: ToolRegistry;
 	private skillManager: SkillManager | null;
 	private logger: Logger;
@@ -57,6 +120,7 @@ export class ClaudeProvider implements AIProvider {
 		this.model = config.model;
 		this.maxTokens = config.maxTokens;
 		this.maxToolRoundtrips = config.maxToolRoundtrips;
+		this.promptCache = config.promptCache ?? true;
 		this.toolRegistry = toolRegistry;
 		this.skillManager = skillManager ?? null;
 		this.logger = logger;
@@ -134,15 +198,16 @@ export class ClaudeProvider implements AIProvider {
 			const response = await withRetry(
 				() =>
 					this.client.messages
-						.stream({
-							model: this.model,
-							max_tokens: this.maxTokens,
-							system: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-							messages: conversation,
-							...(tools.length > 0
-								? { tools: tools as Anthropic.Messages.Tool[] }
-								: {}),
-						})
+						.stream(
+							buildClaudeRequest({
+								model: this.model,
+								maxTokens: this.maxTokens,
+								systemPrompt: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+								tools: tools as Tool[],
+								conversation,
+								promptCache: this.promptCache,
+							}),
+						)
 						.finalMessage(),
 				this.logger,
 				{ signal },
@@ -159,6 +224,16 @@ export class ClaudeProvider implements AIProvider {
 				return {
 					text: textParts.join("\n"),
 					images: collectedImages.length > 0 ? collectedImages : undefined,
+					usage: response.usage
+						? {
+								inputTokens: response.usage.input_tokens,
+								outputTokens: response.usage.output_tokens,
+								cacheCreationInputTokens:
+									response.usage.cache_creation_input_tokens ?? undefined,
+								cacheReadInputTokens:
+									response.usage.cache_read_input_tokens ?? undefined,
+							}
+						: undefined,
 				};
 			}
 
@@ -309,15 +384,16 @@ export class ClaudeProvider implements AIProvider {
 				toolCount: tools.length,
 			});
 
-			const stream = this.client.messages.stream({
-				model: this.model,
-				max_tokens: this.maxTokens,
-				system: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-				messages: conversation,
-				...(tools.length > 0
-					? { tools: tools as Anthropic.Messages.Tool[] }
-					: {}),
-			});
+			const stream = this.client.messages.stream(
+				buildClaudeRequest({
+					model: this.model,
+					maxTokens: this.maxTokens,
+					systemPrompt: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+					tools: tools as Tool[],
+					conversation,
+					promptCache: this.promptCache,
+				}),
+			);
 			// H-NEW-5: Anthropic SDK's MessageStream exposes its own
 			// AbortController. Wire the caller's cancel signal so a
 			// "Stop" click tears down the in-flight HTTP request.
@@ -361,6 +437,10 @@ export class ClaudeProvider implements AIProvider {
 					usage: {
 						inputTokens: response.usage.input_tokens,
 						outputTokens: response.usage.output_tokens,
+						cacheCreationInputTokens:
+							response.usage.cache_creation_input_tokens ?? undefined,
+						cacheReadInputTokens:
+							response.usage.cache_read_input_tokens ?? undefined,
 						provider: "claude",
 						model: this.model,
 					},

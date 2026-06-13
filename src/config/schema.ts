@@ -8,6 +8,10 @@ export const configSchema = z.object({
 		model: z.string().default("claude-sonnet-4-5-20250929"),
 		maxTokens: z.number().int().positive().default(4096),
 		maxToolRoundtrips: z.number().int().positive().default(50),
+		// Anthropic prompt caching: cache the stable Claude prefix (system prompt
+		// + tool definitions) so it's billed once per ~5-min window instead of every
+		// turn. Default ON; a no-op for the Ollama/OpenAI/Gemini code paths.
+		promptCache: z.boolean().default(true),
 		// Optional image-understanding route. When configured, inbound turns that
 		// carry image attachments are served by this provider/model instead of the
 		// (possibly text-only) default; text turns are untouched. Credentials reuse
