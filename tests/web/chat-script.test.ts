@@ -56,4 +56,20 @@ describe("chat client script", () => {
 		expect(script).not.toContain('sid.indexOf("canvas-") === 0) return');
 		expect(script).not.toContain('!sessionId.startsWith("canvas-")');
 	});
+
+	test("prompt picker builds DOM nodes, not an HTML string (pawModal escapes strings)", () => {
+		// Regression: pawModal._show escapes a string body via textContent, so the
+		// old `'<div class="prompt-pick-list">' + items` string rendered the markup
+		// as literal text and the rows were unclickable. The picker must be built
+		// from real DOM nodes and passed as a Node.
+		expect(script).not.toContain('<div class="prompt-pick" data-pid="');
+		expect(script).not.toContain('<div class="prompt-pick-list">');
+		// Built via DOM + passed as a Node, with Cancel as a structured action.
+		expect(script).toContain('list.className = "prompt-pick-list"');
+		expect(script).toContain("row.dataset.pid = p.id");
+		expect(script).toContain('pawModal._show("Insert a prompt", list, [');
+		expect(script).toContain('label: "Cancel"');
+		// The per-row click still records usage and inserts the body.
+		expect(script).toContain('/use", { method: "POST" }');
+	});
 });
