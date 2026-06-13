@@ -182,7 +182,11 @@
 .ops-app .chip .sw { width: 7px; height: 7px; border-radius: 50%; }
 .ops-app .chip.on { color: var(--ops-ink-bright); border-color: var(--ops-line-2); }
 .ops-app .chip.off { opacity: 0.4; }
-.ops-app .feed { overflow-y: auto; flex: 1; margin: 0 -4px; }
+/* min-height:0 lets this flex child shrink below its content height so the list
+   SCROLLS inside the rail instead of growing past the viewport (the parent
+   .sec.grow is overflow:hidden). Without it the Live operations list overflowed
+   the dashboard. */
+.ops-app .feed { overflow-y: auto; flex: 1; min-height: 0; margin: 0 -4px; }
 .ops-app .feed-row {
   display: grid; grid-template-columns: 10px 1fr auto; gap: 9px; align-items: center;
   padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; background: transparent;
