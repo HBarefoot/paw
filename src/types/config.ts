@@ -6,6 +6,8 @@ export interface PawConfig {
 		model: string;
 		maxTokens: number;
 		maxToolRoundtrips: number;
+		/** Anthropic prompt caching for the Claude provider (default true). */
+		promptCache?: boolean;
 		/** Optional image-understanding route (mirrors the Zod schema). When set,
 		 * image-bearing turns are served by this provider/model. */
 		vision?: {

@@ -1523,6 +1523,8 @@ export class Kernel {
 						inputTokens,
 						outputTokens,
 					),
+					cacheCreationInputTokens: response.usage?.cacheCreationInputTokens,
+					cacheReadInputTokens: response.usage?.cacheReadInputTokens,
 				});
 			}
 
@@ -1791,6 +1793,8 @@ export class Kernel {
 
 		let inputTokensTotal = 0;
 		let outputTokensTotal = 0;
+		let cacheCreationTotal = 0;
+		let cacheReadTotal = 0;
 		let lastProvider: string | undefined;
 		let lastModel: string | undefined;
 
@@ -1822,6 +1826,8 @@ export class Kernel {
 					if (chunk.type === "usage" && chunk.usage) {
 						inputTokensTotal += chunk.usage.inputTokens ?? 0;
 						outputTokensTotal += chunk.usage.outputTokens ?? 0;
+						cacheCreationTotal += chunk.usage.cacheCreationInputTokens ?? 0;
+						cacheReadTotal += chunk.usage.cacheReadInputTokens ?? 0;
 						lastProvider = chunk.usage.provider ?? lastProvider;
 						lastModel = chunk.usage.model ?? lastModel;
 						const estimatedCostUsd = lastModel
@@ -1881,6 +1887,8 @@ export class Kernel {
 					lastProvider = undefined;
 					inputTokensTotal = 0;
 					outputTokensTotal = 0;
+					cacheCreationTotal = 0;
+					cacheReadTotal = 0;
 					yield* streamWith(this.provider);
 				} else {
 					throw streamErr;
@@ -1922,6 +1930,8 @@ export class Kernel {
 						inputTokens: inputTokensTotal,
 						outputTokens: outputTokensTotal,
 						estimatedCostUsd,
+						cacheCreationInputTokens: cacheCreationTotal || undefined,
+						cacheReadInputTokens: cacheReadTotal || undefined,
 					});
 				} catch (err) {
 					this.logger.warn("Cost tracking failed", { error: String(err) });

@@ -357,11 +357,27 @@ function runMigrations(db: Database): void {
       input_tokens INTEGER NOT NULL,
       output_tokens INTEGER NOT NULL,
       estimated_cost_usd REAL,
+      cache_creation_input_tokens INTEGER,
+      cache_read_input_tokens INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_usage_log_session ON usage_log(session_id);
     CREATE INDEX IF NOT EXISTS idx_usage_log_created ON usage_log(created_at);
   `);
+
+	// Prompt-cache accounting columns (migration-safe for pre-existing DBs).
+	try {
+		db.exec(
+			"ALTER TABLE usage_log ADD COLUMN cache_creation_input_tokens INTEGER",
+		);
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE usage_log ADD COLUMN cache_read_input_tokens INTEGER");
+	} catch {
+		// Column already exists
+	}
 
 	// Feedback table for learning loop
 	db.exec(`

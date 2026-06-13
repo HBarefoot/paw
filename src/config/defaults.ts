@@ -8,6 +8,7 @@ export const defaults: PawConfig = {
 		model: "claude-sonnet-4-5-20250929",
 		maxTokens: 4096,
 		maxToolRoundtrips: 50,
+		promptCache: true,
 	},
 	ollama: {
 		baseUrl: "http://localhost:11434",
