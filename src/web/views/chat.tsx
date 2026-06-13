@@ -106,7 +106,7 @@ export const ChatPage: FC<ChatPageProps> = ({ sessionId, chatLabel }) => {
 				{raw(`<div class="canvas-panel" id="canvas-panel">
           <div class="canvas-toolbar">
             <button onclick="toggleExplorer()" title="Toggle workspace explorer" id="explorer-toggle-btn">${explorerIconSvg}</button>
-            <span class="current-file" id="current-file">Home</span>
+            <span class="canvas-toolbar-spacer"></span>
             <button onclick="canvasTemplateMenu(this)" title="Templates" id="canvas-template-btn">${templateIconSvg}</button>
             <button onclick="canvasExportMenu(this)" title="Export / Share" id="canvas-export-btn">${exportIconSvg}</button>
             <button onclick="canvasRefresh()" title="Refresh preview">${refreshIconSvg}</button>
@@ -1510,7 +1510,6 @@ export function getChatScript(): string {
   var canvasTabsBar = document.getElementById("canvas-tabs");
   var canvasTabContent = document.getElementById("canvas-tab-content");
   var canvasFileList = document.getElementById("file-list");
-  var canvasCurrentFile = document.getElementById("current-file");
   var canvasStatusDot = document.getElementById("status-dot");
   var canvasStatusText = document.getElementById("status-text");
   var CANVAS_SESSION_KEY = "paw-canvas-session-id";
@@ -1699,7 +1698,6 @@ export function getChatScript(): string {
       canvasTabs[i].iframeEl.classList.toggle("hidden", !isActive);
       if (isActive) {
         canvasCurrentFileName = canvasTabs[i].path;
-        canvasCurrentFile.textContent = canvasTabs[i].label || canvasTabs[i].path;
       }
     }
     renderCanvasTabs();

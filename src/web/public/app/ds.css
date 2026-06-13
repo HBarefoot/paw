@@ -1654,9 +1654,9 @@
     display: flex; align-items: center; gap: 8px; padding: 8px 16px;
     border-bottom: 1px solid var(--border-secondary); background: var(--bg-secondary); font-size: 13px;
   }
-  .canvas-toolbar .current-file {
-    flex: 1; font-family: var(--font-mono); color: var(--text-secondary); font-size: 12px;
-  }
+  /* Pushes the toolbar actions to the right. The active file is shown by the tab
+     strip below (no redundant breadcrumb label). */
+  .canvas-toolbar-spacer { flex: 1; }
   .canvas-toolbar button {
     background: transparent; color: var(--text-tertiary); border: 1px solid var(--border-secondary);
     padding: 4px 8px; border-radius: var(--radius-sm); font-size: 12px;
