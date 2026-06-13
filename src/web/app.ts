@@ -51,6 +51,7 @@ import {
 } from "../store/sessions.js";
 import { createLogger } from "../observability/logger.js";
 import type { PawConfig } from "../types/config.js";
+import { ASSET_VERSION } from "./asset-version.js";
 import { CANVAS_TEMPLATES } from "./canvas-templates.js";
 import { parseUploadedFiles } from "./file-parser.js";
 import { createAuthMiddleware } from "./middleware/auth.js";
@@ -347,7 +348,7 @@ export function createWebApp(
 	// Per-boot asset version → cache-busts the companion static modules so each
 	// deploy serves fresh JS/CSS (they ship Cache-Control max-age). Without this,
 	// a stale cached shell.js renders the old UI against the new bootstrap cfg.
-	const ASSET_VERSION = Date.now().toString(36);
+	// (ASSET_VERSION is imported from ./asset-version.js so Layout uses the same value.)
 
 	// --- Auth Manager ---
 	const authManager = new WebAuthManager(database, {
@@ -1733,6 +1734,25 @@ export function createWebApp(
 	});
 
 	app.get("/favicon.ico", (c) => c.redirect("/favicon.png", 301));
+
+	// App design-system stylesheet (ds.css) served from 'self' as a REAL .css file
+	// instead of an inline <style> built from a JS template literal — a stray
+	// backtick in the CSS used to close the cssDesignSystem string and break Layout
+	// for every page. Same whitelist/content-type pattern as /ops/static.
+	app.get("/app/static/:file", async (c) => {
+		const file = c.req.param("file");
+		if (!/^[a-z0-9_-]+\.(js|css)$/.test(file)) return c.text("Not found", 404);
+		const p = resolve(import.meta.dir, "public/app", file);
+		if (!existsSync(p)) return c.text("Not found", 404);
+		c.header(
+			"Content-Type",
+			file.endsWith(".css")
+				? "text/css; charset=utf-8"
+				: "application/javascript; charset=utf-8",
+		);
+		c.header("Cache-Control", "public, max-age=3600");
+		return c.body(await Bun.file(p).arrayBuffer());
+	});
 
 	// Agent Ops static modules + vendored fonts (served from 'self', so they
 	// satisfy the page CSP's script-src/font-src without a CDN). Strict filename
