@@ -69,6 +69,17 @@ export function createSupabaseTools(
 	const asFilters = (input: Record<string, unknown>): SupabaseFilter[] =>
 		(input.filters as SupabaseFilter[] | undefined) ?? [];
 
+	const asSchema = (input: Record<string, unknown>): string | undefined =>
+		(input.schema as string | undefined) || undefined;
+
+	// Shared JSON Schema for the optional schema/profile selector. Mirrors how
+	// insert was pinned to the canvas yard in #88; omit for the public schema.
+	const schemaProp = {
+		type: "string",
+		description:
+			"Non-default PostgREST schema to target, e.g. 'canvas' (the agent's own provisioned tables). Omit for the public schema.",
+	} as const;
+
 	const select: ToolDefinition = {
 		name: "supabase_select",
 		description:
@@ -85,6 +96,7 @@ export function createSupabaseTools(
 				},
 				filters: filterSchema,
 				limit: { type: "number", description: "Max rows to return." },
+				schema: schemaProp,
 			},
 			required: ["table"],
 		},
@@ -94,6 +106,7 @@ export function createSupabaseTools(
 					columns: input.columns as string[] | undefined,
 					filters: asFilters(input),
 					limit: input.limit as number | undefined,
+					schema: asSchema(input),
 				});
 				return { content: JSON.stringify({ rows }) };
 			} catch (err) {
@@ -155,6 +168,7 @@ export function createSupabaseTools(
 					type: "object",
 					description: "Column→value map to set on matching rows.",
 				},
+				schema: schemaProp,
 			},
 			required: ["table", "filters", "values"],
 		},
@@ -166,6 +180,7 @@ export function createSupabaseTools(
 						table,
 						asFilters(input),
 						input.values as Record<string, unknown>,
+						{ schema: asSchema(input) },
 					),
 				);
 				return { content: JSON.stringify({ rows }) };
@@ -185,6 +200,7 @@ export function createSupabaseTools(
 			properties: {
 				table: { type: "string", description: "Table name." },
 				filters: filterSchema,
+				schema: schemaProp,
 			},
 			required: ["table", "filters"],
 		},
@@ -192,7 +208,7 @@ export function createSupabaseTools(
 			const table = input.table as string;
 			try {
 				const rows = await audited("supabase.delete", { table }, () =>
-					client.delete(table, asFilters(input)),
+					client.delete(table, asFilters(input), { schema: asSchema(input) }),
 				);
 				return { content: JSON.stringify({ rows }) };
 			} catch (err) {

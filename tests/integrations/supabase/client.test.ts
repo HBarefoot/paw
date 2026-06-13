@@ -172,6 +172,71 @@ describe("SupabaseClient", () => {
 		expect(calls[0].url).toBe(`${BASE_URL}/rest/v1/users?email=eq.a%40b.c`);
 	});
 
+	test("select with schema reads from that schema via Accept-Profile", async () => {
+		// Reads use Accept-Profile (the GET-side of insert's Content-Profile), so
+		// the agent can read its own canvas-yard tables. Without it the read hits
+		// the default public schema and the canvas table is invisible.
+		mockFetch(200, [{ id: 1 }]);
+		await makeClient().select("leads", { schema: "canvas" });
+		expect((calls[0].headers as Record<string, string>)["Accept-Profile"]).toBe(
+			"canvas",
+		);
+	});
+
+	test("select without schema sends no profile header (public, unchanged)", async () => {
+		mockFetch(200, []);
+		await makeClient().select("users");
+		expect(
+			(calls[0].headers as Record<string, string | undefined>)[
+				"Accept-Profile"
+			],
+		).toBeUndefined();
+	});
+
+	test("update with schema pins the PATCH to that schema via Content-Profile", async () => {
+		mockFetch(200, [{ id: 1 }]);
+		await makeClient().update(
+			"leads",
+			[{ column: "id", op: "eq", value: 1 }],
+			{ status: "won" },
+			{ schema: "canvas" },
+		);
+		expect(calls[0].method).toBe("PATCH");
+		expect(
+			(calls[0].headers as Record<string, string>)["Content-Profile"],
+		).toBe("canvas");
+	});
+
+	test("delete with schema pins the DELETE to that schema via Content-Profile", async () => {
+		mockFetch(200, []);
+		await makeClient().delete("leads", [{ column: "id", op: "eq", value: 1 }], {
+			schema: "canvas",
+		});
+		expect(calls[0].method).toBe("DELETE");
+		expect(
+			(calls[0].headers as Record<string, string>)["Content-Profile"],
+		).toBe("canvas");
+	});
+
+	test("update/delete without schema send no profile header (public, unchanged)", async () => {
+		mockFetch(200, []);
+		await makeClient().update("users", [{ column: "id", op: "eq", value: 1 }], {
+			n: 1,
+		});
+		expect(
+			(calls[0].headers as Record<string, string | undefined>)[
+				"Content-Profile"
+			],
+		).toBeUndefined();
+		mockFetch(200, []);
+		await makeClient().delete("users", [{ column: "id", op: "eq", value: 1 }]);
+		expect(
+			(calls[1].headers as Record<string, string | undefined>)[
+				"Content-Profile"
+			],
+		).toBeUndefined();
+	});
+
 	test("rpc posts to /rpc/<fn>", async () => {
 		mockFetch(200, { ok: true });
 		const res = await makeClient().rpc("do_thing", { x: 1 });
@@ -363,5 +428,50 @@ describe("assertCanvasTable (form-action fence check)", () => {
 			assertCanvasTable(makeClient(), "public.users"),
 		).rejects.toThrow(/Invalid Supabase table/);
 		expect(calls.length).toBe(0);
+	});
+});
+
+describe("supabase tools forward the schema param to the client", () => {
+	const tool = (name: string) => {
+		const t = createSupabaseTools(makeClient()).find((x) => x.name === name);
+		if (!t) throw new Error(`tool not found: ${name}`);
+		return t;
+	};
+
+	test("supabase_select forwards schema → Accept-Profile (reads the canvas yard)", async () => {
+		mockFetch(200, [{ id: 1 }]);
+		const res = await tool("supabase_select").handler({
+			table: "leads",
+			schema: "canvas",
+		});
+		expect(res.is_error).toBeFalsy();
+		expect(calls[0].headers?.["Accept-Profile"]).toBe("canvas");
+	});
+
+	test("supabase_update forwards schema → Content-Profile", async () => {
+		mockFetch(200, [{ id: 1 }]);
+		await tool("supabase_update").handler({
+			table: "leads",
+			filters: [{ column: "id", op: "eq", value: 1 }],
+			values: { status: "won" },
+			schema: "canvas",
+		});
+		expect(calls[0].headers?.["Content-Profile"]).toBe("canvas");
+	});
+
+	test("supabase_delete forwards schema → Content-Profile", async () => {
+		mockFetch(200, []);
+		await tool("supabase_delete").handler({
+			table: "leads",
+			filters: [{ column: "id", op: "eq", value: 1 }],
+			schema: "canvas",
+		});
+		expect(calls[0].headers?.["Content-Profile"]).toBe("canvas");
+	});
+
+	test("no schema param → no profile header (public path unchanged)", async () => {
+		mockFetch(200, []);
+		await tool("supabase_select").handler({ table: "users" });
+		expect(calls[0].headers?.["Accept-Profile"]).toBeUndefined();
 	});
 });

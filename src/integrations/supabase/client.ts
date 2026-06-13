@@ -50,13 +50,22 @@ export class SupabaseClient {
 		this.timeout = config.timeout ?? 10_000;
 	}
 
-	/** Read rows. `columns` defaults to all; `filters`/`limit` optional. */
+	/**
+	 * Read rows. `columns` defaults to all; `filters`/`limit` optional.
+	 *
+	 * `opts.schema` targets a non-default PostgREST schema. Reads select the schema
+	 * via the `Accept-Profile` header (the GET-side equivalent of the write-side
+	 * `Content-Profile` used by insert/update/delete). The agent's `canvas` yard is
+	 * otherwise unreadable, since PostgREST's default profile is `public`. Omitted →
+	 * default `public`, so existing callers are unchanged.
+	 */
 	async select(
 		table: string,
 		opts: {
 			columns?: string[];
 			filters?: SupabaseFilter[];
 			limit?: number;
+			schema?: string;
 		} = {},
 	): Promise<unknown[]> {
 		assertIdentifier("table", table);
@@ -65,8 +74,11 @@ export class SupabaseClient {
 		parts.push(`select=${cols.length ? cols.join(",") : "*"}`);
 		parts.push(...encodeFilters(opts.filters ?? []));
 		if (opts.limit !== undefined) parts.push(`limit=${Number(opts.limit)}`);
+		const headers = opts.schema
+			? { "Accept-Profile": assertIdentifier("schema", opts.schema) }
+			: undefined;
 		const url = `${this.baseUrl}/${table}?${parts.join("&")}`;
-		return this.request<unknown[]>(url, "GET");
+		return this.request<unknown[]>(url, "GET", undefined, headers);
 	}
 
 	/**
@@ -92,28 +104,44 @@ export class SupabaseClient {
 		return this.request<unknown[]>(url, "POST", rows, headers);
 	}
 
-	/** Update rows matching `filters` (REQUIRED) with `values`. */
+	/**
+	 * Update rows matching `filters` (REQUIRED) with `values`. `opts.schema` pins
+	 * the write to a non-default schema via `Content-Profile` (mirrors insert);
+	 * omitted → `public`.
+	 */
 	async update(
 		table: string,
 		filters: SupabaseFilter[],
 		values: Record<string, unknown>,
+		opts: { schema?: string } = {},
 	): Promise<unknown[]> {
 		assertIdentifier("table", table);
 		assertFilters("update", filters);
+		const headers: Record<string, string> = { Prefer: "return=representation" };
+		if (opts.schema) {
+			headers["Content-Profile"] = assertIdentifier("schema", opts.schema);
+		}
 		const url = `${this.baseUrl}/${table}?${encodeFilters(filters).join("&")}`;
-		return this.request<unknown[]>(url, "PATCH", values, {
-			Prefer: "return=representation",
-		});
+		return this.request<unknown[]>(url, "PATCH", values, headers);
 	}
 
-	/** Delete rows matching `filters` (REQUIRED). */
-	async delete(table: string, filters: SupabaseFilter[]): Promise<unknown[]> {
+	/**
+	 * Delete rows matching `filters` (REQUIRED). `opts.schema` pins the delete to a
+	 * non-default schema via `Content-Profile` (mirrors insert); omitted → `public`.
+	 */
+	async delete(
+		table: string,
+		filters: SupabaseFilter[],
+		opts: { schema?: string } = {},
+	): Promise<unknown[]> {
 		assertIdentifier("table", table);
 		assertFilters("delete", filters);
+		const headers: Record<string, string> = { Prefer: "return=representation" };
+		if (opts.schema) {
+			headers["Content-Profile"] = assertIdentifier("schema", opts.schema);
+		}
 		const url = `${this.baseUrl}/${table}?${encodeFilters(filters).join("&")}`;
-		return this.request<unknown[]>(url, "DELETE", undefined, {
-			Prefer: "return=representation",
-		});
+		return this.request<unknown[]>(url, "DELETE", undefined, headers);
 	}
 
 	/** Call a Postgres function via PostgREST RPC. */

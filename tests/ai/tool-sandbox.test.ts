@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { ToolRegistry } from "../../src/ai/tools.js";
 import { Sandbox } from "../../src/kernel/sandbox.js";
 import { createLogger } from "../../src/observability/logger.js";
@@ -45,6 +45,39 @@ describe("ToolRegistry sandbox enforcement (H-NEW-4)", () => {
 		const denied = await registry.execute("file_write", { path: "/etc/x" });
 		expect(denied.is_error).toBe(true);
 		expect(denied.content).toContain("Permission denied");
+	});
+
+	test("canvas_submissions_list is reachable under the same canvas grants as canvas_action_list", async () => {
+		// REGRESSION (#88 fallout): canvas_submissions_list matched no inferPermission
+		// rule and fell through to the bare plugin name "kernel" (not a granted
+		// permission) → denied. It is a read, so it now maps to canvas:read, which the
+		// kernel manifest grants — same reachability as the canvas_action_* tools.
+		const sandbox = new Sandbox(logger);
+		sandbox.registerManifest({
+			name: "kernel",
+			version: "0.1.0",
+			description: "",
+			permissions: ["canvas:read", "canvas:write"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		const mk = (name: string) => ({
+			name,
+			description: name,
+			input_schema: { type: "object" as const },
+			plugin: "kernel",
+			handler: async () => ({ content: "ok" }),
+		});
+		registry.register([
+			mk("canvas_action_list"),
+			mk("canvas_submissions_list"),
+		]);
+
+		const control = await registry.execute("canvas_action_list", {});
+		expect(control.is_error).toBeFalsy();
+		const subs = await registry.execute("canvas_submissions_list", {});
+		expect(subs.is_error).toBeFalsy();
+		expect(subs.content).toBe("ok");
 	});
 
 	test("denies unknown plugin", async () => {
