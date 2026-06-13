@@ -26,25 +26,34 @@ describe("Layout hideTopbar", () => {
 		expect(html).not.toContain('class="page-title"');
 	});
 
-	test("no-topbar chat fills the viewport and is bounded so the page never scrolls", () => {
-		// REGRESSION 1: the panels used `height: calc(100vh - 133px)`, which
-		// over-subtracted and left a gap below both panes.
-		// REGRESSION 2: replacing that with bare flex (no definite height) let the
-		// chain grow with content — the page scrolled and the canvas iframe
-		// stretched — because the outer .app-layout is min-height:100vh, so flex:1
-		// had nothing to bound against. .content needs a DEFINITE viewport height.
+	test("no-topbar chat is HARD-capped to the viewport so the page never scrolls", () => {
+		// REGRESSION 1 (#90): a fixed `calc(100vh - 133px)` left a bottom gap.
+		// REGRESSION 2 (#94): bare flex (no definite height) let the chain grow.
+		// REGRESSION 3 (this fix): #94's `height: 100dvh` was silently overridden by
+		// .content's inherited `flex: 1` (flex-basis:0% beats height) → .content
+		// still grew with content and the page scrolled. A `max-height: 100dvh` cap
+		// is applied AFTER flex and cannot be overridden — it physically bounds
+		// .content to the viewport. Verified in a headless browser: pre-fix the
+		// document rendered ~8900px tall in an 800px viewport; with this it is 800.
 		const css = String(
 			Layout({ title: "Chat", hideTopbar: true, children: "x" }),
 		);
-		// The fragile magic number is gone…
 		expect(css).not.toContain("100vh - 133px");
-		// …the card flex-fills…
 		expect(css).toMatch(/\.no-topbar \.chat-with-canvas \{[^}]*flex: 1[^}]*\}/);
-		// …and .content is a bounded flex column (definite viewport height +
-		// overflow:hidden) so the chat scrolls internally and the page does not.
+		// .content carries the hard viewport cap + overflow:hidden.
 		const content = css.match(/\.no-topbar \.content \{[^}]*\}/)?.[0] ?? "";
 		expect(content).toContain("flex-direction: column");
-		expect(content).toMatch(/height: 100dvh|height: 100vh/);
+		expect(content).toMatch(/max-height: 100dvh|max-height: 100vh/);
 		expect(content).toContain("overflow: hidden");
+		// The inner scroll panes can shrink (min-height:0) so they scroll/bound
+		// internally instead of forcing the column — and the page — taller.
+		for (const sel of [
+			"\\.chat-messages",
+			"\\.canvas-main",
+			"\\.canvas-tab-content",
+		]) {
+			const rule = css.match(new RegExp(`${sel} \\{[^}]*\\}`))?.[0] ?? "";
+			expect(rule).toContain("min-height: 0");
+		}
 	});
 });
