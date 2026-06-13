@@ -377,3 +377,22 @@ describe("OpsPage accent theming", () => {
 		expect(evil).not.toContain("</style><script>");
 	});
 });
+
+describe("ops Live operations list stays scroll-capped (no layout overflow)", () => {
+	const css = read("styles.css");
+
+	test("the .feed list can shrink and scroll inside the rail", () => {
+		// REGRESSION: the Live operations list grew to its full content height and
+		// pushed the right rail past the viewport. The fix: .feed is a flex child
+		// that must be allowed to shrink (min-height:0) so its own overflow-y:auto
+		// scroll engages instead of the list expanding the (overflow:hidden) parent.
+		const feed = css.match(/\.ops-app \.feed \{[^}]*\}/)?.[0] ?? "";
+		expect(feed).toContain("min-height: 0");
+		expect(feed).toContain("overflow-y: auto");
+		expect(feed).toContain("flex: 1");
+		// The parent that constrains it stays overflow:hidden (so the cap holds).
+		const grow = css.match(/\.ops-app \.insp \.sec\.grow \{[^}]*\}/)?.[0] ?? "";
+		expect(grow).toContain("min-height: 0");
+		expect(grow).toContain("overflow: hidden");
+	});
+});
