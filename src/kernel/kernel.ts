@@ -54,6 +54,7 @@ import { sessionTitleFromContent } from "../store/session-title.js";
 import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
 import { createActionTools } from "../tools/action-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
+import { createCodeTools } from "../tools/code-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
 import { createFileTools } from "../tools/file-tools.js";
 import type { PawConfig } from "../types/config.js";
@@ -238,6 +239,7 @@ export class Kernel {
 				"memory:read",
 				"memory:write",
 				"memory:forget",
+				"code:execute",
 				"cron:create",
 				"agent:spawn",
 				"agent:delegate",
@@ -383,7 +385,20 @@ export class Kernel {
 					allowedCommands: config.workspace.allowedCommands,
 				}),
 			);
-			this.logger.info("File/exec tools registered");
+			// execute_code: orchestrate other tools in one turn via a sandboxed child
+			// process. Shares the registry + skill manager so bridged calls re-enter
+			// the same permission/skill checks the model is bound by.
+			this.toolRegistry.register(
+				createCodeTools({
+					workspacePath: config.workspace.path,
+					maxOutputLength: config.workspace.maxOutputLength,
+					execTimeout: config.workspace.execTimeout,
+					toolRegistry: this.toolRegistry,
+					skillManager: this.skillManager,
+					logger: this.logger,
+				}),
+			);
+			this.logger.info("File/exec/code tools registered");
 		}
 
 		// Register canvas tools

@@ -266,7 +266,11 @@ export class OpenAIProvider implements AIProvider {
 					}
 				}
 
-				if (call.function.name === "spawn_agent" && sessionId) {
+				if (
+					(call.function.name === "spawn_agent" ||
+						call.function.name === "execute_code") &&
+					sessionId
+				) {
 					args.__sessionId = sessionId;
 				}
 				regularCalls.push({ id: call.id, name: call.function.name, input: args });

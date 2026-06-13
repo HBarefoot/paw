@@ -70,7 +70,11 @@ export class SkillManager {
 		if (tool.name.startsWith("canvas_")) return "canvas";
 		if (tool.plugin === "kernel") {
 			if (tool.name.startsWith("memory_")) return "memory";
-			if (tool.name === "spawn_agent" || tool.name === "activate_skill")
+			if (
+				tool.name === "spawn_agent" ||
+				tool.name === "activate_skill" ||
+				tool.name === "execute_code"
+			)
 				return "core";
 			return "files";
 		}
