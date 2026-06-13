@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { getChatScript } from "../../src/web/views/chat.js";
+
+const CHAT_SRC = readFileSync(
+	fileURLToPath(new URL("../../src/web/views/chat.tsx", import.meta.url)),
+	"utf8",
+);
 
 // The chat client is a giant template literal served verbatim as /js/chat.js.
 // Backslashes/escapes are "cooked" once when the literal is evaluated (the
@@ -25,6 +32,17 @@ describe("chat client script", () => {
 		expect(script).toContain("t.path !== CANVAS_HOME_PATH");
 		// The Home tab can't be closed.
 		expect(script).toContain("if (canvasTabs[idx].pinned) return;");
+	});
+
+	test("canvas toolbar has no redundant Home breadcrumb (one Home = the tab)", () => {
+		// The toolbar's current-file label was ALWAYS a duplicate of the active tab
+		// ("Home on top of Home"); removed. The tab strip is the file indicator.
+		expect(CHAT_SRC).not.toContain('id="current-file"');
+		expect(script).not.toContain('getElementById("current-file")');
+		expect(script).not.toContain("canvasCurrentFile.textContent");
+		// The active-path tracker + the pinned Home tab are untouched.
+		expect(script).toContain("canvasCurrentFileName");
+		expect(script).toContain('label: "Home"');
 	});
 
 	test("persisted canvas sessions load history (no blanket canvas- block)", () => {
