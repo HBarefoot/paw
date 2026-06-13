@@ -350,15 +350,64 @@ describe("companion static modules", () => {
 		expect(Math.abs(s.value - 1)).toBeLessThan(0.01); // settles on target
 	});
 
-	test("gaze: pupils glide toward the target (lerp), snap only under reduced-motion", () => {
-		// Guard against re-introducing the instant per-frame snap: the face step must
-		// ease the rendered offset toward the target and use a full step when reduced.
-		// (The gel-face refactor moved the per-face gaze easing into stepFace.)
+	test("damp: frame-rate-independent — same glide at 30 vs 60 fps; reduced snaps", () => {
+		// The motion-smoothing pass replaced fixed per-frame gaze lerps with
+		// exponential smoothing, so the same `rate` converges to the same place in
+		// the same wall-clock time regardless of frame rate (no more sluggish-at-30,
+		// over-fast-at-120). This is the core of "smoother, natural" motion.
+		const win: Record<string, unknown> = {};
+		runModule(win, {}, read("spring.js"));
+		const S = win.CompanionSpring as {
+			damp: (
+				c: number,
+				t: number,
+				rate: number,
+				dt: number,
+				reduced?: boolean,
+			) => number;
+		};
+		expect(typeof S.damp).toBe("function");
+
+		// 1s of easing toward 1 from 0, at 60 fps vs 30 fps, must land within ε.
+		let at60 = 0;
+		for (let i = 0; i < 60; i++) at60 = S.damp(at60, 1, 12, 1 / 60);
+		let at30 = 0;
+		for (let i = 0; i < 30; i++) at30 = S.damp(at30, 1, 12, 1 / 30);
+		expect(Math.abs(at60 - at30)).toBeLessThan(0.01);
+		expect(at60).toBeGreaterThan(0.99); // converged after 1s at rate 12
+
+		// Monotonic approach, never overshoots the target.
+		let v = 0;
+		let prev = -1;
+		for (let i = 0; i < 30; i++) {
+			v = S.damp(v, 1, 12, 1 / 60);
+			expect(v).toBeGreaterThanOrEqual(prev);
+			expect(v).toBeLessThanOrEqual(1);
+			prev = v;
+		}
+
+		// reduced-motion snaps to target immediately; a zero dt makes no progress.
+		expect(S.damp(0, 1, 12, 1 / 60, true)).toBe(1);
+		expect(S.damp(0.4, 1, 12, 0)).toBe(0.4);
+	});
+
+	test("gaze: pupils glide via frame-rate-independent damp, snap under reduced-motion", () => {
+		// The gaze easing must be time-based (SP.damp) not a fixed per-frame lerp,
+		// so it feels the same at 30/60/120 fps. Guard against re-introducing the
+		// `(d - gaze) * 0.18` fixed factors and ensure dt is threaded into stepFace.
 		const src = read("shell.js");
 		const body = src.slice(src.indexOf("function stepFace"));
-		expect(body).toContain("(dx - gazeX)");
-		expect(body).toContain("(dy - gazeY)");
-		expect(body).toContain("reduced ? 1 :"); // reduced-motion → instant
+		expect(body).toContain("const dt = opts.dt || 0;");
+		expect(body).toContain("SP.damp(f.gazeX, dx, 12, dt, reduced)");
+		expect(body).toContain("SP.damp(f.cur.x, desX, 10.5, dt, reduced)");
+		// the old frame-rate-dependent fixed factors are gone
+		expect(body).not.toContain("(dx - gazeX) * k");
+		expect(body).not.toContain("(desX - f.cur.x) * 0.16");
+		// dt is supplied by BOTH stepFace callers (main + sub-agents)
+		expect(src).toContain(
+			"popValue: pop.value,\n\t\t\t\t\treduced,\n\t\t\t\t\tdt,",
+		);
+		expect(src).toContain("{ gaze, popValue: 0, reduced, dt }");
 	});
 
 	// ── gel-sphere face upgrade (drop-in, faces only) ──
@@ -411,6 +460,52 @@ describe("companion static modules", () => {
 		// focused concentration arc)
 		expect(js).toMatch(/working:\s*\{[^}]*mouth:\s*"smile"/);
 		expect(js).toContain('case "smile":');
+	});
+
+	// ── motion-smoothing pass (same energy, no snaps) ──
+	test("mouth morphs with a squash-and-reform, not an instant swap", () => {
+		const js = read("shell.js");
+		// a morph scalar eased toward 1 + a scaleY dip that hides the geometry swap
+		expect(js).toContain("f.mouthT");
+		expect(js).toContain("SP.damp(f.mouthT");
+		expect(js).toMatch(/scaleY\(\$\{sc/);
+		// the swap happens mid-dip (crossing 0.5), via the extracted painter
+		expect(js).toContain("function paintMouth");
+		expect(js).toContain("paintMouth(f, f.mouthTo)");
+		// the mouth pivots on its own centre for a symmetric squash
+		expect(read("styles.css")).toContain("transform-origin: 50% 62%");
+	});
+
+	test("caption crossfades on change instead of hard-cutting", () => {
+		const js = read("shell.js");
+		const css = read("styles.css");
+		// JS toggles opacity around a guarded text swap (latest text wins)
+		expect(js).toContain('subtitle.style.opacity = "0"');
+		expect(js).toContain("captionFadeTimer");
+		expect(js).toContain("subtitle.textContent = lastCaption;");
+		// CSS provides the opacity transition; reduced-motion still hard-swaps
+		expect(css).toContain("transition: opacity 0.16s ease;");
+		expect(js).toMatch(/if \(reduced\) \{\s*subtitle\.textContent = text;/);
+	});
+
+	test("tethers reuse keyed elements (no full teardown → particles glide)", () => {
+		const js = read("shell.js");
+		// the destroy-everything teardown is gone; elements are reconciled by key
+		expect(js).not.toContain('tetherSvg.textContent = ""');
+		expect(js).toContain("const tetherEls = new Map();");
+		expect(js).toContain("tetherEls.get(it.key)");
+		// a moved particle re-paths in place (no recreate) via the stashed motion el
+		expect(js).toContain("c._motion = m;");
+		expect(js).toContain('e.particle._motion.setAttribute("path", it.d)');
+		// painted every frame while sub-agents are live (so lines track them)
+		expect(js).toContain('home.querySelector("[data-subagent]")');
+	});
+
+	test("error tremor frequency clears the 60Hz Nyquist (anti-alias)", () => {
+		// ~16Hz (now/64), not the old ~22Hz (now/45) that aliased on 60Hz displays.
+		const js = read("shell.js");
+		expect(js).toContain("Math.sin(now / 64) * 1.5");
+		expect(js).not.toContain("Math.sin(now / 45)");
 	});
 
 	// ── Gaze + dynamic caption (PR A) — pure helpers exported on Companion ──

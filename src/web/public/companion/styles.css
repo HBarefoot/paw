@@ -359,6 +359,9 @@ body {
 	inset: 0;
 	z-index: 5;
 	pointer-events: none;
+	/* JS dips scaleY through a shape swap (the squash-and-reform morph); pivot
+	   on the mouth's own centre so it thins symmetrically. */
+	transform-origin: 50% 62%;
 }
 .cmp-mouth path {
 	fill: none;
@@ -601,6 +604,10 @@ body {
 	max-width: 420px;
 	text-align: center;
 	text-wrap: pretty;
+	/* Crossfade the action line on change (JS toggles opacity 0↔1) so it
+	   doesn't hard-cut between "Thinking…" / "Working…" / "Done." */
+	opacity: 1;
+	transition: opacity 0.16s ease;
 }
 .ops-feed {
 	margin-top: 22px;
