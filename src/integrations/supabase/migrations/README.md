@@ -110,13 +110,25 @@ create role someone_else login;
 select * from auth.users limit 1;
 ```
 
-A one-liner the operator can run to confirm the role's attributes are locked:
+### Confirm the role attributes are locked (this is how non-superuser is asserted)
+
+The migration does **not** run `ALTER ROLE … NOSUPERUSER`. On hosted Supabase the
+project's `postgres` role is not a true superuser, and Postgres requires real
+superuser to change the SUPERUSER attribute of any role — *even to set it to NO* —
+so that statement would fail with `42501: permission denied` and abort the whole
+migration. `NOSUPERUSER` is already the default and is set at `CREATE ROLE` time,
+so instead of re-asserting it we **verify** it here. Run this one-liner and check
+`rolsuper` is `f`:
 
 ```sql
 select rolname, rolsuper, rolcreatedb, rolcreaterole, rolcanlogin
 from pg_roles where rolname = 'paw_builder';
 -- expect: paw_builder | f | f | f | t
+--                        ^ rolsuper MUST be f (not a superuser)
 ```
+
+If `rolsuper` is `t`, stop — the role is over-privileged and the fence does not
+hold.
 
 ## Destructive schema ops are operator-only
 
