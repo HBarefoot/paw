@@ -50,6 +50,7 @@ import { compileBrandBrief, getActiveBrand } from "../store/brands.js";
 import { closeDb, getDb } from "../store/db.js";
 import { appendMessage, getSessionMessages } from "../store/messages.js";
 import { NotificationStore } from "../store/notifications.js";
+import { sessionTitleFromContent } from "../store/session-title.js";
 import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
 import { createActionTools } from "../tools/action-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
@@ -1317,13 +1318,14 @@ export class Kernel {
 		);
 		appendMessage(this.db, msg.sessionId, "user", msg.content);
 
-		// Auto-generate session title from first user message
+		// Auto-generate a clean, human session title from the first user message
+		// (canvas messages → the user's request, never the [CANVAS MODE] prompt).
 		if (!session.title) {
-			const title =
-				msg.content.length > 80
-					? msg.content.slice(0, 80) + "..."
-					: msg.content;
-			updateSessionTitle(this.db, msg.sessionId, title);
+			updateSessionTitle(
+				this.db,
+				msg.sessionId,
+				sessionTitleFromContent(msg.content),
+			);
 		}
 
 		const history = getSessionMessages(
@@ -1632,11 +1634,11 @@ export class Kernel {
 		appendMessage(this.db, msg.sessionId, "user", msg.content);
 
 		if (!session.title) {
-			const title =
-				msg.content.length > 80
-					? msg.content.slice(0, 80) + "..."
-					: msg.content;
-			updateSessionTitle(this.db, msg.sessionId, title);
+			updateSessionTitle(
+				this.db,
+				msg.sessionId,
+				sessionTitleFromContent(msg.content),
+			);
 		}
 
 		const history = getSessionMessages(

@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import * as sqliteVec from "sqlite-vec";
+import { cleanLeakedSessionTitles } from "./session-title.js";
 
 let db: Database | null = null;
 let customSqliteLoaded = false;
@@ -625,6 +626,10 @@ function runMigrations(db: Database): void {
 		// web_admins table may not exist yet on a brand-new install;
 		// the migration is a no-op in that case.
 	}
+
+	// Re-title sessions that leaked the [CANVAS MODE] system prompt (titled before
+	// the sessionTitleFromContent fix). Idempotent; best-effort.
+	cleanLeakedSessionTitles(db);
 }
 
 export function closeDb(): void {
