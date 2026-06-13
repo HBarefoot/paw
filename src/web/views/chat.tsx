@@ -24,7 +24,7 @@ const newFolderIconSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="
 
 export const ChatPage: FC<ChatPageProps> = ({ sessionId, chatLabel }) => {
 	return (
-		<Layout title={chatLabel ?? "Chat"} currentPath="/chat">
+		<Layout title={chatLabel ?? "Chat"} currentPath="/chat" hideTopbar={true}>
 			{raw(
 				`<script>document.querySelector(".content").classList.add("content-full")</script>`,
 			)}
@@ -422,10 +422,24 @@ export function getChatScript(): string {
     return content;
   }
 
+  // True when this session id is one of the persisted sessions in the dropdown.
+  // Canvas sessions ARE persisted (channel "canvas") and appear here once they
+  // have a stored turn — so they load like any other. Only a brand-new, not-yet-
+  // persisted canvas session is absent, and we skip it to avoid a 404 (the case
+  // PR #82 guarded) without blocking real history.
+  function sessionIsListed(sid) {
+    if (!sid) return false;
+    for (var i = 0; i < selector.options.length; i++) {
+      if (selector.options[i].value === sid) return true;
+    }
+    return false;
+  }
+
   function loadMessagesForSession(sid) {
-    // Canvas sessions are ephemeral (in-memory only) — never persisted to the DB,
-    // so /api/sessions/<id>/messages 404s. History replays from /api/canvas/events.
-    if (!sid || sid.indexOf("canvas-") === 0) return;
+    // Only load sessions that are persisted (present in the dropdown). The
+    // active in-flight canvas session, before its first persisted turn, isn't
+    // listed yet — its history replays from /api/canvas/events instead.
+    if (!sessionIsListed(sid)) return;
     fetch("/api/sessions/" + sid + "/messages")
       .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
       .then(function(data) {
@@ -464,8 +478,9 @@ export function getChatScript(): string {
         // Don't let the chat-session loader clobber it on initial load.
         if (canvasMode) return;
 
-        // If we have a valid session selected, load its messages
-        if (foundSession && !sessionId.startsWith("canvas-")) {
+        // If the active session is a persisted one in the list, load its
+        // messages — including canvas sessions, which are persisted too.
+        if (foundSession) {
           loadMessagesForSession(sessionId);
           return;
         }

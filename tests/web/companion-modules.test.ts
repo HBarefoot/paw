@@ -536,16 +536,20 @@ describe("companion static modules", () => {
 		expect(csp).toContain("https://cloudflareinsights.com");
 	});
 
-	test("chat: ephemeral canvas sessions skip the DB history fetch (no 404)", () => {
+	test("chat: only listed/persisted sessions hit the DB history fetch (no 404)", () => {
 		const src = readFileSync(
 			new URL("../../src/web/views/chat.tsx", import.meta.url),
 			"utf8",
 		);
-		// The guard must sit in loadMessagesForSession, before the fetch, so a
-		// client-only `canvas-<uuid>` id never hits /api/sessions/<id>/messages.
+		// The guard must sit in loadMessagesForSession, before the fetch: a
+		// client-only `canvas-<uuid>` id that isn't in the (persisted-only)
+		// dropdown is skipped, so it never hits /api/sessions/<id>/messages.
+		// Persisted canvas sessions ARE in the dropdown and DO load.
 		const fn = src.slice(src.indexOf("function loadMessagesForSession"));
 		const body = fn.slice(0, fn.indexOf('fetch("/api/sessions/'));
-		expect(body).toContain('indexOf("canvas-") === 0');
+		expect(body).toContain("if (!sessionIsListed(sid)) return;");
+		// The old blanket prefix block is gone (it hid persisted canvas history).
+		expect(body).not.toContain('indexOf("canvas-") === 0');
 	});
 
 	test("the /companion inline bootstrap cooks and parses (template-trap guard)", () => {

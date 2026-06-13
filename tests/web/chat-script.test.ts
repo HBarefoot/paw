@@ -26,4 +26,16 @@ describe("chat client script", () => {
 		// The Home tab can't be closed.
 		expect(script).toContain("if (canvasTabs[idx].pinned) return;");
 	});
+
+	test("persisted canvas sessions load history (no blanket canvas- block)", () => {
+		// Regression: the old guard early-returned for ANY id starting with
+		// "canvas-", so selecting a persisted [CANVAS MODE] session from the
+		// dropdown rendered nothing. History now loads for any session present in
+		// the (persisted-only) dropdown.
+		expect(script).toContain("function sessionIsListed(");
+		expect(script).toContain("if (!sessionIsListed(sid)) return;");
+		// The old blanket prefix guards must be gone.
+		expect(script).not.toContain('sid.indexOf("canvas-") === 0) return');
+		expect(script).not.toContain('!sessionId.startsWith("canvas-")');
+	});
 });
