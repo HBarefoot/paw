@@ -266,7 +266,10 @@ export class ClaudeProvider implements AIProvider {
 				}
 
 				const toolInput = { ...(block.input as Record<string, unknown>) };
-				if (block.name === "spawn_agent" && sessionId) {
+				if (
+					(block.name === "spawn_agent" || block.name === "execute_code") &&
+					sessionId
+				) {
 					toolInput.__sessionId = sessionId;
 				}
 				regularCalls.push({ id: block.id, name: block.name, input: toolInput });
@@ -467,7 +470,10 @@ export class ClaudeProvider implements AIProvider {
 
 			for (const block of toolUseBlocks) {
 				const toolInput = { ...(block.input as Record<string, unknown>) };
-				if (block.name === "spawn_agent" && sessionId) {
+				if (
+					(block.name === "spawn_agent" || block.name === "execute_code") &&
+					sessionId
+				) {
 					toolInput.__sessionId = sessionId;
 				}
 

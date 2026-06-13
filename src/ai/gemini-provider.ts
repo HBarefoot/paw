@@ -227,7 +227,11 @@ export class GeminiProvider implements AIProvider {
 				}
 
 				const toolArgs = { ...call.functionCall.args };
-				if (call.functionCall.name === "spawn_agent" && sessionId) {
+				if (
+					(call.functionCall.name === "spawn_agent" ||
+						call.functionCall.name === "execute_code") &&
+					sessionId
+				) {
 					toolArgs.__sessionId = sessionId;
 				}
 				regularCalls.push({

@@ -105,6 +105,11 @@ export class ToolRegistry {
 		return this.tools.get(name);
 	}
 
+	/** All registered tool names (used to scope execute_code when no session). */
+	toolNames(): string[] {
+		return [...this.tools.keys()];
+	}
+
 	async execute(
 		name: string,
 		input: Record<string, unknown>,
@@ -196,6 +201,7 @@ export class ToolRegistry {
 		if (tool.name.startsWith("file_write") || tool.name === "file_write")
 			return "file:write";
 		if (tool.name === "exec_command") return "exec";
+		if (tool.name === "execute_code") return "code:execute";
 		if (tool.name === "memory_recall") return "memory:read";
 		if (tool.name === "memory_store" || tool.name === "import_document")
 			return "memory:write";

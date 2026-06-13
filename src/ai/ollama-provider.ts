@@ -295,7 +295,11 @@ export class OllamaProvider implements AIProvider {
 				}
 
 				const toolArgs = { ...call.function.arguments };
-				if (call.function.name === "spawn_agent" && sessionId) {
+				if (
+					(call.function.name === "spawn_agent" ||
+						call.function.name === "execute_code") &&
+					sessionId
+				) {
 					toolArgs.__sessionId = sessionId;
 				}
 				regularCalls.push({
@@ -614,7 +618,11 @@ export class OllamaProvider implements AIProvider {
 			for (let i = 0; i < toolCalls.length; i++) {
 				const call = toolCalls[i];
 				const toolInput = { ...call.function.arguments };
-				if (call.function.name === "spawn_agent" && sessionId) {
+				if (
+					(call.function.name === "spawn_agent" ||
+						call.function.name === "execute_code") &&
+					sessionId
+				) {
 					toolInput.__sessionId = sessionId;
 				}
 				const toolId = `ollama-${roundtrips}-${call.function.name}-${i}`;
