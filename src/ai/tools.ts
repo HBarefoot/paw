@@ -202,6 +202,10 @@ export class ToolRegistry {
 		if (tool.name === "memory_forget") return "memory:forget";
 		if (tool.name.startsWith("canvas_read") || tool.name === "canvas_list")
 			return "canvas:read";
+		// Reading the durable form-submission inbox (canvas_submissions_list) is a
+		// read; the kernel manifest grants canvas:read, so this is reachable under
+		// the same canvas skill grants as the canvas_action_* tools.
+		if (tool.name.startsWith("canvas_submissions")) return "canvas:read";
 		if (
 			tool.name === "canvas_write" ||
 			tool.name === "canvas_mkdir" ||
