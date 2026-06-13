@@ -1,5 +1,6 @@
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import { extractCanvasRequest } from "../../store/session-title.js";
 import { Layout } from "./layout.js";
 
 interface SessionSummary {
@@ -114,13 +115,11 @@ function extractUserContent(content: string): {
 	label: string | null;
 	text: string;
 } {
-	// Detect [CANVAS MODE] messages and extract the actual user request
-	const canvasMatch = content.match(
-		/\[CANVAS MODE\][\s\S]*?User request:\s*([\s\S]*?)(?:\n\n--- Current Canvas Files ---|$)/,
-	);
-	if (canvasMatch) {
-		return { label: "Canvas", text: canvasMatch[1].trim() };
-	}
+	// Canvas messages wrap the real ask in the [CANVAS MODE] system prompt; reuse
+	// the shared extractor (single source of truth) to surface just the request.
+	const req = extractCanvasRequest(content);
+	if (req != null)
+		return { label: "Canvas", text: req || "(see attached files)" };
 	return { label: null, text: content };
 }
 
