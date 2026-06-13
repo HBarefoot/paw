@@ -4,6 +4,10 @@ import type { FC } from "hono/jsx";
 interface LayoutProps {
 	title: string;
 	currentPath?: string;
+	// Suppress the page-title topbar (e.g. on /chat, where the page's own toolbar
+	// is the header and the title bar just wastes ~52px). Adds a `no-topbar`
+	// marker class so the content can reclaim the height.
+	hideTopbar?: boolean;
 	children: any;
 }
 
@@ -1518,6 +1522,10 @@ const cssDesignSystem = `
     background: var(--bg-card);
     box-shadow: var(--shadow-sm);
   }
+  /* When the page-title topbar is hidden (/chat), reclaim its ~52px so the
+     chat + canvas grow taller. Mirrors the base heights above minus the topbar. */
+  .no-topbar .chat-container { height: calc(100vh - 88px); }
+  .no-topbar .chat-with-canvas { height: calc(100vh - 133px); }
   /* When inside the unified wrapper, chat-container loses its own card styles */
   .chat-with-canvas .chat-container {
     flex: 1;
@@ -1944,7 +1952,12 @@ export function brandIdentityScript(): string {
 	].join("");
 }
 
-export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
+export const Layout: FC<LayoutProps> = ({
+	title,
+	currentPath,
+	hideTopbar,
+	children,
+}) => (
 	<html lang="en">
 		<head>
 			<meta charset="UTF-8" />
@@ -2080,10 +2093,12 @@ export const Layout: FC<LayoutProps> = ({ title, currentPath, children }) => (
 						</a>
 					</div>
 				</aside>
-				<div class="main-area">
-					<header class="topbar">
-						<h1 class="page-title">{title}</h1>
-					</header>
+				<div class={hideTopbar ? "main-area no-topbar" : "main-area"}>
+					{hideTopbar ? null : (
+						<header class="topbar">
+							<h1 class="page-title">{title}</h1>
+						</header>
+					)}
 					<main class="content">{children}</main>
 				</div>
 			</div>

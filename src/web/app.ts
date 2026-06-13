@@ -2898,13 +2898,17 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			}
 		}
 
-		// `__home__` is a reserved path that ALWAYS renders the live portrait,
-		// regardless of any file in the canvas root — it backs the pinned "Home"
-		// tab so the agent writing index.html can never clobber the portrait.
+		// `__home__` is the reserved path that backs the pinned "Home" tab. The
+		// Home tab now loads the live companion (`/companion`); this legacy route
+		// used to render the old inline portrait face here. Redirect it to the
+		// companion so the old face can never paint — even from a stale client or
+		// a cached pre-companion chat script that still requests this path.
 		const isHome = decoded === "__home__";
-		if (isHome || !existsSync(fullPath) || statSync(fullPath).isDirectory()) {
-			// Return a placeholder page for index.html / __home__ so the iframe isn't blank
-			if (isHome || decoded === "index.html") {
+		if (isHome) return c.redirect("/companion");
+		if (!existsSync(fullPath) || statSync(fullPath).isDirectory()) {
+			// Placeholder portrait page for a not-yet-written index.html so the
+			// iframe isn't blank (the pinned Home tab is handled above via redirect).
+			if (decoded === "index.html") {
 				// No external resources (e.g. web fonts): this page renders inside the
 				// sandboxed, null-origin canvas iframe, where cross-origin loads can
 				// trip Safari's "Unsafe attempt to load URL" guard. System fonts only.
