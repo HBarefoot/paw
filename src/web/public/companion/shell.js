@@ -122,6 +122,7 @@
 			eyeR: Rr.eye,
 			pupL: L.pup,
 			pupR: Rr.pup,
+			mouth: ms,
 			mouthPath: mp,
 			size,
 			gazeX: 0,
@@ -132,6 +133,8 @@
 			blinkStart: -9999,
 			nextBlink: 700 + Math.random() * 800,
 			lastMouth: "",
+			mouthTo: "",
+			mouthT: 1,
 		};
 		return cmp;
 	}
@@ -159,6 +162,7 @@
 		const f = cmp._face;
 		if (!f) return;
 		const reduced = opts.reduced;
+		const dt = opts.dt || 0;
 		const ep = FACE_EXP[expr] || FACE_EXP.idle;
 		const t = now / 1000;
 
@@ -188,18 +192,17 @@
 		desY += ep.biasY;
 		const dlen = Math.hypot(desX, desY);
 		if (dlen > 1.05) { desX = (desX / dlen) * 1.05; desY = (desY / dlen) * 1.05; }
-		f.cur.x += (desX - f.cur.x) * 0.16;
-		f.cur.y += (desY - f.cur.y) * 0.16;
-		// pupil travel in px (17% of eye width), then glide via the lerp below.
+		// Frame-rate-independent glide (rate 10.5 ≈ the old 0.16/frame at 60 fps),
+		// so gaze feels identical at 60 fps but consistent at 30/120.
+		f.cur.x = SP ? SP.damp(f.cur.x, desX, 10.5, dt, reduced) : desX;
+		f.cur.y = SP ? SP.damp(f.cur.y, desY, 10.5, dt, reduced) : desY;
+		// pupil travel in px (17% of eye width), then glide via the damp below.
 		const ew = f.size * 0.185;
 		const dx = f.cur.x * 0.17 * ew;
 		const dy = f.cur.y * 0.17 * ew;
-		// Ease toward the target; snap instantly under reduced-motion.
-		const k = reduced ? 1 : 0.18;
-		let gazeX = f.gazeX;
-		let gazeY = f.gazeY;
-		gazeX += (dx - gazeX) * k;
-		gazeY += (dy - gazeY) * k;
+		// rate 12 ≈ the old 0.18/frame at 60 fps; snaps under reduced-motion.
+		const gazeX = SP ? SP.damp(f.gazeX, dx, 12, dt, reduced) : dx;
+		const gazeY = SP ? SP.damp(f.gazeY, dy, 12, dt, reduced) : dy;
 		f.gazeX = gazeX;
 		f.gazeY = gazeY;
 
@@ -226,7 +229,9 @@
 		const e = Math.max(-0.12, Math.min(0.12, (opts.popValue || 0) * 0.04));
 		sx *= 1 + e;
 		sy *= 1 - e;
-		if (TREMOR_EXP[expr] && !reduced) tx += Math.sin(now / 45) * 1.5;
+		// ~16 Hz (was ~22 Hz): same ±1.5px shake, but clear of the 30 Hz Nyquist
+		// of a 60 Hz display so it reads as a smooth tremor, not aliased buzz.
+		if (TREMOR_EXP[expr] && !reduced) tx += Math.sin(now / 64) * 1.5;
 		f.sphere.style.transform = `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`;
 
 		// ── eyes / pupils ──
@@ -244,19 +249,43 @@
 			cmp.setAttribute("data-exp", ep.state);
 		}
 
-		// ── mouth (only re-paint on shape change; TTS flap overrides) ──
+		// ── mouth: morph between shapes with a quick vertical squash-and-reform
+		// (the shapes mix stroke vs fill, so a per-point path tween is fragile;
+		// a scaleY dip hides the geometry swap and reads as the mouth changing).
 		const mouthKey = f.speaking && f.talkOpen ? "talk" : ep.mouth;
-		if (mouthKey !== f.lastMouth) {
-			f.lastMouth = mouthKey;
-			const m = mouthFor(mouthKey);
-			f.mouthPath.setAttribute("d", m.d);
-			if (m.fill) {
-				f.mouthPath.setAttribute("class", "fill");
-				f.mouthPath.removeAttribute("stroke-width");
+		if (mouthKey !== f.mouthTo) {
+			f.mouthTo = mouthKey;
+			// First-ever paint (or reduced-motion) is instant; otherwise dip.
+			if (reduced || f.lastMouth === "") {
+				f.mouthT = 1;
+				paintMouth(f, mouthKey);
 			} else {
-				f.mouthPath.setAttribute("class", "");
-				f.mouthPath.setAttribute("stroke-width", String(m.sw));
+				f.mouthT = 0;
 			}
+		}
+		if (f.mouthT < 1) {
+			const prev = f.mouthT;
+			f.mouthT = SP ? Math.min(1, SP.damp(f.mouthT, 1.04, 22, dt, reduced)) : 1;
+			// Swap the path at the thinnest point (crossing 0.5) so it's unseen.
+			if (prev < 0.5 && f.mouthT >= 0.5) paintMouth(f, f.mouthTo);
+			const sc = 1 - Math.sin(Math.min(1, f.mouthT) * Math.PI) * 0.8;
+			f.mouth.style.transform = `scaleY(${sc.toFixed(3)})`;
+		} else if (f.mouth.style.transform) {
+			f.mouth.style.transform = "";
+		}
+	}
+
+	/** Paint the mouth path/class/stroke for a shape key (the geometry swap). */
+	function paintMouth(f, key) {
+		f.lastMouth = key;
+		const m = mouthFor(key);
+		f.mouthPath.setAttribute("d", m.d);
+		if (m.fill) {
+			f.mouthPath.setAttribute("class", "fill");
+			f.mouthPath.removeAttribute("stroke-width");
+		} else {
+			f.mouthPath.setAttribute("class", "");
+			f.mouthPath.setAttribute("stroke-width", String(m.sw));
 		}
 	}
 
@@ -447,9 +476,10 @@
 		let lastPops = -1;
 		let lastExpr = "idle";
 		let lastCaption = "";
+		let captionFadeTimer = null;
 		let renderedTs = [];
 		let scale = 1;
-		let tetherTimer = null;
+		const tetherEls = new Map();
 		let raf = null;
 		// Micro-physics: one spring kicked on entry into a busy face / orchestrator
 		// pop; its value squashes the orb (reduced-motion snaps it flat).
@@ -657,10 +687,22 @@
 			lastExpr = expr;
 
 			// Dynamic subtitle = the live action line (default greeting when idle).
+			// Crossfade on change (fade out → swap → fade in) so captions don't
+			// hard-cut. A single timer means the latest text always wins.
 			const text = captionFor(st, expr);
 			if (text !== lastCaption) {
 				lastCaption = text;
-				subtitle.textContent = text;
+				if (reduced) {
+					subtitle.textContent = text;
+				} else {
+					subtitle.style.opacity = "0";
+					if (captionFadeTimer) clearTimeout(captionFadeTimer);
+					captionFadeTimer = setTimeout(() => {
+						subtitle.textContent = lastCaption;
+						subtitle.style.opacity = "1";
+						captionFadeTimer = null;
+					}, 150);
+				}
 			}
 		}
 
@@ -692,7 +734,7 @@
 		// Each little agent gets its own physics: it looks toward the orchestrator
 		// (or, while acting, toward the skill pill that tethers to it), wears an
 		// expression from its live status (working / success / wince), and blinks.
-		function stepSubs(st, now) {
+		function stepSubs(st, now, dt) {
 			const nodes = subRow.querySelectorAll("[data-subagent]");
 			if (!nodes || !nodes.length) return;
 			const mainSphere = avatarZone.firstChild.querySelector("[data-avatar]");
@@ -718,7 +760,7 @@
 						}
 					}
 				}
-				stepFace(cmp, expr, now, { gaze, popValue: 0, reduced });
+				stepFace(cmp, expr, now, { gaze, popValue: 0, reduced, dt });
 			});
 		}
 
@@ -734,9 +776,10 @@
 					gaze: mainGazePx(st),
 					popValue: pop.value,
 					reduced,
+					dt,
 				});
 			}
-			stepSubs(st, now);
+			stepSubs(st, now, dt);
 		}
 
 		function computeTethers(st) {
@@ -756,8 +799,10 @@
 				targets[`sub${node.getAttribute("data-subagent")}`] = t;
 			});
 
+			// Each tether carries a STABLE key so paintTethers can reuse the same
+			// <path>/particle across frames (no teardown → particles glide on).
 			const skills = [];
-			home.querySelectorAll("[data-tether]").forEach((node) => {
+			home.querySelectorAll("[data-tether]").forEach((node, i) => {
 				const tgt = targets[node.getAttribute("data-tether")] || main;
 				const r = node.getBoundingClientRect();
 				const src = {
@@ -768,7 +813,7 @@
 				};
 				const a = R.anchor(src, tgt, 5, 10);
 				const d = R.orthPath(a.sx, a.sy, a.ex, a.ey);
-				if (d) skills.push(d);
+				if (d) skills.push({ key: node.getAttribute("data-key") || `i${i}`, d });
 			});
 
 			const links = [];
@@ -782,27 +827,69 @@
 					7,
 				);
 				const d = R.orthPath(a.sx, a.sy, a.ex, a.ey);
-				if (d) links.push({ d, working: !!t.working });
+				if (d) links.push({ key: k, d, working: !!t.working });
 			});
 			return { skills, links };
 		}
 
+		// Reconcile tethers against persistent keyed elements instead of tearing
+		// the whole SVG down each paint. Reusing the <path>/particle keeps each
+		// <animateMotion> running (no particle restart/flicker) and lets a line
+		// track its orb smoothly as it moves — the geometry just updates in place.
 		function paintTethers(st) {
 			const { skills, links } = computeTethers(st);
-			tetherSvg.textContent = "";
-			for (const l of links) {
-				const path = svg("path");
-				path.setAttribute("d", l.d);
-				path.setAttribute("class", `agent-link${l.working ? " working" : ""}`);
-				tetherSvg.appendChild(path);
-				if (l.working) tetherSvg.appendChild(particle(l.d, 2.6, "1.3s"));
+			const items = [];
+			for (const l of links)
+				items.push({
+					key: `lk:${l.key}`,
+					d: l.d,
+					cls: `agent-link${l.working ? " working" : ""}`,
+					r: 2.6,
+					dur: "1.3s",
+					particle: l.working,
+				});
+			for (const s of skills)
+				items.push({ key: `sk:${s.key}`, d: s.d, cls: "tether-line", r: 3, dur: "1.5s", particle: true });
+
+			const seen = new Set();
+			for (const it of items) {
+				seen.add(it.key);
+				let e = tetherEls.get(it.key);
+				if (!e) {
+					const path = svg("path");
+					tetherSvg.appendChild(path);
+					e = { path, particle: null, lastD: "", lastCls: "", particleD: "" };
+					tetherEls.set(it.key, e);
+				}
+				if (it.d !== e.lastD) {
+					e.path.setAttribute("d", it.d);
+					e.lastD = it.d;
+				}
+				if (it.cls !== e.lastCls) {
+					e.path.setAttribute("class", it.cls);
+					e.lastCls = it.cls;
+				}
+				if (it.particle) {
+					if (!e.particle) {
+						e.particle = particle(it.d, it.r, it.dur);
+						tetherSvg.appendChild(e.particle);
+						e.particleD = it.d;
+					} else if (it.d !== e.particleD && e.particle._motion) {
+						// Only re-path when the geometry actually moved (steady state
+						// leaves the running particle untouched → no restart).
+						e.particle._motion.setAttribute("path", it.d);
+						e.particleD = it.d;
+					}
+				} else if (e.particle) {
+					e.particle.remove();
+					e.particle = null;
+				}
 			}
-			for (const d of skills) {
-				const path = svg("path");
-				path.setAttribute("d", d);
-				path.setAttribute("class", "tether-line");
-				tetherSvg.appendChild(path);
-				tetherSvg.appendChild(particle(d, 3, "1.5s"));
+			for (const [key, e] of tetherEls) {
+				if (seen.has(key)) continue;
+				e.path.remove();
+				if (e.particle) e.particle.remove();
+				tetherEls.delete(key);
 			}
 		}
 
@@ -815,6 +902,7 @@
 			m.setAttribute("repeatCount", "indefinite");
 			m.setAttribute("path", d);
 			c.appendChild(m);
+			c._motion = m;
 			return c;
 		}
 
@@ -855,11 +943,14 @@
 			renderAvatar(st);
 			applyPhysics(st);
 			scaleToFit();
+			// Repaint tethers when the topology changes (skills/agents in or out)
+			// OR every frame while sub-agents are present (they animate, so their
+			// lines must track) — keyed reuse makes this cheap and flicker-free.
 			const ak = activeKey(st);
-			if (ak !== lastActiveKey) {
+			const liveAgents = !!home.querySelector("[data-subagent]");
+			if (ak !== lastActiveKey || liveAgents) {
 				lastActiveKey = ak;
-				if (tetherTimer) clearTimeout(tetherTimer);
-				tetherTimer = setTimeout(() => paintTethers(engine.getState()), 90);
+				paintTethers(st);
 			}
 			raf = window.requestAnimationFrame(frame);
 		}
@@ -872,7 +963,7 @@
 			stop() {
 				engine.stop();
 				if (raf) window.cancelAnimationFrame(raf);
-				if (tetherTimer) clearTimeout(tetherTimer);
+				if (captionFadeTimer) clearTimeout(captionFadeTimer);
 			},
 		};
 	}
