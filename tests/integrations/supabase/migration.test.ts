@@ -51,13 +51,22 @@ describe("001_canvas_yard.sql — structural validity", () => {
 
 	test("creates paw_builder as a non-escalating login role", () => {
 		expect(flat).toContain("create role paw_builder login");
-		// Escalation guards must be present AND re-asserted via ALTER ROLE.
+		// NOSUPERUSER is set at CREATE time (allowed: issuper=false needs only
+		// CREATEROLE). The CREATEDB/CREATEROLE guards are re-asserted via ALTER.
 		expect(flat).toMatch(
 			/create role paw_builder login nosuperuser nocreatedb nocreaterole/,
 		);
-		expect(flat).toMatch(
-			/alter role paw_builder nosuperuser nocreatedb nocreaterole/,
-		);
+		expect(flat).toMatch(/alter role paw_builder nocreatedb nocreaterole/);
+	});
+
+	test("never ALTERs the superuser attribute (hosted-Supabase compat)", () => {
+		// REGRESSION: `alter role ... [no]superuser` fails on Supabase with 42501
+		// (the project's postgres role is not a true superuser, and changing the
+		// SUPERUSER attribute — even to NO — requires real superuser), which would
+		// abort the whole migration. Non-superuser-ness is set at CREATE time and
+		// verified via pg_roles (rolsuper = f), never re-applied via ALTER ROLE.
+		expect(code).not.toMatch(/alter\s+role[^;]*\bnosuperuser\b/);
+		expect(code).not.toMatch(/alter\s+role[^;]*\bsuperuser\b/);
 	});
 
 	test("grants USAGE + CREATE on canvas ONLY", () => {

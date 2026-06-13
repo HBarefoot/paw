@@ -35,8 +35,18 @@ end
 $$;
 
 -- Re-assert the escalation guards even if the role pre-existed from an earlier
--- (possibly looser) apply. These are the lines that keep the fence honest.
-alter role paw_builder nosuperuser nocreatedb nocreaterole;
+-- (possibly looser) apply. These keep the fence honest.
+--
+-- IMPORTANT (hosted Supabase quirk): we deliberately do NOT include `nosuperuser`
+-- here. On Supabase the project's `postgres` role is NOT a true superuser, and
+-- Postgres requires actual superuser to touch the SUPERUSER attribute of any role
+-- — even to set it to NO. So `alter role ... nosuperuser` fails with `42501:
+-- permission denied`, which would abort the whole migration in the SQL editor.
+-- It is also unnecessary: `nosuperuser` is the default and is already set at
+-- CREATE time above (creating a NON-superuser role needs only CREATEROLE, not
+-- superuser). Non-superuser-ness is ASSERTED instead via the README's pg_roles
+-- check (`rolsuper` must be `f`), not re-applied here.
+alter role paw_builder nocreatedb nocreaterole;
 
 -- 3. Privileges INSIDE the yard ----------------------------------------------
 -- USAGE + CREATE on `canvas` ONLY. This is the entire grant surface the builder
