@@ -125,16 +125,6 @@ body {
 .avatar {
 	position: relative;
 }
-.avatar-glow {
-	position: absolute;
-	left: 50%;
-	top: 50%;
-	width: 560px;
-	height: 560px;
-	transform: translate(-50%, -50%);
-	background: radial-gradient(circle, var(--a16) 0%, transparent 65%);
-	pointer-events: none;
-}
 .antenna {
 	position: absolute;
 	top: -28px;
@@ -173,80 +163,199 @@ body {
 		opacity: 1;
 	}
 }
-.avatar-ball {
+/* ── the glossy "gel sphere" living face (main + every sub-agent) ──
+ * One DOM, sized by --sz; geometry is % of the sphere so it works at 178px and
+ * 54px. Colours come from per-instance vars (--s1..--s4, --glow, --accent,
+ * --mouth) set by themeFace(). The sphere transform (breathe/pop/tremor) and the
+ * eye/pupil/mouth transforms are driven each frame by stepFace() in shell.js. */
+.cmp {
 	position: relative;
-	width: 178px;
-	height: 178px;
+	width: var(--sz);
+	height: var(--sz);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+}
+/* ambient aura behind the sphere — intensity/colour shifts by state */
+.cmp-aura {
+	position: absolute;
+	inset: -46%;
 	border-radius: 50%;
-	background: radial-gradient(
-		115% 115% at 32% 22%,
-		#b3bdec 0%,
-		#8fd9cd 38%,
-		#34e3a6 68%,
-		#14c98e 100%
-	);
-	box-shadow: 0 0 70px var(--a35);
-	/* The orb's pop/squash is driven by CompanionSpring (inline transform) so it
-	 * can react to expression transitions; no declarative keyframe here. */
+	z-index: 0;
+	pointer-events: none;
+	background: radial-gradient(circle, var(--glow) 0%, transparent 62%);
+	opacity: 0.5;
+	transition: opacity 0.45s ease, background 0.45s ease;
+}
+.cmp[data-exp="thinking"] .cmp-aura {
+	opacity: 0.62;
+}
+.cmp[data-exp="working"] .cmp-aura {
+	opacity: 0.9;
+}
+.cmp[data-exp="success"] .cmp-aura {
+	opacity: 1;
+}
+.cmp[data-exp="error"] .cmp-aura {
+	opacity: 0.92;
+	background: radial-gradient(circle, rgba(255, 150, 86, 0.55) 0%, transparent 62%);
+}
+/* working ring ping */
+.cmp-ring {
+	position: absolute;
+	inset: -7px;
+	border-radius: 50%;
+	z-index: 1;
+	border: 1.5px solid var(--accent);
+	opacity: 0;
+	pointer-events: none;
+}
+.cmp[data-exp="working"] .cmp-ring {
+	animation: ringPing 1.5s ease-out infinite;
+}
+.cmp[data-exp="success"] .cmp-ring {
+	animation: ringPing 1.1s ease-out 2;
+}
+@keyframes ringPing {
+	0% {
+		transform: scale(1);
+		opacity: 0.8;
+	}
+	100% {
+		transform: scale(1.28);
+		opacity: 0;
+	}
+}
+/* the glossy gel sphere — gradient + layered lighting */
+.cmp-sphere {
+	position: relative;
+	z-index: 2;
+	width: 100%;
+	height: 100%;
+	border-radius: 50%;
+	will-change: transform;
+	background:
+		radial-gradient(circle at 50% 118%, rgba(120, 255, 200, 0.5) 0%, transparent 42%),
+		radial-gradient(132% 132% at 30% 22%, var(--s1) 0%, var(--s2) 26%, var(--s3) 56%, var(--s4) 100%);
+	box-shadow:
+		inset -18px -22px 46px rgba(2, 24, 18, 0.58),
+		inset 10px 12px 26px rgba(225, 240, 255, 0.22),
+		inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+		0 22px 60px rgba(0, 0, 0, 0.6),
+		0 0 80px var(--glow);
+	transition: box-shadow 0.4s ease;
+}
+.cmp[data-exp="working"] .cmp-sphere,
+.cmp[data-exp="success"] .cmp-sphere {
+	box-shadow:
+		inset -18px -22px 46px rgba(2, 24, 18, 0.55),
+		inset 10px 12px 26px rgba(225, 240, 255, 0.26),
+		inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+		0 22px 60px rgba(0, 0, 0, 0.6),
+		0 0 110px var(--glow);
+}
+/* warm wash for the error face */
+.cmp-tint {
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	z-index: 3;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 0.4s ease;
+	background: radial-gradient(120% 120% at 64% 74%, rgba(255, 138, 76, 0.5) 0%, transparent 56%);
+	mix-blend-mode: screen;
+}
+.cmp[data-exp="error"] .cmp-tint {
+	opacity: 1;
+}
+/* face: eyes + pupils + catchlights */
+.cmp-face {
+	position: absolute;
+	inset: 0;
+	z-index: 4;
+}
+.cmp-eye {
+	position: absolute;
+	top: 31.5%;
+	width: 18.5%;
+	height: 21.5%;
+	border-radius: 50%;
+	background: #fbfdff;
+	box-shadow: inset 0 -2px 4px rgba(0, 40, 30, 0.18);
+	transform-origin: 50% 50%;
 	will-change: transform;
 }
-.eye {
+.cmp-eye.eye-l {
+	left: 26.5%;
+}
+.cmp-eye.eye-r {
+	left: 55%;
+}
+.cmp-pupil {
 	position: absolute;
-	top: 36%;
-	width: 33px;
-	height: 36px;
+	left: 50%;
+	top: 50%;
+	width: 52%;
+	aspect-ratio: 1;
+	border-radius: 50%;
+	background: radial-gradient(circle at 38% 32%, #1a2420 0%, #050807 70%);
+	transform: translate(-50%, -50%);
+	will-change: transform;
+}
+.cmp-catch {
+	position: absolute;
+	width: 34%;
+	height: 34%;
+	left: 18%;
+	top: 14%;
 	border-radius: 50%;
 	background: #fff;
+	opacity: 0.8;
+	pointer-events: none;
 }
-.eye-l {
-	left: 23%;
-}
-.eye-r {
-	right: 23%;
-}
-.pupil {
+/* morphing SVG mouth — colour from --mouth, shape from stepFace() */
+.cmp-mouth {
 	position: absolute;
-	top: 50%;
-	left: 50%;
-	transform: translate(-50%, -50%);
-	width: 16px;
-	height: 17px;
-	border-radius: 50%;
-	background: #0a0f0d;
+	inset: 0;
+	z-index: 5;
+	pointer-events: none;
 }
-.smile {
+.cmp-mouth path {
+	fill: none;
+	stroke: var(--mouth);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.cmp-mouth path.fill {
+	fill: var(--mouth);
+	stroke: none;
+}
+/* specular highlights — sit over the face like glass */
+.cmp-gloss {
 	position: absolute;
-	bottom: 17%;
-	left: 50%;
-	transform: translateX(-50%);
-	width: 52px;
-	height: 24px;
-	border-bottom: 7px solid rgba(8, 40, 30, 0.85);
-	border-radius: 0 0 50% 50% / 0 0 100% 100%;
-}
-.eye.sm {
-	width: 11px;
-	height: 12px;
-	top: 34%;
-}
-.eye.sm .pupil {
-	width: 5px;
-	height: 6px;
-}
-.smile.sm {
-	width: 17px;
-	height: 8px;
-	border-bottom-width: 3px;
-	bottom: 19%;
-}
-/* TTS mouth-sync: the smile opens into a small oval on each speech boundary
- * (lip-flap). Masks the MOUTH only — eyes/antenna keep their expression. */
-.smile.talk {
-	width: 30px;
-	height: 18px;
-	border: none;
+	left: 21%;
+	top: 12%;
+	width: 40%;
+	height: 33%;
 	border-radius: 50%;
-	background: rgba(8, 40, 30, 0.9);
+	z-index: 6;
+	pointer-events: none;
+	background: radial-gradient(circle at 42% 38%, rgba(255, 255, 255, 0.82) 0%, rgba(255, 255, 255, 0) 70%);
+	filter: blur(1.5px);
+	transform: rotate(-16deg);
+}
+.cmp-spark {
+	position: absolute;
+	left: 28%;
+	top: 20%;
+	width: 6.5%;
+	height: 6.5%;
+	border-radius: 50%;
+	z-index: 7;
+	pointer-events: none;
+	background: radial-gradient(circle, #fff 0%, rgba(255, 255, 255, 0) 72%);
 }
 
 /* ── Sub-agents ── */
@@ -267,15 +376,20 @@ body {
 	gap: 3px;
 	transform-origin: center top;
 }
+/* Each little agent IS a gel face (.cmp, 54px via --sz) themed its own colour.
+ * Spacing under the face so the name/status sit below it. */
+.subagent .cmp {
+	margin-bottom: 5px;
+}
+/* The "+N" overflow orb keeps the simple round-ball shape (no face). */
 .subagent-ball {
 	position: relative;
 	width: 54px;
 	height: 54px;
 	border-radius: 50%;
 	margin-bottom: 5px;
-	transition: filter 0.3s, opacity 0.3s;
 }
-.subagent.acting .subagent-ball {
+.subagent.acting .cmp {
 	animation: avatarPop 0.55s cubic-bezier(0.3, 1.4, 0.5, 1);
 }
 /* Spawn = budding/mitosis off the orchestrator. */
@@ -286,12 +400,14 @@ body {
 .subagent.done {
 	animation: absorb 0.6s ease-in forwards;
 }
-.subagent.done .subagent-ball {
+.subagent.done .cmp {
 	filter: saturate(0.5) brightness(0.8);
 }
-/* Failure = a red ring; the avatar also looks worried toward it. */
-.subagent.failed .subagent-ball {
-	box-shadow: 0 0 0 2px #ff5f56, 0 0 18px rgba(255, 95, 86, 0.55) !important;
+/* Failure = a red outline around the little face (the gel error state — amber
+ * aura + tint + frown — already fires via data-exp); the avatar looks worried. */
+.subagent.failed .cmp-sphere {
+	outline: 2px solid #ff5f56;
+	outline-offset: 3px;
 }
 /* The "+N" overflow orb: neutral, no face. */
 .subagent.overflow .overflow-ball {
