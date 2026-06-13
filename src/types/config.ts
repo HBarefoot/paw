@@ -8,6 +8,11 @@ export interface PawConfig {
 		maxToolRoundtrips: number;
 		/** Anthropic prompt caching for the Claude provider (default true). */
 		promptCache?: boolean;
+		/** Ordered main-chat provider fallback (mirrors the Zod schema). */
+		fallback?: Array<{
+			provider: "claude" | "ollama" | "openai" | "gemini";
+			model: string;
+		}>;
 		/** Optional image-understanding route (mirrors the Zod schema). When set,
 		 * image-bearing turns are served by this provider/model. */
 		vision?: {

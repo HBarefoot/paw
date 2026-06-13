@@ -1,11 +1,58 @@
 import type { Logger } from "../types/plugin.js";
 import type { AIProvider } from "./base-provider.js";
+import { isTransientError } from "./retry.js";
 
 /** Inline notes appended to a reply when an image can't be handled normally. */
 export const VISION_UNCONFIGURED_NOTE =
 	"⚠️ This message includes an image, but the active model can't see images and no vision model is configured (`ai.vision`). I answered from the text only.";
 export const VISION_ERROR_NOTE =
 	"⚠️ The configured vision model couldn't be reached, so I answered with the default model — which may not be able to see the image.";
+/** Appended when the primary provider failed and a configured fallback served the turn. */
+export const PROVIDER_FALLBACK_NOTE =
+	"⚠️ The primary model couldn't be reached, so I answered with a configured fallback model.";
+
+/** One provider+model attempt in a fallback chain. `run` performs the turn. */
+export interface FallbackAttempt<T> {
+	providerName: string;
+	model: string;
+	run: () => Promise<T>;
+}
+
+/**
+ * Run `primary`, then each `fallbacks` entry in order, advancing only on a
+ * TRANSIENT error (network/timeout/5xx/quota — see `isTransientError`). A fatal
+ * error (user refusal, tool error, auth) is rethrown immediately without trying
+ * the rest, and an aborted signal never triggers fallback. If every attempt
+ * fails the last error propagates — the caller's message is never dropped.
+ * Returns which attempt actually served the turn so cost can be tagged correctly.
+ */
+export async function withProviderFallback<T>(opts: {
+	primary: FallbackAttempt<T>;
+	fallbacks: FallbackAttempt<T>[];
+	signal?: AbortSignal;
+	logger?: Logger;
+}): Promise<{ value: T; used: FallbackAttempt<T>; usedFallback: boolean }> {
+	const chain = [opts.primary, ...opts.fallbacks];
+	let lastError: unknown;
+	for (let i = 0; i < chain.length; i++) {
+		const attempt = chain[i];
+		try {
+			const value = await attempt.run();
+			return { value, used: attempt, usedFallback: i > 0 };
+		} catch (err) {
+			lastError = err;
+			const isLast = i === chain.length - 1;
+			if (opts.signal?.aborted || !isTransientError(err) || isLast) throw err;
+			opts.logger?.warn("Provider failed; trying fallback", {
+				from: `${attempt.providerName}:${attempt.model}`,
+				to: `${chain[i + 1].providerName}:${chain[i + 1].model}`,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+	// Unreachable (the last iteration always throws), but satisfies the type.
+	throw lastError;
+}
 
 /**
  * Decide how to handle an inbound turn's images (pure — unit-testable without the

@@ -12,6 +12,21 @@ export const configSchema = z.object({
 		// + tool definitions) so it's billed once per ~5-min window instead of every
 		// turn. Default ON; a no-op for the Ollama/OpenAI/Gemini code paths.
 		promptCache: z.boolean().default(true),
+		// Ordered provider fallback for the main chat turn. On a TRANSIENT primary
+		// error (network/timeout/5xx/quota — never user refusals or tool errors)
+		// the turn is retried on the next entry in order, preserving history. Each
+		// entry is its own provider+model instance built at boot (reusing that
+		// provider's existing config/key). Empty ⇒ no fallback (today's behavior).
+		// Aux routes (vision) keep their own dedicated degrade — an `ai.vision`-level
+		// fallback list is a future extension, intentionally not built here.
+		fallback: z
+			.array(
+				z.object({
+					provider: z.enum(["claude", "ollama", "openai", "gemini"]),
+					model: z.string().min(1),
+				}),
+			)
+			.default([]),
 		// Optional image-understanding route. When configured, inbound turns that
 		// carry image attachments are served by this provider/model instead of the
 		// (possibly text-only) default; text turns are untouched. Credentials reuse
