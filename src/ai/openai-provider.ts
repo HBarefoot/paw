@@ -1,4 +1,5 @@
 import { ToolRegistry } from "./tools.js";
+import { needsSessionId } from "./tool-context.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import { withRetry } from "./retry.js";
 import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
@@ -266,11 +267,7 @@ export class OpenAIProvider implements AIProvider {
 					}
 				}
 
-				if (
-					(call.function.name === "spawn_agent" ||
-						call.function.name === "execute_code") &&
-					sessionId
-				) {
+				if (needsSessionId(call.function.name) && sessionId) {
 					args.__sessionId = sessionId;
 				}
 				regularCalls.push({ id: call.id, name: call.function.name, input: args });

@@ -1,5 +1,5 @@
 import type { ToolDefinition, ToolResult } from "../../types/message.js";
-import type { GitHubApprovals } from "./approvals.js";
+import { type GitHubApprovals, originFromSessionId } from "./approvals.js";
 import type { GitHubClient } from "./client.js";
 import type { CommitFileInput } from "./types.js";
 
@@ -14,6 +14,14 @@ export interface GitHubToolDeps {
 function requesterOf(input: Record<string, unknown>): string {
 	const sid = input.__sessionId;
 	return typeof sid === "string" && sid ? sid : "agent";
+}
+
+/** Origin channel/ref derived from the injected session, for routing the
+ * approval prompt back to where it came from (Slack thread, web, …). */
+function originOf(input: Record<string, unknown>) {
+	return originFromSessionId(
+		typeof input.__sessionId === "string" ? input.__sessionId : null,
+	);
 }
 
 /**
@@ -645,6 +653,7 @@ export function createGitHubTools(
 					`Merge PR #${number} in ${repo} (${method})`,
 					{ number, method },
 					requesterOf(input),
+					originOf(input),
 				);
 				return {
 					content: JSON.stringify({
@@ -684,6 +693,7 @@ export function createGitHubTools(
 					`Delete branch "${branch}" in ${repo}`,
 					{ branch },
 					requesterOf(input),
+					originOf(input),
 				);
 				return {
 					content: JSON.stringify({
@@ -722,6 +732,7 @@ export function createGitHubTools(
 					`Close issue #${number} in ${repo}`,
 					{ number },
 					requesterOf(input),
+					originOf(input),
 				);
 				return {
 					content: JSON.stringify({
@@ -769,6 +780,7 @@ export function createGitHubTools(
 					`Run workflow "${workflowId}" on ${ref} in ${repo}`,
 					{ workflowId, ref, inputs: input.inputs },
 					requesterOf(input),
+					originOf(input),
 				);
 				return {
 					content: JSON.stringify({

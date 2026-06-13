@@ -51,6 +51,9 @@ export interface PawConfig {
 		decayRate: number;
 		decayThresholdDays: number;
 	};
+	approvals: {
+		ttlHours: number;
+	};
 	cron: {
 		enabled: boolean;
 		tickIntervalMs: number;

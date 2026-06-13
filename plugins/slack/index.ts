@@ -5,7 +5,20 @@ import type {
 	OutboundMessage,
 } from "../../src/types/message.js";
 import type { ChannelPlugin, PluginContext } from "../../src/types/plugin.js";
+import {
+	APPROVE_ACTION,
+	DENY_ACTION,
+	buildApprovalBlocks,
+	parseSlackRef,
+	resolvedText,
+} from "./approvals.js";
 import { createSlackTools } from "./tools.js";
+
+interface SavedApprovalMsg {
+	channel: string;
+	ts: string;
+	summary: string;
+}
 
 export default class SlackPlugin implements ChannelPlugin {
 	readonly name = "slack";
@@ -13,6 +26,8 @@ export default class SlackPlugin implements ChannelPlugin {
 	private ctx: PluginContext | null = null;
 	private unsubOutbound: (() => void) | null = null;
 	private unsubNotify: (() => void) | null = null;
+	private unsubApprovalPending: (() => void) | null = null;
+	private unsubApprovalResolved: (() => void) | null = null;
 
 	async register(ctx: PluginContext): Promise<void> {
 		this.ctx = ctx;
@@ -116,6 +131,93 @@ export default class SlackPlugin implements ChannelPlugin {
 				}
 			});
 		}
+
+		// --- Approval delivery ---
+		// Post a Block Kit approve/deny prompt to the originating Slack thread, and
+		// resolve taps over the bus (authorization is done kernel-side).
+		this.unsubApprovalPending = ctx.bus.on("approval:pending", async (a) => {
+			if (!this.app || a.originChannel !== "slack") return;
+			const ref = parseSlackRef(a.originRef);
+			if (!ref) return;
+			try {
+				const res = await this.app.client.chat.postMessage({
+					channel: ref.channel,
+					thread_ts: ref.threadTs,
+					text: `Approval needed: ${a.summary}`,
+					blocks: buildApprovalBlocks({
+						id: a.id,
+						summary: a.summary,
+						repo: a.repo,
+						requestedBy: a.requestedBy,
+					}) as never,
+				});
+				if (res.ok && res.ts) {
+					ctx.store.set(`approval:${a.id}`, {
+						channel: ref.channel,
+						ts: res.ts,
+						summary: a.summary,
+					});
+				}
+			} catch (err) {
+				ctx.logger.error("Failed to post Slack approval", {
+					error: String(err),
+				});
+			}
+		});
+
+		this.app.action(APPROVE_ACTION, async ({ ack, body, action }) => {
+			await ack();
+			const id = (action as { value?: string }).value;
+			const userId = (body as { user?: { id?: string } }).user?.id;
+			if (!id || !userId) return;
+			await ctx.bus.emit("approval:decision", {
+				id,
+				decision: "approve",
+				actorChannel: "slack",
+				actorUserId: userId,
+			});
+		});
+		this.app.action(DENY_ACTION, async ({ ack, body, action }) => {
+			await ack();
+			const id = (action as { value?: string }).value;
+			const userId = (body as { user?: { id?: string } }).user?.id;
+			if (!id || !userId) return;
+			await ctx.bus.emit("approval:decision", {
+				id,
+				decision: "reject",
+				actorChannel: "slack",
+				actorUserId: userId,
+			});
+		});
+
+		// On resolution (from any surface) update the Slack message in place.
+		this.unsubApprovalResolved = ctx.bus.on("approval:resolved", async (r) => {
+			if (!this.app) return;
+			const saved = ctx.store.get(`approval:${r.id}`) as
+				| SavedApprovalMsg
+				| undefined;
+			if (!saved) return;
+			const actor = r.decidedBy.startsWith("slack:")
+				? r.decidedBy.slice("slack:".length)
+				: "";
+			const text = resolvedText(r.status, actor, saved.summary);
+			try {
+				await this.app.client.chat.update({
+					channel: saved.channel,
+					ts: saved.ts,
+					text,
+					blocks: [
+						{ type: "section", text: { type: "mrkdwn", text } },
+					] as never,
+				});
+			} catch (err) {
+				ctx.logger.error("Failed to update Slack approval", {
+					error: String(err),
+				});
+			}
+			// Keep the record on unauthorized so a permitted user can still act.
+			if (r.status !== "unauthorized") ctx.store.delete(`approval:${r.id}`);
+		});
 	}
 
 	async start(): Promise<void> {
@@ -127,6 +229,8 @@ export default class SlackPlugin implements ChannelPlugin {
 	async stop(): Promise<void> {
 		this.unsubOutbound?.();
 		this.unsubNotify?.();
+		this.unsubApprovalPending?.();
+		this.unsubApprovalResolved?.();
 		if (this.app) {
 			await this.app.stop();
 			this.app = null;

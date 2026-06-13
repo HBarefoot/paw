@@ -68,6 +68,33 @@ export interface EventMap {
 		url?: string;
 		level: string;
 	};
+	// Approval surfaces. `approval:pending` is emitted when a gated action is
+	// queued (each channel plugin delivers it to its origin); `approval:decision`
+	// is emitted by a surface (e.g. the Slack plugin) and resolved kernel-side
+	// after authorization; `approval:resolved` reports the final state so every
+	// surface can sync (update its message, clear the companion, etc.).
+	"approval:pending": {
+		id: string;
+		action: string;
+		summary: string;
+		repo: string;
+		originChannel: string;
+		originRef: string | null;
+		requestedBy: string | null;
+	};
+	"approval:decision": {
+		id: string;
+		decision: "approve" | "reject";
+		actorChannel: string;
+		actorUserId: string;
+	};
+	"approval:resolved": {
+		id: string;
+		status: "executed" | "rejected" | "failed" | "unauthorized";
+		decidedBy: string;
+		originChannel: string | null;
+		originRef: string | null;
+	};
 	"mcp:schema-drift": {
 		server: string;
 		tool: string;

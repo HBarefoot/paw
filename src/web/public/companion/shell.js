@@ -317,7 +317,9 @@
 			case "thinking":
 				return "Thinking…";
 			case "waiting":
-				return "Waiting for your approval…";
+				return st.waitingLabel
+					? sanitizeText(st.waitingLabel)
+					: "Waiting for your approval…";
 			case "worried":
 				return "A sub-agent ran into trouble…";
 			case "wince":
@@ -440,7 +442,7 @@
 			if (d.type === "paw:tool") engine.ingestTool(d);
 			else if (d.type === "paw:input") engine.ingestInput(d.state);
 			else if (d.type === "paw:ambient") {
-				engine.setWaiting(d.pendingApprovals || 0);
+				engine.setWaiting(d.pendingApprovals || 0, d.pendingApprovalsLabel);
 				engine.setNotifications(d.unreadByKind || {});
 			}
 			else if (d.type === "paw:speak") onSpeak(d.phase);

@@ -547,7 +547,9 @@ function runMigrations(db: Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       decided_at TEXT,
       decided_by TEXT,
-      result_json TEXT                           -- execution result or error
+      result_json TEXT,                          -- execution result or error
+      origin_channel TEXT,                       -- web | slack | cron | … (NULL ⇒ web)
+      origin_ref TEXT                            -- channel-specific routing ref (e.g. slack {channel,threadTs})
     );
 
     CREATE INDEX IF NOT EXISTS idx_github_pending_status ON github_pending_actions(status, created_at DESC);
@@ -587,6 +589,22 @@ function runMigrations(db: Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_mcp_tool_schemas_server ON mcp_tool_schemas(server_name);
   `);
+
+	// Origin tracking for per-channel approval delivery (migration-safe for
+	// pre-existing DBs). NULL origin_channel ⇒ treated as 'web' so legacy/stuck
+	// rows still surface in the web approval modal.
+	try {
+		db.exec(
+			"ALTER TABLE github_pending_actions ADD COLUMN origin_channel TEXT",
+		);
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE github_pending_actions ADD COLUMN origin_ref TEXT");
+	} catch {
+		// Column already exists
+	}
 
 	// Brand kit: a library of brand profiles. One is `active` at a time and its
 	// compiled brief is injected into the system prompt + canvas generation so

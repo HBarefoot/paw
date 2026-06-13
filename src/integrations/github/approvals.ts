@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { EventBus } from "../../kernel/bus.js";
 import type { GitHubClient } from "./client.js";
 
 export type GitHubGatedAction =
@@ -7,18 +8,26 @@ export type GitHubGatedAction =
 	| "close_issue"
 	| "dispatch_workflow";
 
+/** Where an approval originated, so it can be delivered back to that surface. */
+export interface ApprovalOrigin {
+	channel: string;
+	ref: string | null;
+}
+
 export interface PendingActionRow {
 	id: string;
 	action: GitHubGatedAction;
 	repo: string;
 	summary: string;
 	params: Record<string, unknown>;
-	status: "pending" | "executed" | "rejected" | "failed";
+	status: "pending" | "executed" | "rejected" | "failed" | "expired";
 	requested_by: string | null;
 	created_at: string;
 	decided_at: string | null;
 	decided_by: string | null;
 	result: Record<string, unknown> | null;
+	origin_channel: string | null;
+	origin_ref: string | null;
 }
 
 interface RawRow {
@@ -33,6 +42,8 @@ interface RawRow {
 	decided_at: string | null;
 	decided_by: string | null;
 	result_json: string | null;
+	origin_channel: string | null;
+	origin_ref: string | null;
 }
 
 function hydrate(r: RawRow): PendingActionRow {
@@ -48,7 +59,41 @@ function hydrate(r: RawRow): PendingActionRow {
 		decided_at: r.decided_at,
 		decided_by: r.decided_by,
 		result: r.result_json ? (safeParse(r.result_json) ?? null) : null,
+		origin_channel: r.origin_channel ?? null,
+		origin_ref: r.origin_ref ?? null,
 	};
+}
+
+/**
+ * Derive the origin channel + routing ref from a sessionId. Slack sessions are
+ * `slack-<channel>-<threadTs>` (see plugins/slack), so we can route an approval
+ * back to its thread without a separate context object. Unknown ⇒ `web`.
+ */
+export function originFromSessionId(
+	sid: string | null | undefined,
+): ApprovalOrigin {
+	if (typeof sid !== "string" || !sid) return { channel: "web", ref: null };
+	if (sid.startsWith("slack-")) {
+		const rest = sid.slice("slack-".length);
+		const i = rest.lastIndexOf("-");
+		if (i > 0) {
+			const channel = rest.slice(0, i);
+			const threadTs = rest.slice(i + 1);
+			return { channel: "slack", ref: JSON.stringify({ channel, threadTs }) };
+		}
+		return { channel: "slack", ref: null };
+	}
+	if (sid.startsWith("cron")) return { channel: "cron", ref: sid };
+	if (sid.startsWith("system")) return { channel: "system", ref: sid };
+	return { channel: "web", ref: sid };
+}
+
+/** Human-readable caption for the companion's waiting face. */
+export function approvalLabel(rows: PendingActionRow[]): string {
+	if (rows.length === 0) return "";
+	if (rows.length === 1)
+		return `Waiting for your approval — ${rows[0].summary}`;
+	return `${rows.length} actions awaiting approval`;
 }
 
 function safeParse(s: string): Record<string, unknown> | null {
@@ -74,6 +119,7 @@ export class GitHubApprovals {
 			action: string,
 			details: Record<string, unknown>,
 		) => void,
+		private readonly bus?: EventBus,
 	) {}
 
 	/** Queue an action for approval. Returns the new pending-action id. */
@@ -83,15 +129,49 @@ export class GitHubApprovals {
 		summary: string,
 		params: Record<string, unknown>,
 		requestedBy?: string,
+		origin?: ApprovalOrigin,
 	): string {
 		const id = crypto.randomUUID();
+		const channel = origin?.channel ?? "web";
+		const ref = origin?.ref ?? null;
 		this.db.run(
-			`INSERT INTO github_pending_actions (id, action, repo, summary, params_json, requested_by)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-			[id, action, repo, summary, JSON.stringify(params), requestedBy ?? null],
+			`INSERT INTO github_pending_actions (id, action, repo, summary, params_json, requested_by, origin_channel, origin_ref)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				id,
+				action,
+				repo,
+				summary,
+				JSON.stringify(params),
+				requestedBy ?? null,
+				channel,
+				ref,
+			],
 		);
 		this.audit?.(`github.${action}.queued`, { id, repo, summary });
+		// Notify channel plugins so they can deliver an approve/deny prompt to the
+		// originating surface. Fire-and-forget — never block the tool handler.
+		void this.bus?.emit("approval:pending", {
+			id,
+			action,
+			summary,
+			repo,
+			originChannel: channel,
+			originRef: ref,
+			requestedBy: requestedBy ?? null,
+		});
 		return id;
+	}
+
+	/** Emit `approval:resolved` so every surface can sync (Slack message, companion). */
+	private emitResolved(row: PendingActionRow, decidedBy: string): void {
+		void this.bus?.emit("approval:resolved", {
+			id: row.id,
+			status: row.status as "executed" | "rejected" | "failed" | "unauthorized",
+			decidedBy,
+			originChannel: row.origin_channel,
+			originRef: row.origin_ref,
+		});
 	}
 
 	listPending(): PendingActionRow[] {
@@ -152,7 +232,9 @@ export class GitHubApprovals {
 			});
 		}
 		// biome-ignore lint/style/noNonNullAssertion: row exists (re-read after update)
-		return this.get(id)!;
+		const updated = this.get(id)!;
+		this.emitResolved(updated, decidedBy);
+		return updated;
 	}
 
 	reject(id: string, decidedBy: string): PendingActionRow {
@@ -171,7 +253,45 @@ export class GitHubApprovals {
 			decidedBy,
 		});
 		// biome-ignore lint/style/noNonNullAssertion: row exists (re-read after update)
-		return this.get(id)!;
+		const updated = this.get(id)!;
+		this.emitResolved(updated, decidedBy);
+		return updated;
+	}
+
+	/**
+	 * Flip `pending` rows older than `ttlHours` to `expired` (with one audit entry
+	 * each) so an orphaned/abandoned approval can never hold the companion in its
+	 * "waiting" state forever. Idempotent: a row only flips once. ttl ≤ 0 disables.
+	 */
+	expireStale(ttlHours: number): void {
+		if (!(ttlHours > 0)) return;
+		const cutoff = `-${Math.floor(ttlHours)} hours`;
+		const stale = this.db
+			.query<{ id: string; action: string; repo: string }, [string]>(
+				`SELECT id, action, repo FROM github_pending_actions
+         WHERE status = 'pending' AND created_at < datetime('now', ?)`,
+			)
+			.all(cutoff);
+		if (stale.length === 0) return;
+		this.db.run(
+			`UPDATE github_pending_actions
+       SET status = 'expired', decided_at = datetime('now'), decided_by = 'system:ttl'
+       WHERE status = 'pending' AND created_at < datetime('now', ?)`,
+			[cutoff],
+		);
+		for (const r of stale) {
+			this.audit?.(`github.${r.action}.expired`, { id: r.id, repo: r.repo });
+		}
+	}
+
+	/**
+	 * Currently-actionable approvals: expires stale rows first, then returns the
+	 * remaining fresh `pending` rows. This is what drives the companion's count +
+	 * caption, so the face is always honest about what's truly awaiting a decision.
+	 */
+	actionable(ttlHours: number): PendingActionRow[] {
+		this.expireStale(ttlHours);
+		return this.listPending();
 	}
 
 	/** Dispatch the approved action to the live GitHub client. */

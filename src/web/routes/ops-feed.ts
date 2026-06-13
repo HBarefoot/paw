@@ -102,6 +102,9 @@ export interface OpsFeedDeps {
 	/** GitHub actions awaiting human approval — drives the companion's "waiting"
 	 *  face. 0 when GitHub is off / no approvals queue. */
 	pendingApprovals?: number;
+	/** Informative caption for the waiting face (e.g. "Waiting for your approval
+	 *  — merge PR #42" / "2 actions awaiting approval"). */
+	pendingApprovalsLabel?: string;
 }
 
 export interface OpsFeedResponse {
@@ -116,6 +119,8 @@ export interface OpsFeedResponse {
 	inflight: OpsOp[];
 	/** GitHub actions pending human approval (0 when none / GitHub off). */
 	pendingApprovals: number;
+	/** Caption for the waiting face (empty when nothing is pending). */
+	pendingApprovalsLabel: string;
 }
 
 function cleanName(name: string): string {
@@ -267,5 +272,6 @@ export function buildOpsFeed(
 		ops,
 		inflight,
 		pendingApprovals: deps.pendingApprovals ?? 0,
+		pendingApprovalsLabel: deps.pendingApprovalsLabel ?? "",
 	};
 }

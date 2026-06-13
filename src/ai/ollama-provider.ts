@@ -1,4 +1,5 @@
 import { ToolRegistry } from "./tools.js";
+import { needsSessionId } from "./tool-context.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import { withRetry } from "./retry.js";
 import type {
@@ -295,11 +296,7 @@ export class OllamaProvider implements AIProvider {
 				}
 
 				const toolArgs = { ...call.function.arguments };
-				if (
-					(call.function.name === "spawn_agent" ||
-						call.function.name === "execute_code") &&
-					sessionId
-				) {
+				if (needsSessionId(call.function.name) && sessionId) {
 					toolArgs.__sessionId = sessionId;
 				}
 				regularCalls.push({
@@ -618,11 +615,7 @@ export class OllamaProvider implements AIProvider {
 			for (let i = 0; i < toolCalls.length; i++) {
 				const call = toolCalls[i];
 				const toolInput = { ...call.function.arguments };
-				if (
-					(call.function.name === "spawn_agent" ||
-						call.function.name === "execute_code") &&
-					sessionId
-				) {
+				if (needsSessionId(call.function.name) && sessionId) {
 					toolInput.__sessionId = sessionId;
 				}
 				const toolId = `ollama-${roundtrips}-${call.function.name}-${i}`;
