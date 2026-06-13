@@ -113,6 +113,21 @@ describe("001_canvas_yard.sql — structural validity", () => {
 		expect(defaultPrivBlock).not.toMatch(/on tables to [^;]*\banon\b/);
 	});
 
+	test("grants paw_builder membership to postgres BEFORE altering its default privileges", () => {
+		// REGRESSION (hosted-Supabase compat): `ALTER DEFAULT PRIVILEGES FOR ROLE
+		// paw_builder` requires the executor to be a MEMBER of paw_builder — merely
+		// having created it (CREATEROLE) is not enough. On Supabase the project
+		// `postgres` role is not a member, so without `grant paw_builder to postgres`
+		// FIRST, those statements fail 42501 and abort the migration.
+		const grantIdx = code.indexOf("grant paw_builder to postgres");
+		const alterIdx = code.indexOf(
+			"alter default privileges for role paw_builder",
+		);
+		expect(grantIdx).toBeGreaterThanOrEqual(0);
+		expect(alterIdx).toBeGreaterThanOrEqual(0);
+		expect(grantIdx).toBeLessThan(alterIdx);
+	});
+
 	test("contains no committed password literal", () => {
 		// The role is created WITHOUT a password; a password must never be baked in.
 		expect(flat).not.toMatch(/create role paw_builder[^;]*password/);
