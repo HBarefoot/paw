@@ -145,4 +145,28 @@ describe("chat client script", () => {
 		expect(fbBody).not.toContain("copyBtn");
 		expect(fbBody).toContain("retryBtn");
 	});
+
+	test("prompt picker rows expose insert-as-quote / copy / duplicate / edit-link", () => {
+		// PR2: each picker row keeps its primary insert-raw click and adds a
+		// secondary action set, still built from DOM nodes (pawModal escape trap).
+		expect(script).toContain('actions.className = "prompt-pick-actions"');
+		// Insert as quote reuses PR1's buildQuote + insertIntoComposer.
+		expect(script).toContain('quoteBtn.textContent = "Insert as quote"');
+		expect(script).toContain("insertIntoComposer(buildQuote(body))");
+		// Copy body reuses the shared clipboard helper.
+		expect(script).toContain('copyBtn.textContent = "Copy body"');
+		expect(script).toContain("copyToClipboard(p.body");
+		// Duplicate POSTs a (copy) of the prompt to the library.
+		expect(script).toContain('dupBtn.textContent = "Duplicate"');
+		expect(script).toContain('(p.title || "Untitled") + " (copy)"');
+		// Edit links out to the Prompts page (no inline edit in the modal).
+		expect(script).toContain('editLink.href = "/prompts"');
+	});
+
+	test("picker secondary actions stop propagation so the row insert doesn't also fire", () => {
+		const start = script.indexOf('actions.className = "prompt-pick-actions"');
+		expect(start).toBeGreaterThan(-1);
+		const body = script.slice(start, start + 1600);
+		expect(body).toContain("ev.stopPropagation()");
+	});
 });

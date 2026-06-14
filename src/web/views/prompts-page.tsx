@@ -41,6 +41,27 @@ function promptsScript(): string {
       window.location.reload();
     }
 
+    async function duplicatePrompt(id) {
+      var title = document.getElementById("edit-title-" + id).value.trim();
+      var body = document.getElementById("edit-body-" + id).value;
+      var tags = document.getElementById("edit-tags-" + id).value.trim();
+      if (!title || !body.trim()) {
+        await pawModal.alert("Cannot duplicate", "Title and body are required.");
+        return;
+      }
+      var res = await fetch("/api/prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title + " (copy)", body: body, tags: tags || null })
+      });
+      if (res.ok) {
+        window.location.reload();
+      } else {
+        var err = await res.json().catch(function() { return {}; });
+        await pawModal.alert("Duplicate failed", err.error || ("HTTP " + res.status));
+      }
+    }
+
     async function deletePromptRow(id, title) {
       var ok = await pawModal.confirm("Delete prompt", "Delete \\"" + title + "\\"? This cannot be undone.", { confirmLabel: "Delete", danger: true });
       if (!ok) return;
@@ -61,6 +82,11 @@ function promptsScript(): string {
       }
     }
   `;
+}
+
+// Exposed for tests (cook+run the cooked client script, mirroring getChatScript).
+export function getPromptsScript(): string {
+	return promptsScript();
 }
 
 export const PromptsPage: FC<PromptsPageProps> = ({ prompts }) => {
@@ -154,6 +180,14 @@ export const PromptsPage: FC<PromptsPageProps> = ({ prompts }) => {
 											onclick="copyPromptBody(this.dataset.promptId)"
 										>
 											Copy body
+										</button>
+										<button
+											type="button"
+											class="btn-secondary btn-sm"
+											data-prompt-id={p.id}
+											onclick="duplicatePrompt(this.dataset.promptId)"
+										>
+											Duplicate
 										</button>
 										<button
 											class="btn-danger btn-sm"
