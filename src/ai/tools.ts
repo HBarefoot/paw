@@ -1,6 +1,8 @@
+import { originFromSessionId } from "../integrations/github/approvals.js";
 import type { Sandbox } from "../kernel/sandbox.js";
 import type { ToolLog } from "../observability/tool-log.js";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
+import type { HookManager, ToolHookContext } from "./hooks.js";
 
 /** A currently-executing tool call (live "running" op for the Agent Ops feed). */
 export interface InFlightOp {
@@ -17,6 +19,7 @@ export class ToolRegistry {
 	private sandbox: Sandbox | null = null;
 	private enforcePermissions = false;
 	private toolLog: ToolLog | null = null;
+	private hooks: HookManager | null = null;
 
 	// Live in-flight tool calls — powers the Agent Ops "running" state. Hooks the
 	// single chokepoint every tool call passes through, so it is fail-open and
@@ -29,6 +32,10 @@ export class ToolRegistry {
 
 	setToolLog(log: ToolLog | null): void {
 		this.toolLog = log;
+	}
+
+	setHooks(hooks: HookManager | null): void {
+		this.hooks = hooks;
 	}
 
 	private trackStart(
@@ -154,36 +161,91 @@ export class ToolRegistry {
 			}
 		}
 
+		// Lifecycle hooks (before): a policy layer on every permitted call. No-op
+		// when no hooks are registered → zero behavior change.
+		let effectiveInput = input;
+		const hooks = this.hooks;
+		const ctx: ToolHookContext | null = hooks?.hasHooks()
+			? {
+					toolName: name,
+					plugin: tool.plugin ?? null,
+					input,
+					sessionId: sessionId ?? null,
+					origin: originFromSessionId(sessionId),
+				}
+			: null;
+		if (hooks && ctx) {
+			const { verdict, input: hookedInput } = await hooks.runBefore(ctx);
+			if (verdict.kind === "deny") {
+				const msg = `Blocked by policy: ${verdict.reason}`;
+				this.toolLog?.record({
+					toolName: name,
+					plugin: tool.plugin,
+					sessionId,
+					input,
+					output: msg,
+					isError: true,
+					durationMs: Date.now() - start,
+				});
+				return { content: msg, is_error: true };
+			}
+			if (verdict.kind === "require-approval") {
+				const id = hooks.enqueueApproval(ctx, verdict.reason);
+				const msg = id
+					? `Queued for human approval (id=${id}): ${verdict.reason}. The operator has been notified — re-issue this call once it's approved.`
+					: `Requires human approval: ${verdict.reason}.`;
+				this.toolLog?.record({
+					toolName: name,
+					plugin: tool.plugin,
+					sessionId,
+					input,
+					output: msg,
+					isError: true,
+					durationMs: Date.now() - start,
+				});
+				return { content: msg, is_error: true };
+			}
+			// allow — adopt any input a `modify` hook threaded through.
+			effectiveInput = hookedInput;
+			ctx.input = hookedInput;
+		}
+
 		const seq = this.trackStart(
 			name,
 			tool.plugin ?? null,
 			sessionId ?? null,
-			input,
+			effectiveInput,
 		);
 		try {
-			const result = await tool.handler(input);
+			const result = await tool.handler(effectiveInput);
 			this.toolLog?.record({
 				toolName: name,
 				plugin: tool.plugin,
 				sessionId,
-				input,
+				input: effectiveInput,
 				output: result.content,
 				isError: !!result.is_error,
 				durationMs: Date.now() - start,
 			});
+			if (hooks && ctx) await hooks.runAfter(ctx, result, Date.now() - start);
 			return result;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
+			const errResult: ToolResult = {
+				content: `Tool error: ${msg}`,
+				is_error: true,
+			};
 			this.toolLog?.record({
 				toolName: name,
 				plugin: tool.plugin,
 				sessionId,
-				input,
+				input: effectiveInput,
 				output: msg,
 				isError: true,
 				durationMs: Date.now() - start,
 			});
-			return { content: `Tool error: ${msg}`, is_error: true };
+			if (hooks && ctx) await hooks.runAfter(ctx, errResult, Date.now() - start);
+			return errResult;
 		} finally {
 			this.trackEnd(seq);
 		}

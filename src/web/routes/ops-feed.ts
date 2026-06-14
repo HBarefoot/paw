@@ -105,6 +105,11 @@ export interface OpsFeedDeps {
 	/** Informative caption for the waiting face (e.g. "Waiting for your approval
 	 *  — merge PR #42" / "2 actions awaiting approval"). */
 	pendingApprovalsLabel?: string;
+	/** Hook-sourced per-tool metrics (count/errors/totalMs), from the metrics hook. */
+	toolMetrics?: Record<
+		string,
+		{ count: number; errors: number; totalMs: number }
+	>;
 }
 
 export interface OpsFeedResponse {
@@ -121,6 +126,11 @@ export interface OpsFeedResponse {
 	pendingApprovals: number;
 	/** Caption for the waiting face (empty when nothing is pending). */
 	pendingApprovalsLabel: string;
+	/** Hook-sourced per-tool metrics aggregate (empty when no metrics hook ran). */
+	toolMetrics: Record<
+		string,
+		{ count: number; errors: number; totalMs: number }
+	>;
 }
 
 function cleanName(name: string): string {
@@ -273,5 +283,6 @@ export function buildOpsFeed(
 		inflight,
 		pendingApprovals: deps.pendingApprovals ?? 0,
 		pendingApprovalsLabel: deps.pendingApprovalsLabel ?? "",
+		toolMetrics: deps.toolMetrics ?? {},
 	};
 }

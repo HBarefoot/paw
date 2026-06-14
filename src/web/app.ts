@@ -947,6 +947,7 @@ export function createWebApp(
 					now: Date.now(),
 					pendingApprovals: approvalRows.length,
 					pendingApprovalsLabel: approvalLabel(approvalRows),
+					toolMetrics: kernel.hooks.metrics(),
 				},
 				since,
 			),

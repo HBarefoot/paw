@@ -1,3 +1,4 @@
+import type { HookManager } from "../ai/hooks.js";
 import type { EventBus } from "../kernel/bus.js";
 import type { ToolDefinition } from "./message.js";
 
@@ -22,6 +23,8 @@ export interface PluginContext {
 	store: PluginStore;
 	/** Simple LLM completion using the kernel's configured provider. */
 	llm(options: { system: string; message: string }): Promise<string>;
+	/** Register lifecycle hooks (tool guardrails/metrics) without kernel edits. */
+	hooks: HookManager;
 }
 
 export interface ChannelPlugin {
