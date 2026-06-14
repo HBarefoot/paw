@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
 	activateBrand,
 	compileBrandBrief,
@@ -8,6 +8,7 @@ import {
 	getActiveBrand,
 	getBrandUi,
 	listBrands,
+	renderBrandAppThemeCss,
 	renderBrandTokensCss,
 	slugify,
 	updateBrand,
@@ -113,6 +114,54 @@ describe("brand store", () => {
 		const css = renderBrandTokensCss(getBrandById(db, b.id));
 		expect(css).not.toContain("@import");
 		expect(css).not.toContain("evil.example.com");
+	});
+
+	// The app-chrome theme contributes ACCENT + FONTS only — the neutral grounds
+	// stay owned by the DS so the light/dark toggle works on every page.
+	// REGRESSION: the brand used to pin --bg-*/--text-* onto :root AND :root.dark,
+	// freezing dark mode (some tabs changed, others didn't).
+	test("renderBrandAppThemeCss emits accent + fonts but NOT neutral grounds", () => {
+		const b = createBrand(db, "Barefoot", {
+			colors: {
+				primary: "#7C5CFF",
+				accent: "#00FFA3",
+				bg: "#000000",
+				surface: "#0A0A0A",
+				text: "#ffffff",
+				muted: "#A1A1AA",
+			},
+			fonts: { display: "Space Grotesk", body: "Inter" },
+		});
+		const css = renderBrandAppThemeCss(getActiveBrandOr(db, b.id));
+		expect(css).toContain("--accent: #00FFA3;");
+		expect(css).toContain('--font-sans: "Inter"');
+		// neutrals are NOT pinned (DS :root / :root.dark own them)
+		expect(css).not.toContain("--bg-secondary");
+		expect(css).not.toContain("--bg-primary");
+		expect(css).not.toContain("--text-primary");
+		expect(css).not.toContain("--border-primary");
+	});
+
+	// A valid css2 URL (with @/; in the wght spec) must pass AND any configured
+	// family missing from it gets appended, so brand fonts actually load.
+	// REGRESSION: safeGoogleFontsUrl rejected '@'/';' → the whole @import was
+	// dropped, so a body font like Inter silently fell back to the system font.
+	test("renderBrandAppThemeCss loads a css2 URL and merges missing families", () => {
+		const b = createBrand(db, "Fonted", {
+			colors: { accent: "#00FFA3" },
+			fonts: {
+				display: "Space Grotesk",
+				body: "Inter",
+				googleFontsUrl:
+					"https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap",
+			},
+		});
+		const css = renderBrandAppThemeCss(getActiveBrandOr(db, b.id));
+		expect(css).toContain("@import");
+		// the URL was kept (not dropped by the @/; chars)
+		expect(css).toMatch(/family=Space\+Grotesk:wght@400/);
+		// the missing body family (Inter) was appended
+		expect(css).toMatch(/family=Inter:wght@400;500;600;700/);
 	});
 
 	test("compileBrandBrief produces a compact text brief", () => {

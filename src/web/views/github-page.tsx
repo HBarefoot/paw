@@ -92,7 +92,7 @@ export const GitHubPage: FC<GitHubPageProps> = (props) => {
 									title={`${ratePct}% remaining`}
 								>
 									<div
-										style={`height:100%;width:${ratePct}%;background:var(--accent,#7458f5)`}
+										style={`height:100%;width:${ratePct}%;background:var(--accent,#3fe08f)`}
 									/>
 								</div>
 							</div>

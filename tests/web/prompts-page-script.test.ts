@@ -12,21 +12,23 @@ describe("prompts page client script", () => {
 		expect(() => new Function(script)).not.toThrow();
 	});
 
-	test("duplicatePrompt creates a copy via POST with a (copy) title", () => {
-		expect(script).toContain("function duplicatePrompt(");
-		const start = script.indexOf("function duplicatePrompt(");
-		const body = script.slice(start, start + 700);
-		// Reads the already-rendered edit inputs (no extra GET) and POSTs a new row.
-		expect(body).toContain('document.getElementById("edit-body-" + id)');
-		expect(body).toContain('"/api/prompts"');
-		expect(body).toContain('method: "POST"');
-		expect(body).toContain('title + " (copy)"');
+	test("editor saves via POST (new) or PUT (edit)", () => {
+		expect(script).toContain("function savePromptFrom(");
+		expect(script).toContain('"/api/prompts/" + encodeURIComponent(id)');
+		expect(script).toContain('var method = id ? "PUT" : "POST"');
 	});
 
-	test("inline edit still persists via PUT (regression guard)", () => {
-		// savePrompt(id) targets /api/prompts/:id with PUT; the page is the home
-		// for full inline edit (the chat picker only links here).
-		expect(script).toContain('"/api/prompts/" + encodeURIComponent(id)');
-		expect(script).toContain('method = id ? "PUT" : "POST"');
+	test("duplicatePrompt creates a (copy) via POST from card data", () => {
+		expect(script).toContain("function duplicatePrompt(");
+		const start = script.indexOf("function duplicatePrompt(");
+		const body = script.slice(start, start + 600);
+		expect(body).toContain('"/api/prompts"');
+		expect(body).toContain('method: "POST"');
+		expect(body).toContain('"data-title") + " (copy)"');
+	});
+
+	test("the design card grid is driven by client-side tag + text filter", () => {
+		expect(script).toContain("function filterPrompts(");
+		expect(script).toContain("function selectTag(");
 	});
 });
