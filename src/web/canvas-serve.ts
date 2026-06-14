@@ -52,20 +52,33 @@ const CANVAS_RUNTIME = `<script>(function(){document.addEventListener("click",fu
 // use String.fromCharCode(92) to normalize Windows watcher paths.
 const REFRESH_POLLER = `<script>(function(){if(location.pathname.indexOf("/api/app/")!==0)return;var meta=document.querySelector('meta[name="paw-refresh"]');if(!meta)return;var mode=(meta.getAttribute("content")||"").trim().toLowerCase()||"event";var parts=location.pathname.split("/").filter(Boolean);var space=parts.length>=3?parts[2]:"";var prefix=space?("apps/"+space+"/"):"";var bs=String.fromCharCode(92);var since=0,started=false;function tick(){fetch("/api/canvas/events?sessionId=__files__&since="+since,{headers:{Accept:"application/json"}}).then(function(r){return r.json();}).then(function(d){var evs=(d&&d.events)||[];var changed=[];for(var i=0;i<evs.length;i++){var e=evs[i];if(e.id>since)since=e.id;if(e.event!=="file-changed")continue;var p=((e.data&&e.data.path)||"").split(bs).join("/");if(!prefix||p.indexOf(prefix)===0)changed.push(p);}if(started&&changed.length){if(mode==="reload"){location.reload();return;}try{window.dispatchEvent(new CustomEvent("paw:files-changed",{detail:{paths:changed}}));}catch(e2){}}started=true;}).catch(function(){}).then(function(){setTimeout(tick,2000);});}tick();})();</script>`;
 
+/** Sentinel that marks an already-injected launcher, used to keep injection
+ *  idempotent: a document that already carries the launcher (e.g. touched by
+ *  both injectCanvasRuntime and injectCompanionLauncher) is never given a
+ *  second one. */
+export const COMPANION_LAUNCHER_MARKER = 'id="paw-cmp-launcher"';
+
 // Floating companion launcher, injected ONLY for authenticated admins viewing a
 // served canvas page (the caller decides via the `companion` flag / the standalone
 // injectCompanionLauncher below). It is fully self-contained and carries NO
 // secrets: just static markup + the same-origin "/companion" URL, which itself
 // resolves the visitor's session server-side. Everything is scoped under the
-// `paw-cmp-*` ids so it can't clobber the page's own styles/scripts. The script
-// self-gates to TOP-LEVEL pages (window.top === window.self): when the page is
-// embedded (the console canvas pane, the share wrapper's inner preview, a
-// null-origin sandbox) the launcher stays hidden, so it never duplicates the
-// console's own companion or breaks inside a sandbox. CSP-safe: every canvas CSP
-// variant allows inline script/style + a same-origin frame ("/companion").
+// `paw-cmp-*` ids so it can't clobber the page's own styles/scripts.
+//
+// SINGLE ENTRY POINT PER TOP-LEVEL PAGE: the launcher markup is HIDDEN by
+// default (`#paw-cmp-launcher{display:none}`) and the script only REVEALS it when
+// the page is genuinely top-level (window.top === window.self). When the page is
+// embedded — the console canvas pane, the /canvas/share wrapper's inner preview
+// iframe, a null-origin sandbox — the script returns early and the launcher stays
+// display:none, so an embedded copy can NEVER paint a second (dead) ✦ button next
+// to the real top-level one. (Previously the self-gate only skipped the JS wiring
+// but left the fixed-position button visible — the duplication this fixes.)
+// CSP-safe: every canvas CSP variant allows inline script/style + a same-origin
+// frame ("/companion").
 const COMPANION_LAUNCHER = `<style>
 #paw-cmp-launcher,#paw-cmp-panel{position:fixed;right:20px;z-index:2147483000;}
-#paw-cmp-launcher{bottom:20px;}
+#paw-cmp-launcher{bottom:20px;display:none;}
+#paw-cmp-launcher.paw-cmp-top{display:block;}
 #paw-cmp-btn{width:52px;height:52px;border-radius:50%;border:none;cursor:pointer;background:#7458f5;color:#fff;font-size:22px;line-height:1;box-shadow:0 6px 20px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;}
 #paw-cmp-btn:hover{filter:brightness(1.08);}
 #paw-cmp-panel{bottom:84px;width:380px;height:560px;max-width:calc(100vw - 40px);max-height:calc(100vh - 110px);border-radius:16px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.35);background:#fff;display:none;}
@@ -74,7 +87,7 @@ const COMPANION_LAUNCHER = `<style>
 </style>
 <div id="paw-cmp-launcher"><button id="paw-cmp-btn" type="button" aria-label="Open assistant" title="Assistant">✦</button></div>
 <div id="paw-cmp-panel" aria-hidden="true"><iframe id="paw-cmp-frame" title="Assistant" loading="lazy"></iframe></div>
-<script>(function(){try{if(window.top!==window.self)return;}catch(e){return;}var b=document.getElementById("paw-cmp-btn"),p=document.getElementById("paw-cmp-panel"),f=document.getElementById("paw-cmp-frame");if(!b||!p||!f)return;var loaded=false;b.addEventListener("click",function(){var open=p.classList.toggle("paw-open");p.setAttribute("aria-hidden",open?"false":"true");if(open&&!loaded){f.src="/companion";loaded=true;}});})();</script>`;
+<script>(function(){try{if(window.top!==window.self)return;}catch(e){return;}var l=document.getElementById("paw-cmp-launcher"),b=document.getElementById("paw-cmp-btn"),p=document.getElementById("paw-cmp-panel"),f=document.getElementById("paw-cmp-frame");if(!l||!b||!p||!f)return;l.classList.add("paw-cmp-top");var loaded=false;b.addEventListener("click",function(){var open=p.classList.toggle("paw-open");p.setAttribute("aria-hidden",open?"false":"true");if(open&&!loaded){f.src="/companion";loaded=true;}});})();</script>`;
 
 /**
  * Inject the error overlay + form/anchor runtime shim + opt-in app-space
@@ -88,7 +101,11 @@ export function injectCanvasRuntime(
 	opts?: { companion?: boolean },
 ): string {
 	let inject = ERROR_OVERLAY + CANVAS_RUNTIME + REFRESH_POLLER;
-	if (opts?.companion) inject += COMPANION_LAUNCHER;
+	// Idempotent: only add the launcher if the document doesn't already carry one
+	// (so a page touched by both this and injectCompanionLauncher gets exactly one).
+	if (opts?.companion && !html.includes(COMPANION_LAUNCHER_MARKER)) {
+		inject += COMPANION_LAUNCHER;
+	}
 	if (html.includes("</body>")) {
 		return html.replace("</body>", `${inject}</body>`);
 	}
@@ -119,6 +136,8 @@ export function shouldServeCompanion(input: {
  * Same before-`</body>` placement. Caller gates on an authenticated admin.
  */
 export function injectCompanionLauncher(html: string): string {
+	// Idempotent: never add a second launcher to a document that already has one.
+	if (html.includes(COMPANION_LAUNCHER_MARKER)) return html;
 	if (html.includes("</body>")) {
 		return html.replace("</body>", `${COMPANION_LAUNCHER}</body>`);
 	}
