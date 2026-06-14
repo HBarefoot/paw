@@ -1,38 +1,21 @@
-import { resolve, relative, dirname } from "node:path";
+import type { Database } from "bun:sqlite";
 import {
 	existsSync,
-	statSync,
-	readdirSync,
 	mkdirSync,
-	realpathSync,
 	readFileSync,
-	rmSync,
+	readdirSync,
+	realpathSync,
 	renameSync,
+	rmSync,
+	statSync,
 } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import type { ToolDefinition, ToolResult } from "../types/message.js";
-import type { Database } from "bun:sqlite";
+import { safePath, writeCanvasFile } from "./canvas-write.js";
 
 interface CanvasToolsConfig {
 	canvasRoot: string;
 	database?: Database;
-}
-
-function safePath(filePath: string, root: string): string | null {
-	const resolved = resolve(root, filePath);
-	// Check logical path first (no ".." traversal, no null bytes)
-	const rel = relative(root, resolved);
-	if (rel.startsWith("..") || resolved.includes("\0")) return null;
-	// If the path exists, resolve symlinks and verify real path is within canvas root
-	if (existsSync(resolved)) {
-		try {
-			const real = realpathSync(resolved);
-			const realRel = relative(root, real);
-			if (realRel.startsWith("..")) return null;
-		} catch {
-			return null;
-		}
-	}
-	return resolved;
 }
 
 export function createCanvasTools(config: CanvasToolsConfig): ToolDefinition[] {
@@ -56,61 +39,16 @@ export function createCanvasTools(config: CanvasToolsConfig): ToolDefinition[] {
 			required: ["path", "content"],
 		},
 		handler: async (input): Promise<ToolResult> => {
-			const filePath = safePath(input.path as string, root);
-			if (!filePath)
-				return {
-					content: "Error: path is outside canvas root",
-					is_error: true,
-				};
-
-			const content = input.content as string;
-			const relPath = input.path as string;
-
-			// Save current content as a version before overwriting (B1: version history)
-			if (config.database && existsSync(filePath)) {
-				try {
-					const oldContent = readFileSync(filePath, "utf-8");
-					config.database.run(
-						"INSERT INTO canvas_versions (path, content) VALUES (?, ?)",
-						[relPath, oldContent],
-					);
-					// Prune to keep only last 10 versions per file
-					config.database.run(
-						`DELETE FROM canvas_versions WHERE path = ? AND id NOT IN (
-              SELECT id FROM canvas_versions WHERE path = ? ORDER BY created_at DESC LIMIT 10
-            )`,
-						[relPath, relPath],
-					);
-				} catch {
-					// Version save is best-effort — don't block the write
-				}
+			const res = await writeCanvasFile({
+				root,
+				relPath: input.path as string,
+				content: input.content as string,
+				db: config.database,
+			});
+			if (!res.ok) {
+				return { content: `Error writing file: ${res.error}`, is_error: true };
 			}
-
-			// Create parent directories
-			const dir = resolve(filePath, "..");
-			mkdirSync(dir, { recursive: true });
-
-			// Atomic write: write to a temp sibling then rename into place. A page
-			// polling this file (e.g. an app-space data file refreshed on each tool
-			// call) must never read a half-written document — rename is atomic on
-			// the same filesystem. The temp name is unique per process+write so
-			// concurrent writes to the same path don't clobber each other's temp.
-			const tmp = `${filePath}.${process.pid}.${crypto.randomUUID().slice(0, 8)}.tmp`;
-			try {
-				await Bun.write(tmp, content);
-				renameSync(tmp, filePath);
-			} catch (err) {
-				try {
-					if (existsSync(tmp)) rmSync(tmp, { force: true });
-				} catch {
-					// best-effort temp cleanup
-				}
-				return {
-					content: `Error writing file: ${err instanceof Error ? err.message : String(err)}`,
-					is_error: true,
-				};
-			}
-			return { content: JSON.stringify({ written: true, path: relPath }) };
+			return { content: JSON.stringify({ written: true, path: res.path }) };
 		},
 	};
 

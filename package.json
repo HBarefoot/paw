@@ -20,6 +20,7 @@
 		"@slack/bolt": "^4.1.0",
 		"hono": "^4.11.9",
 		"octokit": "^5.0.5",
+		"parse5": "^8.0.1",
 		"playwright": "^1.49.0",
 		"sqlite-vec": "^0.1.7-alpha.2",
 		"unpdf": "^1.6.2",
