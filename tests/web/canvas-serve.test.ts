@@ -244,9 +244,9 @@ describe("companion launcher injection", () => {
 		});
 		expect(out).toContain(LAUNCHER_MARKER);
 		// Lazy-loads the same-origin page-scoped Assistant console (with the host
-		// page path as context) + self-gates to top-level pages.
+		// page path as context) + self-gates to top-level / share-inner pages.
 		expect(out).toContain('f.src="/canvas/assistant?path="');
-		expect(out).toContain("window.top!==window.self");
+		expect(out).toContain("window.top===window.self");
 		// Original content preserved, launcher sits before </body>.
 		expect(out).toContain("page");
 		expect(out.indexOf(LAUNCHER_MARKER)).toBeLessThan(out.indexOf("</body>"));
@@ -397,7 +397,7 @@ describe("companion launcher: single entry point per page", () => {
 	// listeners, fetch to the edit routes, sessionStorage resume). Run the whole
 	// cooked script top-level with stubs — this is the footgun guard (catches
 	// SyntaxError / ReferenceError from the template trap) plus a wiring check.
-	function runToolbar(opts: { resume?: boolean } = {}) {
+	function runToolbar(opts: { resume?: boolean; shareInner?: boolean } = {}) {
 		const added: string[] = [];
 		const docClasses: string[] = [];
 		const docHandlers: Record<string, () => void> = {};
@@ -415,8 +415,12 @@ describe("companion launcher: single entry point per page", () => {
 			getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
 			confirm: () => true,
 		};
-		topWin.top = topWin;
 		topWin.self = topWin;
+		// shareInner: the page is framed (top !== self), but top is a same-origin
+		// /canvas/share wrapper → the toolbar should still reveal.
+		topWin.top = opts.shareInner
+			? { location: { pathname: "/canvas/share/tok123" } }
+			: topWin;
 
 		const mkBtn = (name: string) => ({
 			addEventListener: (_t: string, fn: () => void) => {
@@ -489,6 +493,16 @@ describe("companion launcher: single entry point per page", () => {
 		expect(t.frame.src).toBe(
 			`/canvas/assistant?path=${encodeURIComponent("/api/canvas/preview/market-report.html")}`,
 		);
+	});
+
+	it("share-inner: reveals when framed inside a same-origin /canvas/share wrapper", () => {
+		// The inner preview is framed by the share wrapper; it must still reveal so
+		// the shared page is editable (the wrapper carries no toolbar). Edit-prep
+		// then maps the inner's own /api/canvas/preview/* URL (not the share token).
+		const t = runToolbar({ shareInner: true });
+		expect(t.added).toContain("paw-cmp-top");
+		t.btnHandlers.edit();
+		expect(t.fetches).toContain("/api/canvas/edit-prep");
 	});
 
 	it("Edit button enters edit mode via the edit-prep route", () => {

@@ -70,7 +70,6 @@ import {
 	canvasContentType,
 	canvasFileFromUrlPath,
 	injectCanvasRuntime,
-	injectCompanionLauncher,
 	shouldServeCompanion,
 } from "./canvas-serve.js";
 import { createCanvasEditRoutes } from "./routes/canvas-edit.js";
@@ -2631,11 +2630,13 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
       </style></head><body>
       <iframe src="/api/canvas/preview/${encodeURIComponent(meta.path)}"></iframe>
     </body></html>`;
-		// This wrapper builds its own HTML (no injectCanvasRuntime), so inject the
-		// launcher directly — only for an authenticated admin opening the link.
-		return c.html(
-			isCanvasCompanionVisitor(c) ? injectCompanionLauncher(page) : page,
-		);
+		// Deliberately NO toolbar on the share WRAPPER: its URL is /canvas/share/<token>
+		// (not a canvas file, so edit-prep can't map it) and the editable content lives
+		// in the inner preview iframe. The inner /api/canvas/preview/* page injects the
+		// toolbar itself and reveals it when framed inside a same-origin share wrapper
+		// (see COMPANION_LAUNCHER) — so editing targets the real page + a mappable URL,
+		// and there's still exactly one toolbar.
+		return c.html(page);
 	});
 
 	// CRC32 for ZIP file construction
