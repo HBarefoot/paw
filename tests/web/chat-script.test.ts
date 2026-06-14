@@ -91,4 +91,58 @@ describe("chat client script", () => {
 		expect(script).not.toContain("<code>md</code>");
 		expect(script).toContain("Choose format: md (default), html, or json.");
 	});
+
+	test("shared composer/message-action helpers are defined", () => {
+		// Copy/Quote/Edit on message bubbles reuse one canonical set of helpers.
+		expect(script).toContain("function insertIntoComposer(");
+		expect(script).toContain("function buildQuote(");
+		expect(script).toContain("function copyToClipboard(");
+		expect(script).toContain("function addMessageActions(");
+	});
+
+	test("buildQuote uses the > prefix and split/join, not a regex literal", () => {
+		// The quote format is "> " per line. Inside this template literal a regex
+		// literal would be a cooking hazard (inline-script-template-trap), so the
+		// helper splits/joins on newlines instead.
+		const start = script.indexOf("function buildQuote(");
+		expect(start).toBeGreaterThan(-1);
+		const body = script.slice(start, start + 300);
+		expect(body).toContain('"> "');
+		expect(body).toContain(".split(");
+		expect(body).toContain(".join(");
+		// No regex literal (e.g. /.../g) inside the helper.
+		expect(/\/[^/\n]+\/[a-z]*/.test(body)).toBe(false);
+	});
+
+	test("openPrompts inserts via the shared helper (no inline composer mutation)", () => {
+		// The picker row-click was refactored onto insertIntoComposer so PR2 can
+		// reuse the same insertion path for insert-as-quote.
+		expect(script).toContain("insertIntoComposer(body)");
+	});
+
+	test("Edit action is gated to the user's own messages", () => {
+		// addMessageActions only adds the Edit button under a role === "user" check;
+		// assistant bubbles get Copy/Quote only.
+		const start = script.indexOf("function addMessageActions(");
+		expect(start).toBeGreaterThan(-1);
+		const body = script.slice(start, start + 1400);
+		expect(body).toContain('role === "user"');
+		const editIdx = body.indexOf('"Edit"');
+		const guardIdx = body.indexOf('role === "user"');
+		expect(editIdx).toBeGreaterThan(-1);
+		// The Edit button is created after (inside) the role guard.
+		expect(editIdx).toBeGreaterThan(guardIdx);
+	});
+
+	test("Copy moved off the feedback bar into the unified action row", () => {
+		// Regression: the feedback bar no longer builds its own Copy button (it
+		// would duplicate the .msg-actions Copy). The bar keeps Retry/Fork/ratings.
+		expect(script).toContain('row.className = "msg-actions"');
+		const fbStart = script.indexOf("function addFeedbackButtons(");
+		expect(fbStart).toBeGreaterThan(-1);
+		const fbEnd = script.indexOf("function ", fbStart + 1);
+		const fbBody = script.slice(fbStart, fbEnd > -1 ? fbEnd : fbStart + 2000);
+		expect(fbBody).not.toContain("copyBtn");
+		expect(fbBody).toContain("retryBtn");
+	});
 });

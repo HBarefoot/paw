@@ -1199,6 +1199,20 @@
     padding: 2px 0;
   }
 
+  /* Per-message action row (Copy / Quote / Edit) — revealed on hover/focus,
+     keyboard-accessible. Reuses .feedback-btn.action-btn for button styling. */
+  .msg-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .msg-wrapper:hover .msg-actions,
+  .msg-actions:focus-within {
+    opacity: 1;
+  }
+
   /* Thinking text panel */
   .thinking-details {
     margin: 0;
