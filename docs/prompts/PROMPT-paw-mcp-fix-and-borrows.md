@@ -7,20 +7,12 @@ This prompt sequences **three** PRs (then two parked items). Do them **in order*
 **single unstacked PR off `main`**. After each PR: stop, report, and wait for review before
 starting the next — do not stack.
 
-## Ground rules (apply to every PR here)
+## Ground rules
 
-- Short-lived feature branch + PR for review. **Never commit or push directly to `main`**
-  (Railway auto-deploys `main`). Even one-line follow-ups get a fresh branch.
-- **No `Co-Authored-By: Claude` trailer** on any commit or PR.
-- **Every fix-PR ships a regression test that fails on the pre-fix code.** No exceptions.
-- Tests must pass from a clean checkout regardless of environment — scrub `PAW_*` env vars and
-  redirect `PAW_CONFIG_DIR` to a temp dir via `tests/helpers/env.ts` for anything that reads
-  config/credentials/the vault.
-- Gates before "done": `bun test` green, `tsc` at baseline (zero *net-new* errors — the repo has
-  a known pre-existing `trustedProxy` / Hono `c.html` TS2769 overload class; don't add to it),
-  `bun run lint` clean on touched lines.
-- Don't grow kernel surface beyond what's described. If you discover a needed change outside this
-  scope, STOP and flag it rather than silently expanding.
+**Follow `docs/prompts/_CONVENTIONS.md`** (standing rules + known integration seams) for every PR
+here — branch+PR discipline, no `Co-Authored-By`, regression-test-fails-first, clean-checkout test
+hygiene, gates, and the surface-budget rule all live there. This prompt only adds task-specific
+detail below.
 
 ---
 
