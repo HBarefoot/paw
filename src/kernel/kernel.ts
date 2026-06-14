@@ -13,15 +13,16 @@ import type {
 import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
 import { GeminiProvider } from "../ai/gemini-provider.js";
 import {
+	HookManager,
 	createAuditHook,
 	createGuardrailHook,
 	createMetricsHook,
-	HookManager,
 } from "../ai/hooks.js";
 import { runSchemaDrift } from "../ai/mcp-schema-drift.js";
 import { OllamaProvider } from "../ai/ollama-provider.js";
 import { OpenAIProvider } from "../ai/openai-provider.js";
 import { ClaudeProvider } from "../ai/provider.js";
+import { isTransientError } from "../ai/retry.js";
 import {
 	type FallbackAttempt,
 	PROVIDER_FALLBACK_NOTE,
@@ -32,7 +33,6 @@ import {
 	withProviderFallback,
 	withVisionFallback,
 } from "../ai/router.js";
-import { isTransientError } from "../ai/retry.js";
 import { SkillManager } from "../ai/skills.js";
 import { buildSystemPrompt } from "../ai/system-prompt.js";
 import { ToolRegistry } from "../ai/tools.js";
@@ -147,6 +147,9 @@ export class Kernel {
 		| null = null;
 	private githubApprovalsInstance:
 		| import("../integrations/github/approvals.js").GitHubApprovals
+		| null = null;
+	private vercelClient:
+		| import("../integrations/vercel/client.js").VercelClient
 		| null = null;
 	private notificationStoreInstance!: NotificationStore;
 	private githubReactorUnsub: (() => void) | null = null;
@@ -392,7 +395,9 @@ export class Kernel {
 		this.hookManager.register(createMetricsHook(this.hookManager));
 		const hookAudit = new AuditLogger(this.db);
 		this.hookManager.register(
-			createAuditHook((action, details) => hookAudit.log(action, null, details)),
+			createAuditHook((action, details) =>
+				hookAudit.log(action, null, details),
+			),
 		);
 		if (
 			this.config.hooks.denyTools.length > 0 ||
@@ -675,12 +680,13 @@ export class Kernel {
 		// persist it. Idempotent — a no-op when there are no dupes.
 		{
 			const { dedupeMcpServers } = await import("../mcp/normalize.js");
-			const { servers, changed } = dedupeMcpServers(this.config.mcpServers ?? {});
+			const { servers, changed } = dedupeMcpServers(
+				this.config.mcpServers ?? {},
+			);
 			if (changed) {
 				const { replaceConfigOverride } = await import("../config/writer.js");
 				replaceConfigOverride("mcpServers", servers);
-				this.config.mcpServers =
-					servers as typeof this.config.mcpServers;
+				this.config.mcpServers = servers as typeof this.config.mcpServers;
 				this.logger.info("Collapsed case-variant MCP server names", {
 					count: Object.keys(servers).length,
 				});
@@ -835,6 +841,61 @@ export class Kernel {
 				});
 			} catch (err) {
 				this.logger.warn("GitHub init failed — degrading gracefully", {
+					error: String(err),
+				});
+			}
+		}
+
+		// Initialize Vercel integration (deploy-target: provision public assets
+		// onto the operator's own Vercel + GitHub repo). Disabled by default.
+		const vc = this.config.vercel;
+		if (vc?.enabled && vc.token) {
+			try {
+				const { VercelClient } = await import(
+					"../integrations/vercel/client.js"
+				);
+				const { createVercelTools } = await import(
+					"../integrations/vercel/tools.js"
+				);
+				const { AuditLogger } = await import("../security/audit-log.js");
+				const client = new VercelClient(vc);
+				this.vercelClient = client;
+				this.sandbox.registerManifest({
+					name: "vercel",
+					version: "1.0.0",
+					description: "Vercel deploy-target integration",
+					permissions: ["vercel:read", "vercel:write"],
+				});
+				const vAudit = new AuditLogger(this.db);
+				const vAuditFn = (action: string, details: Record<string, unknown>) =>
+					vAudit.log(action, null, details);
+				// Reuse the always-on approval queue. Register execute-on-approve
+				// handlers against the client; the queue audits queued/executed.
+				const approvals = this.githubApprovalsInstance;
+				if (approvals) {
+					approvals.registerExecutor("vercel_create_project", (row) =>
+						client.getOrCreateProject({
+							name: String(row.params.name),
+							repo: row.params.repo as string | undefined,
+							framework: row.params.framework as string | null | undefined,
+						}),
+					);
+					approvals.registerExecutor("vercel_add_domain", (row) =>
+						client.addDomain(
+							String(row.params.project ?? row.params.name),
+							String(row.params.name),
+						),
+					);
+				}
+				this.toolRegistry.register(
+					createVercelTools(client, {
+						audit: vAuditFn,
+						approvals: approvals ?? undefined,
+					}),
+				);
+				this.logger.info("Vercel integration initialized");
+			} catch (err) {
+				this.logger.warn("Vercel init failed — degrading gracefully", {
 					error: String(err),
 				});
 			}
@@ -2523,7 +2584,12 @@ export class Kernel {
 		if (!v || v.enabled === false) return null;
 		const model = v.model;
 		try {
-			const provider = this.instantiateProvider(v.provider, model, config, logger);
+			const provider = this.instantiateProvider(
+				v.provider,
+				model,
+				config,
+				logger,
+			);
 			if (!provider) {
 				this.logger.warn("Vision provider not initialized (no API key)", {
 					provider: v.provider,
@@ -2840,6 +2906,11 @@ export class Kernel {
 		| import("../integrations/github/approvals.js").GitHubApprovals
 		| null {
 		return this.githubApprovalsInstance;
+	}
+
+	/** Vercel deploy-target client (null if disabled or not configured). */
+	get vercel(): import("../integrations/vercel/client.js").VercelClient | null {
+		return this.vercelClient;
 	}
 
 	/** Durable proactive-notification inbox (nav badge + canvas portrait). */

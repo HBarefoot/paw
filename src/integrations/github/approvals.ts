@@ -13,7 +13,13 @@ export type GitHubGatedAction =
 	| "external"
 	// Canvas inline edit requested by the agent — applied (anchor-splice) on
 	// approve via a registered executor (see registerExecutor / execute()).
-	| "canvas_apply_edit";
+	| "canvas_apply_edit"
+	// Vercel deploy-target actions — executed on approve via executors the
+	// kernel registers against the VercelClient (see registerExecutor). The
+	// audit labels carry the `github.` prefix (see audit() calls); acceptable
+	// for the shared queue.
+	| "vercel_create_project"
+	| "vercel_add_domain";
 
 /** Where an approval originated, so it can be delivered back to that surface. */
 export interface ApprovalOrigin {
