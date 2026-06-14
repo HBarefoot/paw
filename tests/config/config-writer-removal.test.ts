@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	deleteConfigOverride,
 	getConfigOverridesPath,
@@ -68,5 +69,47 @@ describe("replaceConfigOverride — honors removals (Bug A)", () => {
 		const disk = onDisk();
 		expect((disk.github as Record<string, unknown>).appId).toBeUndefined();
 		expect((disk.github as Record<string, unknown>).enabled).toBe(true);
+	});
+});
+
+describe("config-form agents clear (the second delete-by-merge caller)", () => {
+	test("replacing agents drops a removed agent; siblings + dbPath rule intact", () => {
+		seed({
+			agents: {
+				researcher: { description: "r" },
+				writer: { description: "w" },
+			},
+			ai: { model: "x" },
+			store: { dbPath: "/somewhere/paw.db" },
+		});
+
+		// What the FIXED /config handler now does: wholesale-replace agents so a
+		// removed agent disappears. (Pre-fix it merged `overrides.agents` and the
+		// removed `writer` re-merged back from disk.)
+		replaceConfigOverride("agents", { researcher: { description: "r" } });
+
+		const disk = onDisk();
+		expect(Object.keys(disk.agents as object)).toEqual(["researcher"]);
+		expect((disk.ai as { model: string }).model).toBe("x");
+		expect(disk.store).toBeUndefined();
+	});
+
+	test("an empty agents map clears all agents ('clear all' actually clears)", () => {
+		seed({ agents: { a: { description: "a" }, b: { description: "b" } } });
+		replaceConfigOverride("agents", {});
+		expect(onDisk().agents).toEqual({});
+	});
+});
+
+describe("config-form handler uses the removal-honoring writer (source guard)", () => {
+	const APP_SRC = readFileSync(
+		fileURLToPath(new URL("../../src/web/app.ts", import.meta.url)),
+		"utf8",
+	);
+	test("POST /config replaces the agents subtree instead of merging it", () => {
+		// Fails on pre-fix code, where the handler did `overrides.agents =
+		// agentsConfig` + saveConfigOverrides (deep-merge → removals lost).
+		expect(APP_SRC).toContain('replaceConfigOverride("agents", agentsConfig)');
+		expect(APP_SRC).not.toContain("overrides.agents = agentsConfig");
 	});
 });

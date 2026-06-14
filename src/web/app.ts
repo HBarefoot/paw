@@ -1713,8 +1713,11 @@ export function createWebApp(
 					);
 				}
 			}
-			// Always write agents key (empty object clears all agents)
-			overrides.agents = agentsConfig;
+			// NOTE: agents are persisted via replaceConfigOverride at save time
+			// (below), NOT merged into `overrides`. saveConfigOverrides deep-merges
+			// nested objects and so can never delete a key — which made "clear all
+			// agents" / removing one agent silently fail (the old agent re-merged
+			// from disk). The agents subtree must be replaced wholesale.
 
 			// n8n endpoints: replace the array from the hidden JSON field.
 			if (n8nEndpointsRaw !== null) {
@@ -1763,6 +1766,12 @@ export function createWebApp(
 				ip,
 			);
 
+			// Wholesale-replace the agents subtree so a removed/cleared agent
+			// actually disappears (deep-merge can't delete keys). The remaining
+			// config fields are additive scalar/array updates, for which merge is
+			// correct (arrays are replaced by the merge, so n8n.endpoints removals
+			// already persist).
+			replaceConfigOverride("agents", agentsConfig);
 			saveConfigOverrides(overrides);
 			return c.html(
 				ConfigPage({
