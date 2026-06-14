@@ -63,6 +63,28 @@ html.dark {
 * {
 	box-sizing: border-box;
 }
+
+/* Subtle, brand-tinted scrollbar for the companion's scroll areas (inbox, ops
+   feed). Without this they fell back to the chunky OS-default bar. Theme-aware:
+   --pill-border / --op-border flip light↔dark via the #115 token overrides. */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: var(--pill-border);
+	border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: var(--op-border);
+}
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--pill-border) transparent;
+}
 html,
 body {
 	margin: 0;
