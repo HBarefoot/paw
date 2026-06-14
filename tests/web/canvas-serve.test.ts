@@ -265,3 +265,123 @@ describe("companion launcher injection", () => {
 		expect(getById).toBe(0); // self-gate short-circuited before any DOM access
 	});
 });
+
+// ── Duplication fix (fix/canvas-companion-dup) ──────────────────────────────
+// The launcher used to leave a VISIBLE (fixed-position) ✦ button in embedded
+// frames — only the JS wiring self-gated, not the markup — so the /canvas/share
+// wrapper (top-level launcher) plus its inner /api/canvas/preview iframe (a
+// second injected launcher) painted TWO buttons. The fix: the markup is hidden
+// by default and only revealed at true top-level, and injection is idempotent.
+describe("companion launcher: single entry point per page", () => {
+	const MARKER = 'id="paw-cmp-launcher"';
+	const count = (s: string, needle: string): number =>
+		s.split(needle).length - 1;
+
+	const onlyScript = (html: string): string => {
+		const re = /<script>([\s\S]*?)<\/script>/g;
+		const scripts: string[] = [];
+		let m: RegExpExecArray | null;
+		// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
+		while ((m = re.exec(html)) !== null) scripts.push(m[1]);
+		return scripts[scripts.length - 1]; // launcher script is injected last
+	};
+
+	it("each injection path adds exactly ONE launcher", () => {
+		expect(
+			count(injectCanvasRuntime("<body>p</body>", { companion: true }), MARKER),
+		).toBe(1);
+		expect(count(injectCompanionLauncher("<body>p</body>"), MARKER)).toBe(1);
+	});
+
+	it("a page touched by BOTH wrappers still injects only once", () => {
+		// share-style: runtime first, then the wrapper launcher pass
+		const both1 = injectCompanionLauncher(
+			injectCanvasRuntime("<body>p</body>", { companion: true }),
+		);
+		expect(count(both1, MARKER)).toBe(1);
+		// reverse order is also idempotent
+		const both2 = injectCanvasRuntime(
+			injectCompanionLauncher("<body>p</body>"),
+			{
+				companion: true,
+			},
+		);
+		expect(count(both2, MARKER)).toBe(1);
+	});
+
+	it("anonymous visitor (companion off) → zero companion markup", () => {
+		expect(count(injectCanvasRuntime("<body>p</body>"), MARKER)).toBe(0);
+		expect(
+			count(
+				injectCanvasRuntime("<body>p</body>", { companion: false }),
+				MARKER,
+			),
+		).toBe(0);
+	});
+
+	it("the launcher markup is HIDDEN by default (embedded frames never paint it)", () => {
+		const html = injectCompanionLauncher("<body></body>");
+		// The fixed-position launcher must default to display:none so a framed copy
+		// stays invisible even though its self-gated script never runs.
+		expect(html).toContain("#paw-cmp-launcher{bottom:20px;display:none;}");
+		expect(html).toContain("#paw-cmp-launcher.paw-cmp-top{display:block;}");
+	});
+
+	it("framed: script returns early so the launcher is NEVER revealed", () => {
+		const framedWin = { top: { a: 1 }, self: { b: 2 } };
+		let revealed = false;
+		const doc = {
+			getElementById: () => ({
+				classList: {
+					add: () => {
+						revealed = true;
+					},
+				},
+				addEventListener: () => {},
+			}),
+		};
+		new Function(
+			"window",
+			"document",
+			onlyScript(injectCompanionLauncher("<body></body>")),
+		)(framedWin, doc);
+		expect(revealed).toBe(false); // never added paw-cmp-top → stays display:none
+	});
+
+	it("top-level: script reveals the launcher and wires the open button", () => {
+		const topWin = {} as Record<string, unknown>;
+		topWin.top = topWin;
+		topWin.self = topWin;
+		const added: string[] = [];
+		let clickHandler: (() => void) | null = null;
+		const launcher = { classList: { add: (c: string) => added.push(c) } };
+		const btn = {
+			addEventListener: (_t: string, fn: () => void) => {
+				clickHandler = fn;
+			},
+		};
+		const panel = {
+			classList: { toggle: () => true },
+			setAttribute: () => {},
+		};
+		const frame = { src: "" };
+		const byId: Record<string, unknown> = {
+			"paw-cmp-launcher": launcher,
+			"paw-cmp-btn": btn,
+			"paw-cmp-panel": panel,
+			"paw-cmp-frame": frame,
+		};
+		const doc = { getElementById: (id: string) => byId[id] };
+		new Function(
+			"window",
+			"document",
+			onlyScript(injectCompanionLauncher("<body></body>")),
+		)(topWin, doc);
+		// Revealed at top-level.
+		expect(added).toContain("paw-cmp-top");
+		// Clicking lazy-loads the same-origin companion exactly once.
+		expect(typeof clickHandler).toBe("function");
+		(clickHandler as unknown as () => void)();
+		expect(frame.src).toBe("/companion");
+	});
+});
