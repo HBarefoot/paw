@@ -8,6 +8,43 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > and bumps `package.json`'s `version`. After the PR merges, tag from `main`:
 > `git tag vX.Y.Z && git push --tags` — never tag from the feature branch.
 
+## [0.6.0] - 2026-06-14
+
+Everything merged since `0.5.0` (#70–#136). Grouped by theme; each entry cites the
+merged PR(s) it came from.
+
+### Companion (the living face)
+- Skill Dock v2 + wrap-dock layout, reactivity, and embodiment — gaze, springs, thinking-dots, mood (saturation only), TTS mouth-sync — driven by real signals (#75, #76, #77, #79, #80, #91, #105).
+- Sub-agent fidelity (one orb per spawned agent), swarm↔tool tethers, gel-sphere face, status chip + smile (#83, #100, #103).
+- Light-theme fix (the standalone `/companion` iframe now bootstraps the shared theme), cache-busting + per-skill unread badges, chip spacing, and console-error fixes (#81, #82, #115, #117).
+- Clickable skill inbox with mark-read + the companion presenting real outcomes (#116); a floating companion launcher on served canvas pages for authed admins (#120); native scrollbar polish (#125).
+- Avatar picker: an avatar-renderer registry (gel sphere + 4 robot faces) with a `/preferences` picker that persists per-device and live-swaps the open companion (#127, #128).
+
+### Canvas
+- Admin toolbar (Vercel-Toolbar style) with a **promptable** page-scoped Assistant console, **inline click-to-edit** (parse5 anchor-splice persistence — byte-intact, round-trip-guarded), and **companion-driven, approval-gated edits** (#131, #132, #133); plus a single-launcher-per-page fix and a share-page edit fix (#130, #134).
+- Supabase "fenced yard": safe-by-construction provisioning (scoped role, typed DDL tools), a `supabase` form-action, and compatibility fixes (#72, #84, #85, #86, #88, #89, #96).
+- Web-Pilot QA tools for the agent to test served canvas pages (#124); plus tree-refresh, fill-height, empty-placeholder, home-dedup, and session-title-leak fixes (#74, #90, #99, #101, #102).
+
+### Chat
+- Per-message Copy/Quote/Edit actions and saved-prompt-library Duplicate/insert-as-quote (#118, #119); a chat UI refresh and canvas-history/face/topbar handling (#87, #121); viewport/scroll-height and prompt-picker DOM fixes (#94, #97, #104).
+
+### Agent core, providers & tools
+- Anthropic prompt caching, general provider fallback for the main turn, and an `execute_code` tool that orchestrates multiple tools in one turn (#107, #108, #109).
+- Lifecycle hooks (a policy layer over every tool call) and an OpenAI-compatible API surface (#112, #113).
+- Per-channel approval surfaces — approvals actionable from their origin channel (web modal / Slack Block Kit) over one channel-agnostic queue (#110).
+
+### Web chat access
+- Authenticated web/canvas sessions are exempt from the pairing-code access controller (they already passed web auth) while staying rate-limited; the streaming path now reports rate-limited vs access-denied distinctly instead of one opaque error (#129).
+
+### Dashboard
+- Agent Operations redesign: the `/` dashboard's Swarm/Stream canvas lenses are replaced by a vanilla monitoring console (KPIs, throughput/latency charts, tool & MCP health, operation log, session recap) rendered from the real `/api/ops/feed` — with a real `usage` (cost/tokens) field from the CostTracker and the dead `latency`/`session` op fields removed (#135); plus a live-operations overflow fix (#93).
+
+### Integrations
+- n8n as a first-class integration (config + boot-time MCP merge + live reconnect), MCP `authToken`/custom headers + JSON-paste import, and a collapsible Settings nav group (#70); n8n health probe (#73); MCP server-removal + config-removal-caller fixes using the new replace/delete config writers (#114, #122).
+
+### Docs & chore
+- Design-system CSS extraction, commit-strategy docs, `llms.txt`/`llms-full.txt` docs, prompt hand-off + design-note tracking, and gitignoring the design-handoff scratch folders (#92, #98, #111, #123, #126, #136); Claude GitHub Actions wiring (#95).
+
 ## [0.5.0] - 2026-06-12
 
 The first cut that matches the work: everything built since the initial `0.1.0`
@@ -76,5 +113,6 @@ framework. Grouped by theme; each entry cites the merged PR(s) it came from.
 
 - Initial Paw framework: the kernel and event bus, multi-provider AI (Claude, OpenAI, Ollama, Gemini), hybrid vector + FTS memory with auto-extraction, the on-demand skills system, plugin architecture (Slack, Web Pilot), MCP client support, the cron scheduler, the web UI, and the first live canvas.
 
+[0.6.0]: https://github.com/HBarefoot/paw/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/HBarefoot/paw/compare/v0.1.0...v0.5.0
 [0.1.0]: https://github.com/HBarefoot/paw/releases/tag/v0.1.0
