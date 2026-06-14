@@ -68,6 +68,7 @@ import { createAuthMiddleware } from "./middleware/auth.js";
 import { createSecurityHeaders } from "./middleware/security-headers.js";
 import {
 	canvasContentType,
+	canvasFileFromUrlPath,
 	injectCanvasRuntime,
 	injectCompanionLauncher,
 	shouldServeCompanion,
@@ -1991,6 +1992,28 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 </body></html>`);
 	});
 
+	// Page-scoped Assistant console — a REAL promptable chat surface loaded into
+	// the canvas admin toolbar's panel iframe (same-origin). Owner-only: NOT in
+	// PUBLIC_PREFIXES, so the auth middleware requires a session. Unlike /companion
+	// (the display-only face), this has a composer that drives a real agent turn
+	// via POST /api/canvas/stream, passing the host page path (?path=) as context.
+	app.get("/canvas/assistant", (c) => {
+		const brand = getActiveBrand(kernel.database);
+		const pal = getBrandPalette(brand);
+		const accent = pal?.accent ?? pal?.primary ?? "#7458f5";
+		const cfg = JSON.stringify({ accent }).replace(/</g, "\\u003c");
+		const v = `?v=${ASSET_VERSION}`;
+		return c.html(`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assistant</title>
+<script>(function(){function apply(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);}apply();window.addEventListener("storage",function(e){if(e.key==="paw-theme")apply();});window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",apply);})()</script>
+<link rel="stylesheet" href="/companion/static/assistant.css${v}"></head>
+<body><div id="assistant-root"></div>
+<script>window.__ASSISTANT_CONFIG=${cfg};</script>
+<script src="/companion/static/assistant.js${v}"></script>
+</body></html>`);
+	});
+
 	app.get("/fonts/:file", async (c) => {
 		const file = c.req.param("file");
 		if (!/^[a-z0-9_-]+\.woff2$/.test(file)) return c.text("Not found", 404);
@@ -2142,6 +2165,9 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		message?: string;
 		images?: Array<{ data: string; mimeType: string }>;
 		files?: Array<{ data: string; mimeType: string; name: string }>;
+		/** URL pathname of the served page the admin is viewing (from the toolbar
+		 *  Assistant), mapped to a canvas file so the agent knows which page to edit. */
+		pagePath?: string;
 	}): Promise<{
 		content: string;
 		attachments: Array<{
@@ -2265,6 +2291,12 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		}
 
 		const hasExistingFiles = canvasFilesSummary.length > 0;
+		// If the request came from the in-page Assistant toolbar, it carries the URL
+		// of the page the admin is viewing → map it to its canvas file so the agent
+		// edits the right page by default.
+		const currentPageFile = body.pagePath
+			? canvasFileFromUrlPath(body.pagePath, APP_NAMESPACE)
+			: null;
 		// Brand compliance for generated canvases: link the shared brand
 		// stylesheet (centrally restyleable) and use its CSS variables + logo.
 		const activeBrand = getActiveBrand(kernel.database);
@@ -2288,6 +2320,11 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			hasExistingFiles
 				? "The current canvas file contents are provided below. Write directly using canvas_write — do NOT call canvas_read unless you need a file not listed below."
 				: "The canvas is currently empty. Start by writing an index.html file.",
+			...(currentPageFile
+				? [
+						`CURRENT PAGE: The user is viewing "${currentPageFile}". Default any edits to that file (canvas_write to that exact path) unless they ask otherwise.`,
+					]
+				: []),
 			"Do NOT use file_write — only canvas_write works for the live preview.",
 			"Write complete, self-contained HTML files with inline CSS and JS when possible.",
 			"Organize related pages into folders with canvas_mkdir / canvas_move (e.g. 'sales-campaign/', 'blog/', 'cms/') so the workspace stays a tidy operations hub.",
@@ -2419,6 +2456,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			message: string;
 			images?: Array<{ data: string; mimeType: string }>;
 			files?: Array<{ data: string; mimeType: string; name: string }>;
+			pagePath?: string;
 		}>();
 		if (!body.message?.trim() && !body.images?.length && !body.files?.length) {
 			return c.json({ error: "Message is required" }, 400);
@@ -2480,6 +2518,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 				message: string;
 				images?: Array<{ data: string; mimeType: string }>;
 				files?: Array<{ data: string; mimeType: string; name: string }>;
+				pagePath?: string;
 			}>();
 			if (
 				!body.message?.trim() &&
