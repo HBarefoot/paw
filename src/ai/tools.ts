@@ -301,6 +301,13 @@ export class ToolRegistry {
 				return "github:admin";
 			return "github:write";
 		}
+		if (tool.name.startsWith("vercel_")) {
+			// Read = list/get/deploy_status; everything else (create_project,
+			// add_domain — irreversible, approval-gated) is write.
+			if (/^vercel_(list|get|deploy_status)/.test(tool.name))
+				return "vercel:read";
+			return "vercel:write";
+		}
 		if (tool.name === "spawn_agent") return "agent:spawn";
 		if (tool.name === "delegate_task") return "agent:delegate";
 		if (tool.name === "activate_skill") return "skill:activate";

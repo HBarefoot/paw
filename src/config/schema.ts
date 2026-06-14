@@ -322,6 +322,18 @@ export const configSchema = z.object({
 			timeout: z.number().int().positive().default(10_000),
 		})
 		.default({}),
+	vercel: z
+		.object({
+			enabled: z.boolean().default(false),
+			// API token — overlaid from vault slot `vercel.token`. Server-side only;
+			// never exposed to the model.
+			token: z.string().default(""),
+			// Optional team scope (sent as `?teamId=` on every request).
+			teamId: z.string().default(""),
+			baseUrl: z.string().default("https://api.vercel.com"),
+			timeout: z.number().int().positive().default(15_000),
+		})
+		.default({}),
 });
 
 export type ConfigSchema = z.infer<typeof configSchema>;
