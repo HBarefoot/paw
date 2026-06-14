@@ -54,6 +54,7 @@
 		// Expression inputs (real signals → the pure CompanionExpression machine).
 		this.machine = freshMachine(); // transient holds: listen/success/wince
 		this.waiting = false; // a GitHub action is pending human approval
+		this.waitingLabel = ""; // informative caption for the waiting face
 		this.unreadByKind = {}; // {skillKey: unreadCount} → badges the skill pill
 		this.agentFailedUntil = 0; // latched "worried" window after a sub-agent fails
 		this.lastActiveAt = 0; // for idle → sleepy decay
@@ -86,9 +87,11 @@
 		noteMachine(this, { type: "input", state: state }, now);
 	};
 
-	/** Ambient signal: GitHub actions awaiting human approval → "waiting". */
-	CompanionEngine.prototype.setWaiting = function (pending) {
+	/** Ambient signal: GitHub actions awaiting human approval → "waiting".
+	 *  `label` is an optional informative caption (what + how many). */
+	CompanionEngine.prototype.setWaiting = function (pending, label) {
 		this.waiting = pending > 0;
+		this.waitingLabel = this.waiting && label ? String(label) : "";
 	};
 
 	/** Per-kind unread notification counts → badges on the matching skill pills. */
@@ -138,7 +141,7 @@
 		if (typeof data.cursor === "number") this._cursor = data.cursor;
 		// Pending GitHub approvals → "waiting" (feed read-path, default 0 when off).
 		if (typeof data.pendingApprovals === "number") {
-			this.setWaiting(data.pendingApprovals);
+			this.setWaiting(data.pendingApprovals, data.pendingApprovalsLabel);
 		}
 		if (Array.isArray(data.agents)) {
 			this.agents = data.agents.map((a) => ({
@@ -336,6 +339,7 @@
 			busy: this.active.size > 0,
 			thinking: now < this.thinkingUntil,
 			waiting: this.waiting,
+			waitingLabel: this.waitingLabel,
 			agentFailed: now < this.agentFailedUntil,
 			lastActiveAt: this.lastActiveAt || now,
 		};

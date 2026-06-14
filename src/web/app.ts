@@ -59,6 +59,7 @@ import { createSecurityHeaders } from "./middleware/security-headers.js";
 import { canvasContentType, injectCanvasRuntime } from "./canvas-serve.js";
 import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
 import { createFormReceiver } from "./routes/forms.js";
+import { approvalLabel } from "../integrations/github/approvals.js";
 import { buildOpsFeed } from "./routes/ops-feed.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
 import { BrandPage } from "./views/brand-page.js";
@@ -929,6 +930,11 @@ export function createWebApp(
 	// this only adapts the kernel into its deps. Polled ~2s → `live` rate class.
 	app.get("/api/ops/feed", (c) => {
 		const since = Number.parseInt(c.req.query("since") ?? "0", 10) || 0;
+		// Actionable approvals only (stale rows are auto-expired here) so the
+		// companion's "waiting" face is honest and self-clearing.
+		const approvalRows = kernel.githubApprovals
+			? kernel.githubApprovals.actionable(liveConfig().approvals.ttlHours)
+			: [];
 		return c.json(
 			buildOpsFeed(
 				{
@@ -939,9 +945,8 @@ export function createWebApp(
 					agents: kernel.activeAgents,
 					model: currentModel(),
 					now: Date.now(),
-					pendingApprovals: kernel.githubApprovals
-						? kernel.githubApprovals.listPending().length
-						: 0,
+					pendingApprovals: approvalRows.length,
+					pendingApprovalsLabel: approvalLabel(approvalRows),
 				},
 				since,
 			),
@@ -1266,6 +1271,54 @@ export function createWebApp(
 			pushGithubEvent("approval", { id, action: row.action, status: "rejected" });
 			authManager.audit.log(
 				"github.approval.reject",
+				session?.user_id ?? null,
+				{ id, action: row.action },
+				getClientIp(c),
+			);
+			return c.json(row);
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 400);
+		}
+	});
+
+	// General approval surface (channel-agnostic). Backed by the GitHub approvals
+	// queue today; mirrors /api/github/pending but is the surface the web modal +
+	// future channels use. Resolution flows through the same approve()/reject(),
+	// so resolving here clears the companion + any other surface on next poll.
+	app.get("/api/approvals/pending", (c) => {
+		const q = kernel.githubApprovals;
+		if (!q) return c.json({ pending: [] });
+		return c.json({ pending: q.actionable(liveConfig().approvals.ttlHours) });
+	});
+
+	app.post("/api/approvals/:id/approve", async (c) => {
+		const q = kernel.githubApprovals;
+		if (!q) return c.json({ error: "Approvals unavailable" }, 400);
+		const id = c.req.param("id");
+		const session = c.get("session") as { user_id: number } | undefined;
+		try {
+			const row = await q.approve(id, `web:${session?.user_id ?? "?"}`);
+			authManager.audit.log(
+				"approval.approve",
+				session?.user_id ?? null,
+				{ id, action: row.action, status: row.status },
+				getClientIp(c),
+			);
+			return c.json(row);
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 400);
+		}
+	});
+
+	app.post("/api/approvals/:id/deny", (c) => {
+		const q = kernel.githubApprovals;
+		if (!q) return c.json({ error: "Approvals unavailable" }, 400);
+		const id = c.req.param("id");
+		const session = c.get("session") as { user_id: number } | undefined;
+		try {
+			const row = q.reject(id, `web:${session?.user_id ?? "?"}`);
+			authManager.audit.log(
+				"approval.deny",
 				session?.user_id ?? null,
 				{ id, action: row.action },
 				getClientIp(c),

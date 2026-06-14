@@ -1607,12 +1607,12 @@ export function getChatScript(): string {
   // Relay ambient "you have something for you" state (unread notifications +
   // pending GitHub approvals) into the portrait so the face/GitHub node reacts
   // even when the agent isn't actively streaming.
-  function notifyPortraitAmbient(unread, pendingApprovals, unreadByKind) {
+  function notifyPortraitAmbient(unread, pendingApprovals, unreadByKind, pendingLabel) {
     try {
       for (var i = 0; i < canvasTabs.length; i++) {
         var t = canvasTabs[i];
         if (t.path !== CANVAS_HOME_PATH || !t.iframeEl || !t.iframeEl.contentWindow) continue;
-        t.iframeEl.contentWindow.postMessage({ type: "paw:ambient", unread: unread, pendingApprovals: pendingApprovals, unreadByKind: unreadByKind || {} }, "*");
+        t.iframeEl.contentWindow.postMessage({ type: "paw:ambient", unread: unread, pendingApprovals: pendingApprovals, pendingApprovalsLabel: pendingLabel || "", unreadByKind: unreadByKind || {} }, "*");
       }
     } catch (e) {}
   }
@@ -1659,15 +1659,58 @@ export function getChatScript(): string {
   }
   var __lastNotifiedId = null;
   var __ambientFirstPoll = true;
+  var __shownApprovals = {};
+  var __approvalModalOpen = false;
+  function approvalCaption(rows) {
+    if (!rows || !rows.length) return "";
+    if (rows.length === 1) return "Waiting for your approval — " + rows[0].summary;
+    return rows.length + " actions awaiting approval";
+  }
+  function resolveApproval(id, verb) {
+    return fetch("/api/approvals/" + id + "/" + verb, { method: "POST", credentials: "same-origin" })
+      .then(function(r){ return r.json(); })
+      .then(function(){ pawModal._close(); __approvalModalOpen = false; pollAmbient(); })
+      .catch(function(){ pawModal._close(); __approvalModalOpen = false; });
+  }
+  // Web-originated approvals surface as a modal here (Slack-originated ones are
+  // handled in the Slack thread). NULL origin = legacy/web, so stuck rows show up.
+  function maybeShowApprovalModal(rows) {
+    if (__approvalModalOpen) return;
+    var row = null;
+    for (var i = 0; i < rows.length; i++) {
+      var oc = rows[i].origin_channel;
+      if ((!oc || oc === "web") && !__shownApprovals[rows[i].id]) { row = rows[i]; break; }
+    }
+    if (!row) return;
+    __shownApprovals[row.id] = true;
+    __approvalModalOpen = true;
+    var wrap = document.createElement("div");
+    var sum = document.createElement("div");
+    sum.style.fontWeight = "600";
+    sum.textContent = row.summary;
+    wrap.appendChild(sum);
+    var meta = document.createElement("div");
+    meta.className = "muted";
+    meta.style.marginTop = "6px";
+    meta.textContent = row.repo + (row.requested_by ? " · requested by " + row.requested_by : "");
+    wrap.appendChild(meta);
+    var rid = row.id;
+    pawModal._show("Approval needed", wrap, [
+      { label: "Deny", cls: "btn-cancel", danger: true, onclick: function(){ resolveApproval(rid, "deny"); } },
+      { label: "Approve", cls: "btn-primary", onclick: function(){ resolveApproval(rid, "approve"); } }
+    ]);
+  }
   function pollAmbient() {
     Promise.all([
       fetch("/api/notifications").then(function(r){ return r.json(); }).catch(function(){ return {}; }),
-      fetch("/api/github/pending").then(function(r){ return r.json(); }).catch(function(){ return {}; })
+      fetch("/api/approvals/pending").then(function(r){ return r.json(); }).catch(function(){ return {}; })
     ]).then(function(res){
       var notif = res[0] || {};
       var unread = notif.unread || 0;
-      var pending = (res[1] && res[1].pending && res[1].pending.length) || 0;
-      notifyPortraitAmbient(unread, pending, notif.unreadByKind || {});
+      var rows = (res[1] && res[1].pending) || [];
+      var pending = rows.length;
+      notifyPortraitAmbient(unread, pending, notif.unreadByKind || {}, approvalCaption(rows));
+      maybeShowApprovalModal(rows);
       // Find the newest unread; let the avatar speak it once (skip stale ones on
       // first poll so it doesn't announce everything on page load).
       var list = notif.notifications || [];

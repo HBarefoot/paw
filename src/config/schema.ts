@@ -70,6 +70,14 @@ export const configSchema = z.object({
 		decayRate: z.number().min(0).max(1).default(0.995),
 		decayThresholdDays: z.number().int().positive().default(7),
 	}),
+	// Approval surfaces (gated GitHub actions, future destructive ops). `ttlHours`
+	// auto-expires an abandoned pending row so it can't wedge the companion's
+	// "waiting" face forever.
+	approvals: z
+		.object({
+			ttlHours: z.number().positive().default(24),
+		})
+		.default({}),
 	cron: z.object({
 		enabled: z.boolean().default(true),
 		tickIntervalMs: z.number().int().positive().default(60_000),

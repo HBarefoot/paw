@@ -41,6 +41,9 @@ export const defaults: PawConfig = {
 		decayRate: 0.995,
 		decayThresholdDays: 7,
 	},
+	approvals: {
+		ttlHours: 24,
+	},
 	cron: {
 		enabled: true,
 		tickIntervalMs: 60_000,

@@ -680,11 +680,51 @@ export class Kernel {
 				const ghAudit = new AuditLogger(this.db);
 				const ghAuditFn = (action: string, details: Record<string, unknown>) =>
 					ghAudit.log(action, null, details);
-				const approvals = new GitHubApprovals(this.db, client, ghAuditFn);
+				const approvals = new GitHubApprovals(
+					this.db,
+					client,
+					ghAuditFn,
+					this.bus,
+				);
 				this.githubApprovalsInstance = approvals;
 				this.toolRegistry.register(
 					createGitHubTools(client, { audit: ghAuditFn, approvals }),
 				);
+				// Resolve approvals decided from any channel surface (e.g. Slack
+				// buttons). Authorization is done here — the plugin can't see the
+				// access controller. approve()/reject() emit `approval:resolved`.
+				this.bus.on("approval:decision", async (d) => {
+					try {
+						const authorized =
+							!this.accessController ||
+							this.accessController.isUserApproved(
+								d.actorUserId,
+								d.actorChannel,
+							);
+						const decidedBy = `${d.actorChannel}:${d.actorUserId}`;
+						if (!authorized) {
+							const row = approvals.get(d.id);
+							void this.bus.emit("approval:resolved", {
+								id: d.id,
+								status: "unauthorized",
+								decidedBy,
+								originChannel: row?.origin_channel ?? null,
+								originRef: row?.origin_ref ?? null,
+							});
+							return;
+						}
+						if (d.decision === "approve") {
+							await approvals.approve(d.id, decidedBy);
+						} else {
+							approvals.reject(d.id, decidedBy);
+						}
+					} catch (err) {
+						this.logger.warn("approval:decision failed", {
+							id: d.id,
+							error: String(err),
+						});
+					}
+				});
 				// Reactor: webhook events → durable notifications (the agent
 				// "has something for you"). Phase B adds CI auto-investigation.
 				const { startGitHubReactor } = await import(

@@ -1,4 +1,5 @@
 import { ToolRegistry } from "./tools.js";
+import { needsSessionId } from "./tool-context.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import { withRetry } from "./retry.js";
 import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
@@ -227,11 +228,7 @@ export class GeminiProvider implements AIProvider {
 				}
 
 				const toolArgs = { ...call.functionCall.args };
-				if (
-					(call.functionCall.name === "spawn_agent" ||
-						call.functionCall.name === "execute_code") &&
-					sessionId
-				) {
+				if (needsSessionId(call.functionCall.name) && sessionId) {
 					toolArgs.__sessionId = sessionId;
 				}
 				regularCalls.push({
