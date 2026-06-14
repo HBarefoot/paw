@@ -15,6 +15,13 @@ export interface InboundMessage {
 	user: { id: string; name?: string };
 	timestamp: string;
 	metadata?: Record<string, unknown>;
+	/**
+	 * True when the turn originates from a session that has already passed web
+	 * auth (password + optional TOTP). Such sessions are exempt from the
+	 * pairing-code access controller (still rate-limited). External channels
+	 * (Slack) leave this unset and stay fully gated.
+	 */
+	authenticated?: boolean;
 }
 
 export interface OutboundMessage {

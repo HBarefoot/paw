@@ -79,6 +79,12 @@ import type {
 import { createWebApp } from "../web/app.js";
 import { startWebServer } from "../web/server.js";
 import { EventBus } from "./bus.js";
+import {
+	type GateReason,
+	evaluateInboundGate,
+	gateDenialMessage,
+	isAccessExempt,
+} from "./inbound-gate.js";
 import { discoverPlugins } from "./plugin-loader.js";
 import { Sandbox } from "./sandbox.js";
 
@@ -1401,9 +1407,10 @@ export class Kernel {
 			}
 		}
 
-		// Access control (pairing code system) — skip for internal channels
+		// Access control (pairing code system) — skip for internal channels and
+		// for authenticated web sessions (they already passed web auth).
 		if (
-			!isInternal &&
+			!isAccessExempt(msg, isInternal) &&
 			this.accessController &&
 			!this.accessController.isUserApproved(msg.user.id, msg.channel)
 		) {
@@ -1776,29 +1783,28 @@ export class Kernel {
 		}
 	}
 
-	private async prepareChat(msg: InboundMessage): Promise<{
-		messages: ChatMessage[];
-		systemPrompt: string;
-	} | null> {
+	private async prepareChat(msg: InboundMessage): Promise<
+		| {
+				messages: ChatMessage[];
+				systemPrompt: string;
+		  }
+		| { denied: GateReason; retryAfterMs?: number }
+	> {
 		// Internal system channels (cron, heartbeat) bypass rate limiting and access control
 		const INTERNAL_CHANNELS = new Set(["cron", "heartbeat", "github", "api"]);
 		const isInternal = INTERNAL_CHANNELS.has(msg.channel);
 
-		// Rate limiting (skip for internal channels)
-		if (!isInternal && this.rateLimiter) {
-			const { allowed } = this.rateLimiter.check(msg.user.id);
-			if (!allowed) {
-				return null;
-			}
-		}
-
-		// Access control (pairing code system) — skip for internal channels
-		if (
-			!isInternal &&
-			this.accessController &&
-			!this.accessController.isUserApproved(msg.user.id, msg.channel)
-		) {
-			return null;
+		// Single gate: rate limiting then access control, with the reason kept
+		// distinct so the streaming caller can report which one fired.
+		const gate = evaluateInboundGate(msg, {
+			isInternal,
+			rateLimiter: this.rateLimiter,
+			accessController: this.accessController,
+		});
+		if (!gate.ok) {
+			return gate.reason === "rate_limited"
+				? { denied: "rate_limited", retryAfterMs: gate.retryAfterMs }
+				: { denied: "access_denied" };
 		}
 
 		const session = getOrCreateSession(
@@ -1947,8 +1953,24 @@ export class Kernel {
 		});
 
 		const prepared = await this.prepareChat(msg);
-		if (!prepared) {
-			yield { type: "error", error: "Access denied or rate limited" };
+		if ("denied" in prepared) {
+			// De-conflated: report rate-limiting and access denial distinctly so
+			// prod logs/clients can tell which gate fired (the streaming path used
+			// to emit a single opaque "Access denied or rate limited").
+			this.logger.warn(
+				prepared.denied === "rate_limited"
+					? "Stream rate limited"
+					: "Stream access denied",
+				{
+					user: msg.user.id,
+					channel: msg.channel,
+					retryAfterMs: prepared.retryAfterMs,
+				},
+			);
+			yield {
+				type: "error",
+				error: gateDenialMessage(prepared.denied, prepared.retryAfterMs),
+			};
 			yield { type: "done" };
 			return;
 		}
