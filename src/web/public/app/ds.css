@@ -11,120 +11,158 @@
   /* ===== RESET ===== */
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-  /* ===== DESIGN TOKENS — LIGHT (default) =====
-     Paw "control-room" design system. Violet accent, Geist type.
-     Token NAMES are preserved app-wide; only values change. */
-  :root {
-    --bg-primary: #ffffff;      /* bg-1 panel */
-    --bg-secondary: #f7f7f9;    /* bg-0 canvas */
-    --bg-tertiary: #f1f1f4;     /* bg-3 input/hover */
-    --bg-card: #ffffff;         /* bg-2 card/raised */
-    --bg-input: #ffffff;
-    --bg-hover: #f1f1f4;
-    --bg-active: #e8e8ec;       /* bg-4 pressed */
-    --bg-sidebar: #f7f7f9;
+  /* ===== Vendored fonts (offline / CSP-clean — served from 'self', no CDN) ===== */
+  @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/space-grotesk-400.woff2") format("woff2"); }
+  @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/space-grotesk-500.woff2") format("woff2"); }
+  @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/space-grotesk-600.woff2") format("woff2"); }
+  @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/space-grotesk-700.woff2") format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/jetbrains-mono-400.woff2") format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/jetbrains-mono-500.woff2") format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/jetbrains-mono-600.woff2") format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/jetbrains-mono-700.woff2") format("woff2"); }
 
-    --border-primary: #e7e7ec;
-    --border-secondary: #f0f0f3;
-    --border-strong: #d4d4dc;
-    --border-focus: rgba(106,75,240,0.28);
+  /* ===== DESIGN TOKENS — LIGHT (default) =====
+     Barefoot Digital design system — dark-terminal / emerald. Token NAMES are
+     preserved app-wide (every page restyles via these); the design's own
+     vocabulary (--green/--panel/--ink/--line/--sans…) is aliased onto them at
+     the bottom of this block so it follows the theme automatically. Light is a
+     derived variant; dark (below) is the native look. */
+  :root {
+    --bg-primary: #f4f7f5;      /* page ground */
+    --bg-secondary: #ffffff;    /* panel */
+    --bg-tertiary: #eef2ef;     /* input / hover */
+    --bg-card: #ffffff;         /* raised card */
+    --bg-input: #ffffff;
+    --bg-hover: #eef2ef;
+    --bg-active: #e3ebe6;       /* pressed */
+    --bg-sidebar: #eef2ef;
+
+    --border-primary: rgba(20,80,55,0.12);
+    --border-secondary: rgba(20,80,55,0.07);
+    --border-strong: rgba(20,80,55,0.22);
+    --border-focus: rgba(21,163,106,0.35);
     /* alias: some pages reference --border directly */
     --border: var(--border-primary);
 
-    --text-primary: #14151a;
-    --text-secondary: #54565f;
-    --text-tertiary: #82858e;
-    --text-disabled: #b0b2ba;
-    --text-inverse: #ffffff;
+    --text-primary: #0c130f;
+    --text-secondary: #1f2a24;
+    --text-tertiary: #5c6b62;
+    --text-disabled: #8a978f;
+    --text-inverse: #04130c;
     /* alias: some pages reference --text-muted directly */
     --text-muted: var(--text-tertiary);
 
-    /* Accent — violet */
-    --accent: #6a4bf0;
-    --accent-hover: #5b3bea;
-    --accent-press: #4f2fdf;
-    --accent-bright: #7c5cff;   /* links / code / data / focus */
-    --accent-subtle: rgba(106,75,240,0.10);
-    --accent-line: rgba(106,75,240,0.28);
-    --accent-gradient: linear-gradient(150deg, #7c5cff, #6a4bf0 55%, #4f2fdf);
+    /* Accent — emerald (deeper on light for AA contrast) */
+    --accent: #15a36a;
+    --accent-hover: #138a5b;
+    --accent-press: #0f7049;
+    --accent-bright: #12b886;   /* links / code / data / focus */
+    --accent-subtle: rgba(21,163,106,0.10);
+    --accent-line: rgba(21,163,106,0.28);
+    --accent-gradient: linear-gradient(150deg, #2bbd78, #15a36a 55%, #0f7049);
     /* foreground for text/icons sitting ON an accent fill — brand theme
-       overrides this to dark on light accents (see renderBrandAppThemeCss) */
+       overrides this on light accents (see renderBrandAppThemeCss) */
     --accent-fg: #ffffff;
 
-    --success: #16a36a;
-    --success-bg: rgba(22,163,106,0.12);
-    --error: #e5484d;
-    --error-bg: rgba(229,72,77,0.12);
+    --success: #15a36a;
+    --success-bg: rgba(21,163,106,0.12);
+    --error: #d6483b;
+    --error-bg: rgba(214,72,59,0.12);
     /* alias for ds "danger" semantic */
     --danger: var(--error);
     --danger-bg: var(--error-bg);
     --warning: #c98a06;
     --warning-bg: rgba(201,138,6,0.12);
-    --info: #2f7ce0;
-    --info-bg: rgba(47,124,224,0.12);
+    --info: #2390a0;
+    --info-bg: rgba(35,144,160,0.12);
 
-    --shadow-sm: 0 1px 2px rgba(20,21,26,.06);
-    --shadow-md: 0 8px 24px -8px rgba(20,21,26,.12);
-    --shadow-lg: 0 24px 60px -14px rgba(20,21,26,.18);
-    --glow: 0 0 0 1px var(--accent-line), 0 12px 40px -10px rgba(106,75,240,.30);
+    --shadow-sm: 0 1px 2px rgba(8,20,14,.06);
+    --shadow-md: 0 8px 24px -8px rgba(8,20,14,.12);
+    --shadow-lg: 0 24px 60px -14px rgba(8,20,14,.18);
+    --glow: 0 0 0 1px var(--accent-line), 0 12px 40px -10px rgba(21,163,106,.30);
 
-    --radius-sm: 6px;
-    --radius-md: 9px;
+    --radius-sm: 8px;
+    --radius-md: 12px;
     --radius-lg: 13px;
     --radius-full: 9999px;
 
-    --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    --font-mono: "Geist Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+    --font-sans: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
 
-    --sidebar-width: 240px;
-    --sidebar-collapsed: 64px;
+    --sidebar-width: 244px;
+    --sidebar-collapsed: 70px;
     --transition: 150ms ease;
+
+    /* ===== Barefoot Digital vocabulary — aliased onto paw tokens (var() resolves
+       at use time, so these follow the active theme without redefinition) ===== */
+    --green: var(--accent);
+    --green-soft: #2bbd78;
+    --green-deep: #15643f;
+    --cyan: var(--info);
+    --amber: var(--warning);
+    --red: var(--error);
+    --violet: #9a86e6;
+    --panel: var(--bg-secondary);
+    --panel-2: var(--bg-card);
+    --panel-3: var(--bg-tertiary);
+    --ink: var(--text-secondary);
+    --ink-bright: var(--text-primary);
+    --ink-dim: var(--text-tertiary);
+    --ink-faint: var(--text-disabled);
+    --line: var(--border-primary);
+    --line-2: var(--border-strong);
+    --sans: var(--font-sans);
+    --mono: var(--font-mono);
+    --r: var(--radius-md);
+    --r-sm: var(--radius-sm);
   }
 
-  /* ===== DARK THEME — the control-room hero ===== */
+  /* ===== DARK THEME — the Barefoot Digital hero (native look) =====
+     Only paw token VALUES change here; the --green/--panel/--ink… aliases defined
+     in :root resolve to these automatically. */
   :root.dark {
-      --bg-primary: #08090b;    /* bg-0 canvas */
-      --bg-secondary: #0e0f13;  /* bg-1 panel */
-      --bg-tertiary: #1c1e24;   /* bg-3 input/hover */
-      --bg-card: #15161b;       /* bg-2 card/raised */
-      --bg-input: #0e0f13;
-      --bg-hover: #1c1e24;
-      --bg-active: #25272e;     /* bg-4 pressed */
-      --bg-sidebar: #08090b;
+      --bg-primary: #050708;    /* page ground */
+      --bg-secondary: #0a0e0f;  /* panel */
+      --bg-tertiary: #11181a;   /* input/hover */
+      --bg-card: #0d1213;       /* raised card */
+      --bg-input: #0a0e0f;
+      --bg-hover: #11181a;
+      --bg-active: #141c1e;     /* pressed */
+      --bg-sidebar: #080b0c;
 
-      --border-primary: #23252c;
-      --border-secondary: #1a1c22;
-      --border-strong: #313440;
-      --border-focus: rgba(116,88,245,0.35);
+      --border-primary: rgba(120,200,165,0.10);
+      --border-secondary: rgba(120,200,165,0.06);
+      --border-strong: rgba(120,200,165,0.18);
+      --border-focus: rgba(63,224,143,0.35);
 
-      --text-primary: #f4f5f7;
-      --text-secondary: #a6abb5;
-      --text-tertiary: #6b7079;
-      --text-disabled: #474b53;
-      --text-inverse: #ffffff;
+      --text-primary: #eef4ef;
+      --text-secondary: #d6ddd7;
+      --text-tertiary: #7c887f;
+      --text-disabled: #4a534c;
+      --text-inverse: #04130c;
 
-      --accent: #7458f5;
-      --accent-hover: #876ef8;
-      --accent-press: #6446e8;
-      --accent-bright: #a78bfa;
-      --accent-subtle: rgba(116,88,245,0.15);
-      --accent-line: rgba(116,88,245,0.35);
-      --accent-gradient: linear-gradient(150deg, #a78bfa, #7458f5 55%, #6446e8);
-      --accent-fg: #ffffff;
+      --accent: #3fe08f;
+      --accent-hover: #54e89c;
+      --accent-press: #2bbd78;
+      --accent-bright: #3fe08f;
+      --accent-subtle: rgba(63,224,143,0.10);
+      --accent-line: rgba(63,224,143,0.28);
+      --accent-gradient: linear-gradient(150deg, #54e89c, #3fe08f 55%, #2bbd78);
+      --accent-fg: #04130c;
 
-      --success: #34d399;
-      --success-bg: rgba(52,211,153,0.14);
-      --error: #f87171;
-      --error-bg: rgba(248,113,113,0.14);
-      --warning: #fbbf24;
-      --warning-bg: rgba(251,191,36,0.14);
-      --info: #60a5fa;
-      --info-bg: rgba(96,165,250,0.14);
+      --success: #3fe08f;
+      --success-bg: rgba(63,224,143,0.14);
+      --error: #e5604d;
+      --error-bg: rgba(229,96,77,0.14);
+      --warning: #e6b248;
+      --warning-bg: rgba(230,178,72,0.14);
+      --info: #45c8d8;
+      --info-bg: rgba(69,200,216,0.14);
 
       --shadow-sm: 0 1px 2px rgba(0,0,0,.45);
       --shadow-md: 0 8px 24px -6px rgba(0,0,0,.6);
       --shadow-lg: 0 24px 60px -12px rgba(0,0,0,.7);
-      --glow: 0 0 0 1px var(--accent-line), 0 10px 40px -8px rgba(116,88,245,.45);
+      --glow: 0 0 0 1px var(--accent-line), 0 10px 40px -8px rgba(63,224,143,.40);
   }
 
   /* Smooth theme transitions */
@@ -386,7 +424,11 @@
   }
 
   .topbar {
-    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 24px;
+    min-height: 58px;
     border-bottom: 1px solid var(--border-primary);
     background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
     backdrop-filter: blur(14px);
@@ -395,12 +437,21 @@
     top: 0;
     z-index: 50;
   }
+  .topbar-tt { display: flex; flex-direction: column; gap: 2px; flex: none; min-width: 0; }
+  .topbar .crumb {
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--text-tertiary); line-height: 1.2; white-space: nowrap;
+  }
+  .topbar-sp { flex: 1; }
 
   .page-title {
-    font-size: 20px;
+    font-family: var(--font-sans);
+    font-size: 16px;
     font-weight: 600;
     color: var(--text-primary);
-    letter-spacing: -0.02em;
+    letter-spacing: 0.01em;
+    line-height: 1.15;
+    white-space: nowrap;
   }
 
   .content {
@@ -1818,3 +1869,66 @@
     .canvas-panel { min-width: 280px; width: 45%; }
     .chat-toolbar { flex-wrap: wrap; }
   }
+
+  /* ===========================================================================
+     Barefoot Digital components — the design's panel/kpi/seg/conn-pill/section
+     vocabulary (ported from the console design system) so pages can adopt the
+     richer layouts. New class names (no collision with existing chrome); all
+     theme-aware via the --panel/--ink/--line/--green aliases above.
+     ========================================================================== */
+  .panel {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-radius: var(--r);
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel-hd {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 12px 15px; border-bottom: 1px solid var(--line);
+  }
+  .panel-hd .ttl {
+    font-family: var(--sans); font-size: 12.5px; color: var(--ink-bright);
+    letter-spacing: 0.02em; display: flex; align-items: center; gap: 9px;
+  }
+  .panel-hd .ttl .ico { color: var(--green); display: inline-flex; }
+  .panel-hd .ttl .ico svg { width: 16px; height: 16px; }
+  .panel-hd .meta { font-size: 10px; letter-spacing: 0.12em; color: var(--ink-dim); text-transform: uppercase; }
+  .panel-bd { padding: 14px 15px; }
+  .panel-bd.scroll { overflow-y: auto; min-height: 0; }
+  .panel-bd.tight { padding: 0; }
+
+  .section-hd { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 2px; }
+  .section-hd h2 { font-family: var(--sans); font-weight: 600; font-size: 14px; color: var(--ink-bright); margin: 0; letter-spacing: 0.01em; }
+  .section-hd .meta { font-size: 10px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-dim); }
+
+  .kpi {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-radius: var(--r);
+    padding: 11px 13px 10px; position: relative; overflow: hidden; min-height: 92px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .kpi .k { font-size: 9.5px; letter-spacing: 0.13em; color: var(--ink-dim); text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
+  .kpi .v { font-family: var(--sans); font-size: 24px; color: var(--ink-bright); line-height: 1; }
+  .kpi .v small { font-size: 13px; color: var(--ink-dim); }
+  .kpi .foot { display: flex; align-items: center; gap: 8px; }
+  .kpi .delta { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .kpi .delta.up { color: var(--green); }
+  .kpi .delta.down, .kpi .sub { color: var(--ink-dim); }
+  .kpi .delta.bad { color: var(--red); }
+  .kpi .spark { position: absolute; right: 10px; bottom: 8px; opacity: 0.9; }
+
+  /* segmented control */
+  .seg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-tertiary); gap: 2px; }
+  .seg button { font-size: 11.5px; letter-spacing: 0.03em; color: var(--ink-dim); background: transparent; border: none; border-radius: 6px; padding: 5px 11px; cursor: pointer; transition: all .14s; }
+  .seg button:hover { color: var(--ink-bright); }
+  .seg button.on { color: var(--green); background: var(--accent-subtle); }
+
+  /* connection / status pill + dot (topbar) */
+  .conn-pill {
+    display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    border: 1px solid var(--accent-line); background: var(--accent-subtle); color: var(--green);
+  }
+  .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex: none; }
+  .conn-dot.pulse { animation: connpulse 1.8s ease-in-out infinite; }
+  @keyframes connpulse { 0%,100% { box-shadow: 0 0 0 0 var(--accent-line); } 50% { box-shadow: 0 0 0 5px transparent; } }
+  @media (prefers-reduced-motion: reduce) { .conn-dot.pulse { animation: none; } }

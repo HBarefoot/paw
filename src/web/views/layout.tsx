@@ -260,9 +260,8 @@ export const Layout: FC<LayoutProps> = ({
 			{raw(
 				`<link rel="icon" id="favicon" type="image/png" href="/favicon.png" />`,
 			)}
-			{raw(`<link rel="preconnect" href="https://fonts.googleapis.com">
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-      <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">`)}
+			{/* Fonts (Space Grotesk + JetBrains Mono) are vendored under /fonts and
+			    declared via @font-face in ds.css — no external CDN (CSP-clean, offline). */}
 			<title>{title} - Paw</title>
 			{raw(
 				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");if(localStorage.getItem("paw-sidebar-collapsed")==="1")document.documentElement.classList.add("sidebar-collapsed");window.__pawToggleSidebar=function(){var c=document.documentElement.classList.toggle("sidebar-collapsed");try{localStorage.setItem("paw-sidebar-collapsed",c?"1":"0");}catch(e){}};window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`,
@@ -398,7 +397,16 @@ export const Layout: FC<LayoutProps> = ({
 				<div class={hideTopbar ? "main-area no-topbar" : "main-area"}>
 					{hideTopbar ? null : (
 						<header class="topbar">
-							<h1 class="page-title">{title}</h1>
+							<div class="topbar-tt">
+								<div class="crumb" data-brand-name="">
+									Paw
+								</div>
+								<h1 class="page-title">{title}</h1>
+							</div>
+							<div class="topbar-sp" />
+							{raw(
+								`<span class="conn-pill"><span class="conn-dot pulse"></span>Online</span>`,
+							)}
 						</header>
 					)}
 					<main class="content">{children}</main>
