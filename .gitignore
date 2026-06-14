@@ -13,3 +13,7 @@ paw_logo_blue_border_*.jpg
 .probe/
 # Bun project — the npm lockfile shouldn't be committed (use bun.lockb)
 package-lock.json
+
+# Generated docs (served dynamically; static copies are optional)
+llms.txt
+llms-full.txt
