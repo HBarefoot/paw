@@ -54,6 +54,10 @@ export interface PawConfig {
 	approvals: {
 		ttlHours: number;
 	};
+	hooks: {
+		denyTools: string[];
+		requireApprovalTools: string[];
+	};
 	cron: {
 		enabled: boolean;
 		tickIntervalMs: number;

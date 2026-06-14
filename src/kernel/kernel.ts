@@ -12,6 +12,12 @@ import type {
 } from "../ai/base-provider.js";
 import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
 import { GeminiProvider } from "../ai/gemini-provider.js";
+import {
+	createAuditHook,
+	createGuardrailHook,
+	createMetricsHook,
+	HookManager,
+} from "../ai/hooks.js";
 import { runSchemaDrift } from "../ai/mcp-schema-drift.js";
 import { OllamaProvider } from "../ai/ollama-provider.js";
 import { OpenAIProvider } from "../ai/openai-provider.js";
@@ -96,6 +102,7 @@ export class Kernel {
 	}> = [];
 	private costTracker: CostTracker | null = null;
 	private toolLog: ToolLog | null = null;
+	private hookManager: HookManager;
 	private activeAbortControllers: Map<string, AbortController> = new Map();
 	private plugins: ChannelPlugin[] = [];
 	private config: PawConfig;
@@ -364,6 +371,28 @@ export class Kernel {
 		// outputs, duration, errors) for observability and audit.
 		this.toolLog = new ToolLog(this.db);
 		this.toolRegistry.setToolLog(this.toolLog);
+
+		// Lifecycle hooks: one extension surface on the tool-execution chokepoint.
+		// Built-ins: metrics (per-tool aggregate for the ops feed) + audit
+		// (security-relevant tool calls) + an optional config-driven guardrail.
+		this.hookManager = new HookManager(createLogger("hooks"));
+		this.toolRegistry.setHooks(this.hookManager);
+		this.hookManager.register(createMetricsHook(this.hookManager));
+		const hookAudit = new AuditLogger(this.db);
+		this.hookManager.register(
+			createAuditHook((action, details) => hookAudit.log(action, null, details)),
+		);
+		if (
+			this.config.hooks.denyTools.length > 0 ||
+			this.config.hooks.requireApprovalTools.length > 0
+		) {
+			this.hookManager.register(
+				createGuardrailHook({
+					denyTools: this.config.hooks.denyTools,
+					requireApprovalTools: this.config.hooks.requireApprovalTools,
+				}),
+			);
+		}
 
 		// Initialize memory system
 		if (config.memory.enabled) {
@@ -687,6 +716,16 @@ export class Kernel {
 					this.bus,
 				);
 				this.githubApprovalsInstance = approvals;
+				// Wire the hook layer's require-approval verdict into the queue so a
+				// blocked tool call surfaces on the same approval surfaces (#110).
+				this.hookManager.setApprovalSink((ctx, reason) =>
+					approvals.enqueueExternal({
+						summary: `${ctx.toolName} — ${reason}`,
+						params: { tool: ctx.toolName, input: ctx.input },
+						requestedBy: ctx.sessionId ?? undefined,
+						origin: ctx.origin,
+					}),
+				);
 				this.toolRegistry.register(
 					createGitHubTools(client, { audit: ghAuditFn, approvals }),
 				);
@@ -2261,6 +2300,7 @@ export class Kernel {
 		return {
 			bus: this.bus,
 			registerTools: (tools) => this.toolRegistry.register(tools),
+			hooks: this.hookManager,
 			logger,
 			config: pluginConfig as Record<string, unknown>,
 			store,
@@ -2701,6 +2741,11 @@ export class Kernel {
 	/** Read-only access to the tool registry (H-NEW-2: cron tool validation). */
 	get toolRegistryPublic(): ToolRegistry {
 		return this.toolRegistry;
+	}
+
+	/** Lifecycle hook layer (tool guardrails/metrics; plugins register here). */
+	get hooks(): HookManager {
+		return this.hookManager;
 	}
 
 	/** Strapi client for routing canvas action submissions (null if disabled). */

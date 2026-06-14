@@ -78,6 +78,14 @@ export const configSchema = z.object({
 			ttlHours: z.number().positive().default(24),
 		})
 		.default({}),
+	// Lifecycle-hook guardrail policy (the built-in config-driven gate). Both
+	// empty ⇒ inert; name tools to hard-deny or route to human approval.
+	hooks: z
+		.object({
+			denyTools: z.array(z.string()).default([]),
+			requireApprovalTools: z.array(z.string()).default([]),
+		})
+		.default({}),
 	cron: z.object({
 		enabled: z.boolean().default(true),
 		tickIntervalMs: z.number().int().positive().default(60_000),

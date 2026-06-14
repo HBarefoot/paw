@@ -44,6 +44,10 @@ export const defaults: PawConfig = {
 	approvals: {
 		ttlHours: 24,
 	},
+	hooks: {
+		denyTools: [],
+		requireApprovalTools: [],
+	},
 	cron: {
 		enabled: true,
 		tickIntervalMs: 60_000,

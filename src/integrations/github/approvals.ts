@@ -6,7 +6,11 @@ export type GitHubGatedAction =
 	| "merge_pr"
 	| "delete_branch"
 	| "close_issue"
-	| "dispatch_workflow";
+	| "dispatch_workflow"
+	// Generic non-GitHub approval (e.g. a lifecycle-hook `require-approval`
+	// verdict). Reuses the queue's delivery + resolution surfaces; not
+	// auto-executed on approve (see execute()).
+	| "external";
 
 /** Where an approval originated, so it can be delivered back to that surface. */
 export interface ApprovalOrigin {
@@ -163,6 +167,29 @@ export class GitHubApprovals {
 		return id;
 	}
 
+	/**
+	 * Enqueue a generic, non-GitHub approval (e.g. a lifecycle-hook
+	 * `require-approval` verdict). Reuses the queue's delivery (companion / web
+	 * modal / Slack) and resolution endpoints; approving it records the decision
+	 * but does not auto-execute anything (see execute() `"external"`).
+	 */
+	enqueueExternal(opts: {
+		summary: string;
+		params?: Record<string, unknown>;
+		requestedBy?: string;
+		origin?: ApprovalOrigin;
+		repo?: string;
+	}): string {
+		return this.enqueue(
+			"external",
+			opts.repo ?? "—",
+			opts.summary,
+			opts.params ?? {},
+			opts.requestedBy,
+			opts.origin,
+		);
+	}
+
 	/** Emit `approval:resolved` so every surface can sync (Slack message, companion). */
 	private emitResolved(row: PendingActionRow, decidedBy: string): void {
 		void this.bus?.emit("approval:resolved", {
@@ -315,6 +342,14 @@ export class GitHubApprovals {
 					String(p.ref),
 					p.inputs as Record<string, string> | undefined,
 				);
+			case "external":
+				// Approving an external (hook-originated) request records the human
+				// decision but does NOT re-run the blocked tool call — full
+				// re-execution on approve is a deferred follow-up. Resolves cleanly.
+				return {
+					approved: true,
+					note: "External approval recorded; tool re-execution on approve is not yet automated.",
+				};
 			default:
 				throw new Error(`Unknown gated action: ${row.action}`);
 		}
