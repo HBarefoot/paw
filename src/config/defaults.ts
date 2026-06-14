@@ -171,4 +171,11 @@ export const defaults: PawConfig = {
 		appPassword: "",
 		timeout: 10_000,
 	},
+	vercel: {
+		enabled: false,
+		token: "",
+		teamId: "",
+		baseUrl: "https://api.vercel.com",
+		timeout: 15_000,
+	},
 };

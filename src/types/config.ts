@@ -220,4 +220,11 @@ export interface PawConfig {
 		appPassword: string;
 		timeout: number;
 	};
+	vercel: {
+		enabled: boolean;
+		token: string;
+		teamId: string;
+		baseUrl: string;
+		timeout: number;
+	};
 }

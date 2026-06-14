@@ -30,6 +30,7 @@ export type VaultScope =
 	| "github"
 	| "supabase"
 	| "wordpress"
+	| "vercel"
 	| "custom";
 
 export interface VaultSecretMeta {
@@ -101,6 +102,11 @@ export const KNOWN_SECRET_SLOTS: {
 		name: "wordpress.appPassword",
 		scope: "wordpress",
 		label: "WordPress Application Password",
+	},
+	{
+		name: "vercel.token",
+		scope: "vercel",
+		label: "Vercel API token",
 	},
 ];
 
@@ -324,6 +330,9 @@ export class VaultManager {
 		});
 		apply("wordpress.appPassword", (v) => {
 			if (config.wordpress) config.wordpress.appPassword = v;
+		});
+		apply("vercel.token", (v) => {
+			if (config.vercel) config.vercel.token = v;
 		});
 
 		// Per-MCP-server bearer tokens: vault name `mcp.<server>.authToken`.
