@@ -1001,9 +1001,14 @@ export function getChatScript(): string {
           var bubble = streamBubble.wrapper.querySelector(".msg.assistant");
           if (bubble) bubble.appendChild(usageBadge);
         }
-        // Add feedback buttons if we have a message ID
-        if (doneMessageId && fullText) {
-          addFeedbackButtons(streamBubble.wrapper.querySelector(".msg.assistant"), doneMessageId, sessionId);
+        var asstBubble = streamBubble.wrapper.querySelector(".msg.assistant");
+        // Copy/Quote row (no Edit on assistant). Uses the finalized markdown source.
+        if (asstBubble && fullText) {
+          addMessageActions(asstBubble, "assistant", function() { return fullText; });
+        }
+        // Add feedback buttons (Retry/Fork/ratings) if we have a message ID.
+        if (asstBubble && doneMessageId && fullText) {
+          addFeedbackButtons(asstBubble, doneMessageId, sessionId);
         }
         localStorage.setItem(STORAGE_KEY, sessionId);
         loadSessions(true);
@@ -1094,9 +1099,7 @@ export function getChatScript(): string {
         if (!useRes.ok) return;
         var useData = await useRes.json();
         var body = (useData.prompt && useData.prompt.body) || "";
-        input.value = input.value ? input.value + "\\n\\n" + body : body;
-        autoResizeInput();
-        input.focus();
+        insertIntoComposer(body);
       };
       list.appendChild(row);
     });
@@ -1122,6 +1125,78 @@ export function getChatScript(): string {
     if (f !== "md" && f !== "html" && f !== "json") f = "md";
     window.location.href = "/api/sessions/" + encodeURIComponent(sessionId) + "/export?format=" + f;
   };
+
+  // --- Shared composer / message-action helpers (reused by openPrompts, the
+  // per-message action row, and the prompt picker) ---
+  function insertIntoComposer(textToInsert) {
+    if (!textToInsert) return;
+    input.value = input.value ? input.value + "\\n\\n" + textToInsert : textToInsert;
+    autoResizeInput();
+    input.focus();
+  }
+
+  // The single canonical quote format: prefix every line with "> ". Built with
+  // split/join (NO regex literal) to stay safe inside this template literal.
+  function buildQuote(text) {
+    var lines = String(text == null ? "" : text).split("\\n");
+    var out = [];
+    for (var i = 0; i < lines.length; i++) { out.push("> " + lines[i]); }
+    return out.join("\\n");
+  }
+
+  function copyToClipboard(text, btnEl) {
+    if (!text) return;
+    // navigator.clipboard rejects/throws on a null origin or when unsupported;
+    // the catch is the fallback (the write silently no-ops rather than erroring).
+    try { navigator.clipboard.writeText(text); } catch (e) { /* ignore */ }
+    if (btnEl) {
+      var orig = btnEl.textContent;
+      btnEl.textContent = "Copied!";
+      setTimeout(function() { btnEl.textContent = orig; }, 1200);
+    }
+  }
+
+  // A small action row appended to every message bubble: Copy + Quote always,
+  // Edit only on the user's own messages (edit re-sends as a NEW turn, never
+  // mutating stored history). getText returns the raw message text.
+  function addMessageActions(bubbleEl, role, getText) {
+    if (!bubbleEl) return;
+    var row = document.createElement("div");
+    row.className = "msg-actions";
+
+    var copyBtn = document.createElement("button");
+    copyBtn.className = "feedback-btn action-btn";
+    copyBtn.type = "button";
+    copyBtn.textContent = "Copy";
+    copyBtn.title = "Copy message text";
+    copyBtn.onclick = function() { copyToClipboard(getText(), copyBtn); };
+    row.appendChild(copyBtn);
+
+    var quoteBtn = document.createElement("button");
+    quoteBtn.className = "feedback-btn action-btn";
+    quoteBtn.type = "button";
+    quoteBtn.textContent = "Quote";
+    quoteBtn.title = "Quote this message in the composer";
+    quoteBtn.onclick = function() { insertIntoComposer(buildQuote(getText())); };
+    row.appendChild(quoteBtn);
+
+    if (role === "user") {
+      var editBtn = document.createElement("button");
+      editBtn.className = "feedback-btn action-btn";
+      editBtn.type = "button";
+      editBtn.textContent = "Edit";
+      editBtn.title = "Edit this message and re-send as a new turn";
+      editBtn.onclick = function() {
+        input.value = getText();
+        autoResizeInput();
+        input.focus();
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* ignore */ }
+      };
+      row.appendChild(editBtn);
+    }
+
+    bubbleEl.appendChild(row);
+  }
 
   function appendMsg(role, text, images, fileNames) {
     var wrapper = document.createElement("div");
@@ -1170,6 +1245,11 @@ export function getChatScript(): string {
       }
     }
 
+    // Copy/Quote (+ Edit on user messages) on every bubble — covers user
+    // messages (send + DB load) and DB-loaded assistant messages. Live
+    // assistant bubbles get theirs in finalize().
+    addMessageActions(bubble, role, function() { return text; });
+
     wrapper.appendChild(avatar);
     wrapper.appendChild(bubble);
     messagesDiv.insertBefore(wrapper, typingDiv);
@@ -1181,20 +1261,8 @@ export function getChatScript(): string {
     var bar = document.createElement("div");
     bar.className = "feedback-bar";
 
-    var copyBtn = document.createElement("button");
-    copyBtn.className = "feedback-btn action-btn";
-    copyBtn.textContent = "Copy";
-    copyBtn.title = "Copy message";
-    copyBtn.onclick = function() {
-      var md = bubbleEl.querySelector(".md-content");
-      var text = md ? (md.innerText || md.textContent || "") : "";
-      if (!text) return;
-      try { navigator.clipboard.writeText(text); } catch (e) { /* ignore */ }
-      var orig = copyBtn.textContent;
-      copyBtn.textContent = "Copied!";
-      setTimeout(function() { copyBtn.textContent = orig; }, 1200);
-    };
-
+    // Copy now lives in the unified .msg-actions row (addMessageActions), so
+    // the feedback bar keeps only its messageId-bound actions.
     var retryBtn = document.createElement("button");
     retryBtn.className = "feedback-btn action-btn";
     retryBtn.textContent = "Retry";
@@ -1267,7 +1335,6 @@ export function getChatScript(): string {
 
     upBtn.onclick = function() { sendFeedback("up"); };
     downBtn.onclick = function() { sendFeedback("down"); };
-    bar.appendChild(copyBtn);
     bar.appendChild(retryBtn);
     bar.appendChild(forkBtn);
     bar.appendChild(upBtn);
