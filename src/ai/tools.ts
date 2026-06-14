@@ -282,6 +282,11 @@ export class ToolRegistry {
 		)
 			return "canvas:write";
 		if (tool.name.startsWith("canvas_action")) return "canvas:write";
+		// Companion-driven edit tools: list is read, apply is a write (the actual
+		// mutation is human-approved + applied on approve, but the tool touches the
+		// canvas workspace).
+		if (tool.name === "canvas_list_edits") return "canvas:read";
+		if (tool.name === "canvas_apply_edit") return "canvas:write";
 		if (
 			tool.name === "create_proactive_trigger" ||
 			tool.name === "remove_proactive_trigger"

@@ -10,7 +10,10 @@ export type GitHubGatedAction =
 	// Generic non-GitHub approval (e.g. a lifecycle-hook `require-approval`
 	// verdict). Reuses the queue's delivery + resolution surfaces; not
 	// auto-executed on approve (see execute()).
-	| "external";
+	| "external"
+	// Canvas inline edit requested by the agent — applied (anchor-splice) on
+	// approve via a registered executor (see registerExecutor / execute()).
+	| "canvas_apply_edit";
 
 /** Where an approval originated, so it can be delivered back to that surface. */
 export interface ApprovalOrigin {
@@ -116,15 +119,49 @@ function safeParse(s: string): Record<string, unknown> | null {
  * canvas_submissions inbox.
  */
 export class GitHubApprovals {
+	private readonly db: Database;
+	private readonly audit?: (
+		action: string,
+		details: Record<string, unknown>,
+	) => void;
+	private readonly bus?: EventBus;
+	// `client` is optional: the queue is constructed ALWAYS (even when the GitHub
+	// integration is off) so non-GitHub gated actions (e.g. canvas edits) have a
+	// home; the client is attached via setClient() when GitHub is configured and
+	// is only needed to execute GitHub actions.
+	private client?: GitHubClient;
+	// Execute-on-approve seam: action → executor. Lets non-GitHub gated actions
+	// (canvas edits, future tools) actually run their effect when a human
+	// approves, without coupling their logic into this module.
+	private readonly executors = new Map<
+		string,
+		(row: PendingActionRow) => Promise<unknown>
+	>();
+
 	constructor(
-		private readonly db: Database,
-		private readonly client: GitHubClient,
-		private readonly audit?: (
-			action: string,
-			details: Record<string, unknown>,
-		) => void,
-		private readonly bus?: EventBus,
-	) {}
+		db: Database,
+		client?: GitHubClient,
+		audit?: (action: string, details: Record<string, unknown>) => void,
+		bus?: EventBus,
+	) {
+		this.db = db;
+		this.client = client;
+		this.audit = audit;
+		this.bus = bus;
+	}
+
+	/** Attach the GitHub client once the integration is configured. */
+	setClient(client: GitHubClient): void {
+		this.client = client;
+	}
+
+	/** Register an execute-on-approve handler for a (non-GitHub) action. */
+	registerExecutor(
+		action: string,
+		fn: (row: PendingActionRow) => Promise<unknown>,
+	): void {
+		this.executors.set(action, fn);
+	}
 
 	/** Queue an action for approval. Returns the new pending-action id. */
 	enqueue(
@@ -323,7 +360,15 @@ export class GitHubApprovals {
 
 	/** Dispatch the approved action to the live GitHub client. */
 	private async execute(row: PendingActionRow): Promise<unknown> {
+		// Registered execute-on-approve handlers win (canvas edits, future tools).
+		const executor = this.executors.get(row.action);
+		if (executor) return executor(row);
+
 		const p = row.params;
+		// All remaining branches are GitHub actions; they need the client.
+		if (!this.client) {
+			throw new Error(`No executor for action "${row.action}".`);
+		}
 		switch (row.action) {
 			case "merge_pr":
 				return this.client.mergePr(
