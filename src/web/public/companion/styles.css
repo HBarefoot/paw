@@ -738,3 +738,228 @@ body {
 		transition: none !important;
 	}
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * Skill inbox + approve/decline  (feat/companion-inbox-approvals)
+ * Additive block — uses the theme tokens above, so it's light/dark correct with
+ * no extra work. NOTE (prototype gotcha): a backgrounded iframe freezes CSS
+ * entrance animations at their 0% frame, so the panel must REST VISIBLE — it
+ * shows/hides via [hidden], never an opacity:0/scale(0) keyframe.
+ * ════════════════════════════════════════════════════════════════════════════ */
+.wrap-dock .pill {
+	cursor: pointer;
+}
+.inbox-panel {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	z-index: 20;
+	width: 320px;
+	max-width: calc(100% - 24px);
+	max-height: calc(100% - 24px);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	background: var(--bg);
+	color: var(--text);
+	border: 1px solid var(--pill-border);
+	border-radius: 14px;
+	box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+	font-size: 13px;
+}
+.inbox-panel[hidden] {
+	display: none;
+}
+.inbox-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 11px 12px;
+	border-bottom: 1px solid var(--pill-border);
+	flex-shrink: 0;
+}
+.inbox-title {
+	font-weight: 600;
+	color: var(--text);
+}
+.inbox-header-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.inbox-mark-all {
+	border: 0;
+	background: transparent;
+	color: var(--accent);
+	font-size: 11.5px;
+	cursor: pointer;
+	padding: 4px 6px;
+	border-radius: 7px;
+}
+.inbox-mark-all:hover {
+	background: var(--a12);
+}
+.inbox-close {
+	border: 0;
+	background: transparent;
+	color: var(--muted);
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 2px 6px;
+	border-radius: 7px;
+}
+.inbox-close:hover {
+	background: var(--a12);
+	color: var(--text);
+}
+.inbox-list {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px;
+}
+.inbox-empty {
+	color: var(--muted);
+	text-align: center;
+	padding: 22px 10px;
+	font-size: 12px;
+}
+.inbox-item {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 9px 10px;
+	border-radius: 10px;
+}
+.inbox-notif {
+	background: transparent;
+}
+.inbox-notif.unread {
+	background: var(--pill-bg);
+	cursor: pointer;
+}
+.inbox-notif.unread:hover {
+	background: var(--a16);
+}
+.inbox-glyph {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+.inbox-glyph.glyph-done {
+	background: var(--accent);
+	box-shadow: 0 0 6px var(--a80);
+}
+/* Needs-attention is a hollow ring (shape, not colour alone — colour-blind safe). */
+.inbox-glyph.glyph-needs {
+	background: transparent;
+	border: 2px solid var(--danger-text);
+}
+.inbox-item-body {
+	flex: 1;
+	min-width: 0;
+}
+.inbox-item-title {
+	color: var(--text);
+	font-size: 13px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.inbox-item-detail {
+	color: var(--muted);
+	font-size: 11px;
+	margin-top: 2px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.inbox-item-ts {
+	color: var(--faint);
+	font-family: var(--mono);
+	font-size: 10px;
+	flex-shrink: 0;
+}
+.inbox-unread-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--accent);
+	flex-shrink: 0;
+}
+/* Approvals need a decision, not just a read → distinct card + buttons. */
+.inbox-approval {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 9px;
+	border: 1px solid var(--pill-border);
+	background: var(--op-bg);
+}
+.inbox-approval.in-flight {
+	opacity: 0.7;
+}
+.inbox-approval-actions {
+	display: flex;
+	gap: 8px;
+}
+.inbox-btn {
+	flex: 1;
+	padding: 7px 12px;
+	border-radius: 8px;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.inbox-btn[disabled] {
+	opacity: 0.5;
+	cursor: default;
+}
+.inbox-approve {
+	border: 0;
+	background: var(--accent);
+	color: var(--on-accent);
+}
+.inbox-decline {
+	background: transparent;
+	color: var(--text);
+	border: 1px solid var(--pill-border);
+}
+.inbox-fallback-chip {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	z-index: 19;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-family: var(--mono);
+	font-size: 10.5px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text);
+	background: var(--pill-bg);
+	border: 1px solid var(--pill-border);
+	border-radius: 999px;
+	padding: 6px 12px;
+	cursor: pointer;
+}
+.inbox-fallback-chip[hidden] {
+	display: none;
+}
+/* Narrow widths: dock the panel as a bottom sheet. */
+@media (max-width: 520px) {
+	.inbox-panel {
+		top: auto;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		width: auto;
+		max-width: none;
+		max-height: 62%;
+		border-radius: 14px 14px 0 0;
+	}
+}

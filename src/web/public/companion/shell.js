@@ -19,6 +19,7 @@
 	const R = window.CompanionRouter;
 	const E = window.CompanionExpression;
 	const SP = window.CompanionSpring;
+	const INBOX = window.CompanionInbox;
 	const SVGNS = "http://www.w3.org/2000/svg";
 	const DEFAULT_SUBTITLE =
 		"Ask me to build something and it'll show up right here.";
@@ -465,6 +466,53 @@
 				f.talkOpen = false;
 				av.classList.remove("speaking");
 			}
+		}
+
+		// ── skill inbox + approve/decline ──
+		// Clicking a skill pill opens an inbox of that skill's notifications +
+		// pending approvals. The companion is same-origin, so the controller talks
+		// to /api/* directly; badges flow back through the engine (the single source
+		// renderBadges reads) so a live paw:ambient tick reconciles by REPLACE.
+		const inbox =
+			INBOX && INBOX.create
+				? INBOX.create({
+						doc: root.ownerDocument,
+						host: root,
+						fetch: (u, o) => window.fetch(u, o),
+						getSkills: () => engine.getState().skills || [],
+						getUnreadByKind: () => engine.getState().unreadByKind || {},
+						setUnreadByKind: (m) => engine.setNotifications(m),
+						setPending: (n, label) => engine.setWaiting(n, label),
+					})
+				: null;
+
+		function onDockClick(ev) {
+			if (!inbox) return;
+			const t = ev.target;
+			const pill = t && t.closest ? t.closest(".pill") : null;
+			const key = pill && pill.getAttribute("data-key");
+			if (key) inbox.open(key);
+		}
+		function onDocKeydown(ev) {
+			if (inbox && ev.key === "Escape" && inbox.isOpen()) inbox.close();
+		}
+		function onDocClick(ev) {
+			if (!inbox || !inbox.isOpen()) return;
+			const t = ev.target;
+			if (
+				t &&
+				t.closest &&
+				(t.closest(".inbox-panel") ||
+					t.closest(".pill") ||
+					t.closest(".inbox-fallback-chip"))
+			)
+				return;
+			inbox.close();
+		}
+		if (inbox) {
+			wrapDock.addEventListener("click", onDockClick);
+			root.ownerDocument.addEventListener("keydown", onDocKeydown);
+			root.ownerDocument.addEventListener("click", onDocClick);
 		}
 
 		// ── incremental render state ──
@@ -966,6 +1014,12 @@
 				engine.stop();
 				if (raf) window.cancelAnimationFrame(raf);
 				if (captionFadeTimer) clearTimeout(captionFadeTimer);
+				if (inbox) {
+					wrapDock.removeEventListener("click", onDockClick);
+					root.ownerDocument.removeEventListener("keydown", onDocKeydown);
+					root.ownerDocument.removeEventListener("click", onDocClick);
+					inbox.destroy();
+				}
 			},
 		};
 	}
