@@ -1,31 +1,13 @@
-/* Agent Ops — shared UI kit (vanilla port of the design's ui.jsx).
-   Formatting helpers, status colors, a tooltip singleton, tooltip HTML builders,
-   and the mode glyphs as inline-SVG strings. Exposed on window.OpsUI. No React,
-   no template-literal cooking (served as a real .js file from 'self'). */
-(function () {
-	"use strict";
-
-	var COLORS = {
-		green: "#3fe08f",
-		greenSoft: "#2bbd78",
-		cyan: "#45c8d8",
-		amber: "#e6b248",
-		red: "#e5604d",
-		ink: "#d6ddd7",
-		inkDim: "#7c887f",
-		inkFaint: "#4a534c",
-		line: "rgba(120,200,165,0.10)",
-		line2: "rgba(120,200,165,0.18)",
-		bg: "#050708",
-		panel: "#0a0e0f",
-	};
-
-	function statusColor(s) {
-		return s === "running" ? COLORS.cyan : s === "error" ? COLORS.red : COLORS.green;
-	}
-
+/* ===========================================================================
+   ui.js — Agent Operations shared kit (vanilla). Formatting, theme-aware
+   palette (reads CSS vars so light/dark + brand --accent flow through),
+   a tooltip singleton, tooltip HTML, header icons, and tiny DOM helpers.
+   Exposed on window.OpsUI. No React, no template-literal cooking traps.
+   =========================================================================== */
+(() => {
+	// --- formatting ----------------------------------------------------------
 	function fmtNum(n) {
-		if (n == null || isNaN(n)) return "0";
+		if (n == null || Number.isNaN(n)) return "0";
 		if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k";
 		return Math.round(n).toString();
 	}
@@ -38,144 +20,208 @@
 		return (x * 100).toFixed(x >= 0.1 ? 0 : 1) + "%";
 	}
 	function fmtClock(ms) {
-		var s = Math.floor(ms / 1000);
-		var hh = String(Math.floor(s / 3600) % 24).padStart(2, "0");
-		var mm = String(Math.floor(s / 60) % 60).padStart(2, "0");
-		var ss = String(s % 60).padStart(2, "0");
+		const s = Math.floor(ms / 1000);
+		const hh = String(Math.floor(s / 3600)).padStart(2, "0");
+		const mm = String(Math.floor(s / 60) % 60).padStart(2, "0");
+		const ss = String(s % 60).padStart(2, "0");
 		return hh + ":" + mm + ":" + ss;
 	}
+	function fmtCost(usd) {
+		if (usd == null || Number.isNaN(usd)) return "$0.00";
+		return "$" + (usd >= 1 ? usd.toFixed(2) : usd.toFixed(3));
+	}
+	function fmtDur(ms) {
+		const s = Math.floor(ms / 1000);
+		if (s < 60) return s + "s";
+		const m = Math.floor(s / 60);
+		if (m < 60) return m + "m " + (s % 60) + "s";
+		return Math.floor(m / 60) + "h " + (m % 60) + "m";
+	}
+	function fmtSince(ms) {
+		if (ms < 0 || !Number.isFinite(ms)) return "—";
+		if (ms < 1500) return "just now";
+		if (ms < 60000) return Math.round(ms / 1000) + "s ago";
+		return Math.floor(ms / 60000) + "m ago";
+	}
+	function agoMs(now, t) {
+		const d = now - t;
+		if (d < 1000) return Math.max(0, Math.round(d)) + "ms";
+		return (d / 1000).toFixed(1) + "s";
+	}
 
-	// Brand accent (hex) → rgba() for canvas fills; falls back to the design green.
-	function hexToRgba(hex, a) {
-		if (typeof hex !== "string") return "rgba(63,224,143," + a + ")";
-		var h = hex.replace("#", "");
+	// --- theme-aware palette (CSS vars → canvas colors) ----------------------
+	function cssVar(name, fallback) {
+		try {
+			const v = getComputedStyle(document.documentElement)
+				.getPropertyValue(name)
+				.trim();
+			return v || fallback;
+		} catch (_e) {
+			return fallback;
+		}
+	}
+	// Fixed semantic colors; accent + ink/grid resolve from the active theme.
+	const FIXED = { cyan: "#45c8d8", amber: "#e6b248", red: "#e5604d" };
+	function palette() {
+		return {
+			accent: cssVar("--accent", "#3fe08f"),
+			ink: cssVar("--ops-ink", "#d6ddd7"),
+			faint: cssVar("--ops-faint", "#4a534c"),
+			grid: cssVar("--ops-grid", "rgba(120,200,165,0.08)"),
+			cyan: FIXED.cyan,
+			amber: FIXED.amber,
+			red: FIXED.red,
+		};
+	}
+	function statusColor(s) {
+		return s === "running"
+			? FIXED.cyan
+			: s === "error"
+				? FIXED.red
+				: cssVar("--accent", "#3fe08f");
+	}
+	function statusLed(status) {
+		const p = palette();
+		return status === "live"
+			? p.accent
+			: status === "degraded"
+				? p.amber
+				: status === "error"
+					? p.red
+					: status === "idle"
+						? p.faint
+						: p.faint;
+	}
+	function hexA(hex, a) {
+		if (!hex || hex[0] !== "#") return hex;
+		let h = hex.slice(1);
 		if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-		var n = h.length >= 6 ? parseInt(h.slice(0, 6), 16) : NaN;
-		if (isNaN(n)) return "rgba(63,224,143," + a + ")";
-		return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+		const r = parseInt(h.slice(0, 2), 16);
+		const g = parseInt(h.slice(2, 4), 16);
+		const b = parseInt(h.slice(4, 6), 16);
+		return "rgba(" + r + "," + g + "," + b + "," + a + ")";
 	}
 
-	function esc(v) {
-		return String(v == null ? "" : v)
-			.replace(/&/g, "&amp;")
-			.replace(/</g, "&lt;")
-			.replace(/>/g, "&gt;");
+	// --- tiny DOM helpers ----------------------------------------------------
+	function esc(s) {
+		return String(s == null ? "" : s)
+			.split("&")
+			.join("&amp;")
+			.split("<")
+			.join("&lt;")
+			.split(">")
+			.join("&gt;");
+	}
+	function el(tag, attrs, children) {
+		const n = document.createElement(tag);
+		if (attrs)
+			for (const k in attrs) {
+				const v = attrs[k];
+				if (v == null || v === false) continue;
+				if (k === "class") n.className = v;
+				else if (k === "text") n.textContent = v;
+				else if (k === "html") n.innerHTML = v;
+				else if (k === "style") n.setAttribute("style", v);
+				else if (k.indexOf("on") === 0 && typeof v === "function")
+					n.addEventListener(k.slice(2), v);
+				else n.setAttribute(k, v);
+			}
+		if (children != null) {
+			const arr = Array.isArray(children) ? children : [children];
+			for (const ch of arr) {
+				if (ch == null || ch === false) continue;
+				n.appendChild(typeof ch === "string" ? document.createTextNode(ch) : ch);
+			}
+		}
+		return n;
 	}
 
-	/* Tooltip singleton — same behavior as the design's Tip. innerHTML is built
-	   only from escaped values + our own markup (no raw user strings). */
-	var Tip = (function () {
-		var el = null;
+	// --- tooltip singleton ---------------------------------------------------
+	const Tip = (() => {
+		let node = null;
 		function ensure() {
-			if (el) return el;
-			el = document.createElement("div");
-			el.className = "ops-tip";
-			el.style.display = "none";
-			document.body.appendChild(el);
-			return el;
+			if (node) return node;
+			node = document.createElement("div");
+			node.className = "ops-tip";
+			node.style.display = "none";
+			document.body.appendChild(node);
+			return node;
 		}
 		return {
-			show: function (html, x, y) {
-				var e = ensure();
+			show(html, x, y) {
+				const e = ensure();
 				e.innerHTML = html;
 				e.style.display = "block";
-				var r = e.getBoundingClientRect();
-				var nx = x + 16,
-					ny = y + 16;
+				const r = e.getBoundingClientRect();
+				let nx = x + 16;
+				let ny = y + 16;
 				if (nx + r.width > window.innerWidth - 8) nx = x - r.width - 16;
 				if (ny + r.height > window.innerHeight - 8) ny = y - r.height - 16;
 				e.style.left = nx + "px";
 				e.style.top = ny + "px";
 			},
-			hide: function () {
-				if (el) el.style.display = "none";
+			hide() {
+				if (node) node.style.display = "none";
 			},
 		};
 	})();
 
-	function row(k, v, color) {
-		var b = color ? '<b style="color:' + color + '">' + esc(v) + "</b>" : "<b>" + esc(v) + "</b>";
-		return '<div class="tr"><span>' + esc(k) + "</span>" + b + "</div>";
+	function row(k, v) {
+		return '<div class="tr"><span>' + esc(k) + "</span><b>" + v + "</b></div>";
 	}
-
-	function opTipHTML(o, engine) {
-		var t = engine.TOOL_BY_ID[o.toolId] || { label: o.toolId };
-		var st = o.status === "running" ? "running" : o.status === "error" ? "error" : "ok";
+	function opTipHTML(o, label) {
 		return (
-			'<div class="tt">' + esc(o.op) + "</div>" +
-			row("tool", t.label) +
-			row("status", st, statusColor(o.status)) +
-			row("duration", fmtMs(o.duration)) +
-			row("latency", o.latency == null ? "—" : o.latency + "ms") +
+			'<div class="tt">' +
+			esc(o.op) +
+			"</div>" +
+			row("tool", esc(label || o.toolId)) +
+			row(
+				"status",
+				'<span style="color:' + statusColor(o.status) + '">' + o.status + "</span>",
+			) +
+			row("duration", o.status === "running" ? "—" : fmtMs(o.duration)) +
 			row("tokens", fmtNum(o.tokIn) + " in · " + fmtNum(o.tokOut) + " out") +
-			(o.args ? row("arg", o.args) : "") +
-			(o.taskLabel ? row("task", o.taskLabel) : "")
+			(o.args ? row("arg", esc(o.args)) : "") +
+			(o.taskLabel ? row("task", esc(o.taskLabel)) : "")
 		);
 	}
 
-	function toolTipHTML(s) {
-		return (
-			'<div class="tt">' + esc(s.tool.label) + "</div>" +
-			row("throughput", s.tps.toFixed(1) + "/s") +
-			row("active", s.active) +
-			row("avg latency", Math.round(s.avgLatency) + "ms") +
-			row("avg duration", fmtMs(s.avgDuration)) +
-			row("errors", fmtPct(s.errorRate), s.errorRate > 0.04 ? COLORS.red : COLORS.ink)
-		);
-	}
-
-	/* Mode glyphs — geometric inline SVGs (HTML strings). 22×22 in the rail. */
-	function svg(inner) {
-		return (
-			'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" ' +
-			'stroke-linecap="round" stroke-linejoin="round" class="glyph">' + inner + "</svg>"
-		);
-	}
-	var MODE_GLYPHS = {
-		swarm: svg(
-			'<circle cx="12" cy="12" r="2.4"/><circle cx="5" cy="6" r="1.3"/>' +
-			'<circle cx="19" cy="7" r="1.3"/><circle cx="6" cy="18" r="1.3"/>' +
-			'<circle cx="18" cy="18" r="1.3"/><path d="M10 11 6 7M14 11 18 8M11 14 7 17M13 14 17 17" opacity="0.6"/>',
+	// --- header icons (inline SVG strings) -----------------------------------
+	const SVG = (d) =>
+		'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="15" height="15">' +
+		d +
+		"</svg>";
+	const icons = {
+		pulse: SVG('<path d="M3 12h4l2-6 4 12 2-6h6"/>'),
+		gauge: SVG('<path d="M5 18a8 8 0 1 1 14 0"/><path d="M12 14l4-3"/>'),
+		grid: SVG(
+			'<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
 		),
-		stream: svg(
-			'<path d="M3 7h13M3 12h18M3 17h9"/>' +
-			'<circle cx="19" cy="7" r="1.4" fill="currentColor" stroke="none"/>' +
-			'<circle cx="14" cy="17" r="1.4" fill="currentColor" stroke="none"/>',
+		list: SVG('<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>'),
+		bars: SVG('<path d="M5 20V10M12 20V4M19 20v-7"/>'),
+		link: SVG(
+			'<path d="M9 15l6-6M10.5 6.5l1-1a4 4 0 0 1 6 6l-1 1M13.5 17.5l-1 1a4 4 0 0 1-6-6l1-1"/>',
 		),
-		pipeline: svg(
-			'<circle cx="4" cy="12" r="1.8"/><circle cx="12" cy="7" r="1.8"/>' +
-			'<circle cx="12" cy="17" r="1.8"/><circle cx="20" cy="12" r="1.8"/>' +
-			'<path d="M6 11 10 8M6 13 10 16M14 8 18 11M14 16 18 13" opacity="0.7"/>',
-		),
-		matrix: svg(
-			'<rect x="3.5" y="3.5" width="5" height="5" rx="1"/>' +
-			'<rect x="10" y="3.5" width="5" height="5" rx="1" opacity="0.5"/>' +
-			'<rect x="16.5" y="3.5" width="4" height="5" rx="1"/>' +
-			'<rect x="3.5" y="10" width="5" height="5" rx="1" opacity="0.5"/>' +
-			'<rect x="10" y="10" width="5" height="5" rx="1"/>' +
-			'<rect x="16.5" y="10" width="4" height="5" rx="1" opacity="0.5"/>' +
-			'<rect x="3.5" y="16.5" width="5" height="4" rx="1"/>' +
-			'<rect x="10" y="16.5" width="5" height="4" rx="1" opacity="0.5"/>',
-		),
-		radar: svg(
-			'<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5" opacity="0.5"/>' +
-			'<path d="M12 12 19 8"/><circle cx="16" cy="9" r="1" fill="currentColor" stroke="none"/>',
-		),
-		pulse: svg('<path d="M3 12h3l2-6 3 12 3-9 2 5h5"/>'),
+		recap: SVG('<path d="M5 4h11l3 3v13H5z"/><path d="M9 12h6M9 16h6M9 8h3"/>'),
 	};
 
 	window.OpsUI = {
-		COLORS: COLORS,
-		statusColor: statusColor,
-		fmtNum: fmtNum,
-		fmtMs: fmtMs,
-		fmtPct: fmtPct,
-		fmtClock: fmtClock,
-		hexToRgba: hexToRgba,
-		esc: esc,
-		Tip: Tip,
-		opTipHTML: opTipHTML,
-		toolTipHTML: toolTipHTML,
-		MODE_GLYPHS: MODE_GLYPHS,
+		fmtNum,
+		fmtMs,
+		fmtPct,
+		fmtClock,
+		fmtCost,
+		fmtDur,
+		fmtSince,
+		agoMs,
+		palette,
+		statusColor,
+		statusLed,
+		hexA,
+		esc,
+		el,
+		Tip,
+		opTipHTML,
+		icons,
 	};
 })();
