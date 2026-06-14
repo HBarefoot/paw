@@ -9,19 +9,19 @@ interface LoginPageProps {
 	setupMode?: boolean;
 }
 
-// Paw "control-room" login — violet accent, Geist type, near-black hero.
+// Barefoot Console login — emerald accent, Space Grotesk type, near-black hero.
 // Standalone page: tokens are inlined since it doesn't load the app shell.
 const loginCss = `
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
-    --bg-0: #08090b; --bg-1: #0e0f13; --bg-2: #15161b;
-    --border: #23252c; --border-strong: #313440;
-    --text-0: #f4f5f7; --text-1: #a6abb5; --text-2: #6b7079; --text-3: #474b53;
-    --accent: #7458f5; --accent-hover: #876ef8; --accent-press: #6446e8;
-    --accent-bright: #a78bfa; --accent-soft: rgba(116,88,245,.15); --accent-line: rgba(116,88,245,.35);
-    --danger: #f87171;
-    --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    --font-mono: "Geist Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+    --bg-0: #050708; --bg-1: #0a0e0f; --bg-2: #11181a;
+    --border: #1d2422; --border-strong: #2a332f;
+    --text-0: #eef4ef; --text-1: #a6b0a9; --text-2: #6b7670; --text-3: #474f49;
+    --accent: #3fe08f; --accent-hover: #54e89c; --accent-press: #2bbd78;
+    --accent-bright: #3fe08f; --accent-soft: rgba(63,224,143,.15); --accent-line: rgba(63,224,143,.35);
+    --danger: #e5604d;
+    --font-sans: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
   }
   body {
     font-family: var(--font-sans);
@@ -73,7 +73,7 @@ const loginCss = `
     border-radius: 28%;
     background: linear-gradient(150deg, var(--accent-bright), var(--accent) 55%, var(--accent-press));
     color: #fff;
-    box-shadow: 0 8px 24px -6px rgba(116,88,245,.5), inset 0 1px 0 rgba(255,255,255,.25);
+    box-shadow: 0 8px 24px -6px rgba(63,224,143,.5), inset 0 1px 0 rgba(255,255,255,.25);
     margin-bottom: 18px;
     position: relative; overflow: hidden;
   }
@@ -133,7 +133,7 @@ const loginCss = `
   .login-btn:hover {
     background: var(--accent-hover);
     transform: translateY(-1px);
-    box-shadow: 0 0 0 1px var(--accent-line), 0 10px 40px -8px rgba(116,88,245,.45);
+    box-shadow: 0 0 0 1px var(--accent-line), 0 10px 40px -8px rgba(63,224,143,.45);
   }
   .login-btn:active {
     background: var(--accent-press);
@@ -167,7 +167,7 @@ const loginCss = `
     line-height: 1.6;
   }
   .setup-note code {
-    background: rgba(116,88,245,.2);
+    background: rgba(63,224,143,.2);
     padding: 2px 6px;
     border-radius: 5px;
     font-family: var(--font-mono);
@@ -194,7 +194,7 @@ export const LoginPage: FC<LoginPageProps> = ({
 				`<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`,
 			)}
 			<link
-				href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+				href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
 				rel="stylesheet"
 			/>
 			<title>{setupMode ? "Setup" : "Login"} - Paw</title>

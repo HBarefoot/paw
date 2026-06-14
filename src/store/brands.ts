@@ -159,9 +159,41 @@ function safeFont(v: unknown): string | null {
 function safeGoogleFontsUrl(v: unknown): string | null {
 	if (typeof v !== "string") return null;
 	const t = v.trim();
-	return /^https:\/\/fonts\.googleapis\.com\/[\w./?=:&%+-]+$/.test(t)
+	// Allow the css2 query characters '@' and ';' (e.g. ...:wght@400;500;600;700)
+	// — they're inert inside the host-locked `url("...")` and were previously
+	// rejected, silently dropping the whole @import so brand fonts never loaded.
+	return /^https:\/\/fonts\.googleapis\.com\/[\w./?=:&%+@;-]+$/.test(t)
 		? t
 		: null;
+}
+
+/**
+ * Append any configured font families (display/body/mono) that aren't already
+ * requested in a validated Google-Fonts `css2` URL, so a brand whose URL forgot
+ * a family (e.g. body "Inter" omitted) still actually loads it — otherwise
+ * `--font-sans: "Inter"` silently falls back to the system font. Only touches
+ * `/css2` URLs; anything else (already host-validated) is returned unchanged.
+ * Family order doesn't matter to Google Fonts, so missing families are appended.
+ */
+function mergeGoogleFontsFamilies(
+	url: string,
+	families: Array<string | null | undefined>,
+): string {
+	if (!url.includes("/css2")) return url;
+	const present = new Set<string>();
+	for (const m of url.matchAll(/[?&]family=([^&:]+)/g)) {
+		present.add(
+			decodeURIComponent(m[1].replace(/\+/g, " ")).trim().toLowerCase(),
+		);
+	}
+	let out = url;
+	for (const f of families) {
+		const fam = typeof f === "string" ? f.trim() : "";
+		if (!fam || present.has(fam.toLowerCase())) continue;
+		present.add(fam.toLowerCase());
+		out += `${out.includes("?") ? "&" : "?"}family=${fam.replace(/\s+/g, "+")}:wght@400;500;600;700`;
+	}
+	return out;
 }
 
 /**
@@ -203,24 +235,32 @@ export function renderBrandTokensCss(brand: Brand | null): string {
 		lines.push(`  --brand-font-body: "${body}", system-ui, sans-serif;`);
 	if (mono)
 		lines.push(`  --brand-font-mono: "${mono}", ui-monospace, monospace;`);
-	const fontImport = safeGoogleFontsUrl(f.googleFontsUrl);
+	const fontImport0 = safeGoogleFontsUrl(f.googleFontsUrl);
+	const fontImport = fontImport0
+		? mergeGoogleFontsFamilies(fontImport0, [display, body, mono])
+		: null;
 	const header = fontImport ? `@import url("${fontImport}");\n` : "";
 	return `${header}/* brand: ${brand.name.replace(/[*/]/g, "")} */\n:root {\n${lines.join("\n")}\n}\n`;
 }
 
 /**
- * App-chrome theme stylesheet: maps the active brand's palette + fonts onto the
- * Paw design-system tokens (`--accent*`, `--bg-*`, `--text-*`, `--font-*`) so
- * the whole console + auth screens re-skin to the brand. Served at
- * `/api/brand/theme.css` and `<link>`ed by the chrome `<head>`s.
+ * App-chrome theme stylesheet: maps the active brand's **accent + fonts** onto
+ * the Paw design-system tokens so the whole console + auth screens carry the
+ * brand identity. Served at `/api/brand/theme.css` and `<link>`ed by the chrome
+ * `<head>`s.
  *
- * Returns an empty (no-op) sheet when no brand is active — so the default Paw
- * look is byte-for-byte unchanged. Only emits an override for the brand keys
- * actually present, applied to BOTH `:root` and `:root.dark` (a brand defines a
- * single white-label look); tokens the brand omits keep their light/dark DS
- * behavior, so partial palettes degrade gracefully. All values are sanitized
- * (hex/rgb colors, font-name stripping, Google-Fonts-only `@import`), then only
- * composed via `var()` / `color-mix()` — no new injection surface.
+ * IMPORTANT: the brand contributes ONLY theme-agnostic identity (accent colors
+ * + fonts). The neutral grounds (`--bg-*`, `--text-*`, `--border-*`) are
+ * deliberately NOT overridden — they stay owned by the design system's `:root`
+ * (light) / `:root.dark` (dark) in ds.css, so the light/dark toggle keeps
+ * working on every page. (Previously the brand pinned its neutrals onto BOTH
+ * `:root` and `:root.dark`, which froze the toggle and made some tabs change
+ * while others didn't.) A brand wanting distinct light AND dark grounds would
+ * need a per-mode palette — not how white-label works today.
+ *
+ * Returns an empty (no-op) sheet when no brand is active. All values are
+ * sanitized (hex/rgb colors, font-name stripping, Google-Fonts-only `@import`),
+ * then only composed via `var()` / `color-mix()` — no new injection surface.
  */
 export function renderBrandAppThemeCss(brand: Brand | null): string {
 	if (!brand) return "/* no active brand */\n";
@@ -228,20 +268,15 @@ export function renderBrandAppThemeCss(brand: Brand | null): string {
 	const f = brand.data.fonts ?? {};
 	const primary = safeColor(c.primary) ?? safeColor(c.accent);
 	const accent = safeColor(c.accent) ?? primary;
-	const bg = safeColor(c.bg);
-	const surface = safeColor(c.surface) ?? bg;
-	const text = safeColor(c.text);
-	const muted = safeColor(c.muted);
 	const display = safeFont(f.display);
 	const body = safeFont(f.body);
 	const mono = safeFont(f.mono);
-	const fontImport = safeGoogleFontsUrl(f.googleFontsUrl);
+	const fontImport0 = safeGoogleFontsUrl(f.googleFontsUrl);
+	const fontImport = fontImport0
+		? mergeGoogleFontsFamilies(fontImport0, [display, body, mono])
+		: null;
 
-	// Contrast anchor for deriving hover/border shades; brand text if given.
-	const anchor = text ?? "#15161b";
-	const onSurface = surface ?? bg ?? "#ffffff";
 	const m: string[] = [];
-
 	if (accent) {
 		m.push(`--accent: ${accent};`);
 		m.push(`--accent-hover: color-mix(in srgb, ${accent} 86%, #000);`);
@@ -257,37 +292,6 @@ export function renderBrandAppThemeCss(brand: Brand | null): string {
 		// dark accents (e.g. violet), so text/icons on accent fills stay readable.
 		m.push(`--accent-fg: ${isLightColor(accent) ? "#0b0b0b" : "#ffffff"};`);
 	}
-	if (bg) {
-		m.push(`--bg-secondary: ${bg};`);
-		m.push(`--bg-sidebar: ${bg};`);
-	}
-	if (surface) {
-		m.push(`--bg-primary: ${surface};`);
-		m.push(`--bg-card: ${surface};`);
-		m.push(`--bg-input: ${surface};`);
-		m.push(`--bg-tertiary: color-mix(in srgb, ${surface} 93%, ${anchor});`);
-		m.push(`--bg-hover: color-mix(in srgb, ${surface} 93%, ${anchor});`);
-		m.push(`--bg-active: color-mix(in srgb, ${surface} 86%, ${anchor});`);
-		m.push(`--border-primary: color-mix(in srgb, ${surface} 86%, ${anchor});`);
-		m.push(
-			`--border-secondary: color-mix(in srgb, ${surface} 92%, ${anchor});`,
-		);
-		m.push(`--border-strong: color-mix(in srgb, ${surface} 74%, ${anchor});`);
-	}
-	if (text) m.push(`--text-primary: ${text};`);
-	// Secondary text tier: the brand's Muted color drives it (operator choice);
-	// fall back to a derived shade of the primary text when Muted is unset.
-	const secondary =
-		muted ?? (text ? `color-mix(in srgb, ${text} 72%, ${onSurface})` : null);
-	if (secondary) m.push(`--text-secondary: ${secondary};`);
-	// Faintest tier: a step dimmer than secondary (Muted mixed toward the
-	// surface), so the three tiers stay distinct. --text-muted aliases this.
-	const tertiary = muted
-		? `color-mix(in srgb, ${muted} 70%, ${onSurface})`
-		: text
-			? `color-mix(in srgb, ${text} 50%, ${onSurface})`
-			: null;
-	if (tertiary) m.push(`--text-tertiary: ${tertiary};`);
 	if (body)
 		m.push(
 			`--font-sans: "${body}", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;`,

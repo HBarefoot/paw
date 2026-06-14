@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import {
 	AVATAR_OPTIONS,
 	getPreferencesScript,
-} from "../../src/web/views/preferences-page.js";
+} from "../../src/web/views/settings-page.js";
 
 // PR2: a picker (/preferences) + localStorage["paw-avatar"] persistence/live-swap
 // + a curated set of robot avatars registered alongside the gel sphere.

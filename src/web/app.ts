@@ -62,6 +62,7 @@ import {
 import { createLogger } from "../observability/logger.js";
 import type { PawConfig } from "../types/config.js";
 import { ASSET_VERSION } from "./asset-version.js";
+import { metricsSnapshot, recordRequest } from "./metrics.js";
 import { CANVAS_TEMPLATES } from "./canvas-templates.js";
 import { parseUploadedFiles } from "./file-parser.js";
 import { createAuthMiddleware } from "./middleware/auth.js";
@@ -80,8 +81,7 @@ import { createOpenAiApi } from "./routes/openai-api.js";
 import { approvalLabel } from "../integrations/github/approvals.js";
 import { buildOpsFeed } from "./routes/ops-feed.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
-import { BrandPage } from "./views/brand-page.js";
-import { ConfigPage } from "./views/config-page.js";
+import { SettingsPage } from "./views/settings-page.js";
 import { VaultPage, type VaultSlotStatus } from "./views/vault-page.js";
 import { GitHubPage } from "./views/github-page.js";
 import { NotificationsPage } from "./views/notifications-page.js";
@@ -112,7 +112,6 @@ import {
 } from "../store/brands.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
 import { ToolsPage, type ToolLogRow } from "./views/tools-page.js";
-import { PreferencesPage } from "./views/preferences-page.js";
 import { PromptsPage } from "./views/prompts-page.js";
 import {
 	createPrompt,
@@ -271,8 +270,14 @@ function agentSceneNodes(kernel: Kernel): SceneNode[] {
 	try {
 		for (const name of kernel.skills.skillNames ?? [])
 			add({ key: name, label: prettifyName(name), kind: "skill" });
-		for (const s of kernel.mcpManager.getServerInfo().filter((s) => s.connected))
-			add({ key: `mcp:${s.name}`, label: prettifyName(s.name), kind: "service" });
+		for (const s of kernel.mcpManager
+			.getServerInfo()
+			.filter((s) => s.connected))
+			add({
+				key: `mcp:${s.name}`,
+				label: prettifyName(s.name),
+				kind: "service",
+			});
 		if (kernel.strapi) add({ key: "strapi", label: "Strapi", kind: "service" });
 	} catch {
 		/* fresh DB / not-ready subsystems → render what we have */
@@ -337,7 +342,12 @@ function summarizeGithubWebhook(
 		}
 		case "workflow_run": {
 			const wr = payload.workflow_run as
-				| { name?: string; status?: string; conclusion?: string; html_url?: string }
+				| {
+						name?: string;
+						status?: string;
+						conclusion?: string;
+						html_url?: string;
+				  }
 				| undefined;
 			return {
 				repo,
@@ -434,6 +444,13 @@ export function createWebApp(
 
 	// Request logging
 	app.use("*", honoLogger());
+
+	// Real request-rate counter for the Heartbeat console (req/s). Cheap; pushes
+	// a timestamp into a rolling 60s window. No-op beyond that.
+	app.use("*", (c, next) => {
+		recordRequest();
+		return next();
+	});
 
 	// Security headers
 	app.use("*", createSecurityHeaders(config.web.tls.enabled, { canvasRoot }));
@@ -941,10 +958,7 @@ export function createWebApp(
 		const turns: Array<{ model: string; tokens: number; ts: string }> = [];
 		try {
 			const recent = kernel.database
-				.query<
-					{ model: string; tokens: number; created_at: string },
-					[number]
-				>(
+				.query<{ model: string; tokens: number; created_at: string }, [number]>(
 					"SELECT model, (input_tokens + output_tokens) AS tokens, created_at FROM usage_log ORDER BY id DESC LIMIT ?",
 				)
 				.all(5);
@@ -956,8 +970,7 @@ export function createWebApp(
 				.sort()
 				.pop();
 			if (newest) {
-				const age =
-					Date.now() - Date.parse(`${newest.replace(" ", "T")}Z`);
+				const age = Date.now() - Date.parse(`${newest.replace(" ", "T")}Z`);
 				working = Number.isFinite(age) && age < 12_000;
 			}
 		} catch {
@@ -1225,7 +1238,10 @@ export function createWebApp(
 		authManager.audit.log(
 			"github.settings",
 			session?.user_id ?? null,
-			{ enabled: gh.enabled, repoCount: (gh.repoAllowlist as string[])?.length },
+			{
+				enabled: gh.enabled,
+				repoCount: (gh.repoAllowlist as string[])?.length,
+			},
 			getClientIp(c),
 		);
 		return c.json({ saved: true, restartRequired: true });
@@ -1333,7 +1349,11 @@ export function createWebApp(
 		const session = c.get("session") as { user_id: number } | undefined;
 		try {
 			const row = q.reject(id, String(session?.user_id ?? "web"));
-			pushGithubEvent("approval", { id, action: row.action, status: "rejected" });
+			pushGithubEvent("approval", {
+				id,
+				action: row.action,
+				status: "rejected",
+			});
 			authManager.audit.log(
 				"github.approval.reject",
 				session?.user_id ?? null,
@@ -1418,7 +1438,8 @@ export function createWebApp(
 		if (!kernel.github) return c.json({ error: "GitHub not configured" }, 400);
 		const repo = c.req.query("repo") || "";
 		const number = Number.parseInt(c.req.query("number") || "0", 10);
-		if (!repo || !number) return c.json({ error: "repo and number required" }, 400);
+		if (!repo || !number)
+			return c.json({ error: "repo and number required" }, 400);
 		try {
 			const diff = await kernel.github.getPrDiff(repo, number);
 			return c.json({ diff });
@@ -1658,18 +1679,29 @@ export function createWebApp(
 		}));
 	}
 
-	app.get("/config", (c) => {
-		return c.html(
-			ConfigPage({
-				config: liveConfig(),
-				...getIcpConfig(),
-				agents: getAgentEntries(),
-				secrets: computeSecretStatuses(),
-			}),
-		);
+	// Common props for the consolidated Settings page (config + brand + avatar).
+	function settingsBase() {
+		return {
+			config: liveConfig(),
+			...getIcpConfig(),
+			agents: getAgentEntries(),
+			secrets: computeSecretStatuses(),
+			brands: listBrands(kernel.database),
+			defaultAvatar: liveConfig().companion?.avatar ?? "gel",
+		};
+	}
+
+	app.get("/settings", (c) => {
+		return c.html(SettingsPage(settingsBase()));
 	});
 
-	app.post("/config", async (c) => {
+	// The former /config, /brand and /preferences pages are consolidated into
+	// /settings — redirect any bookmarks.
+	app.get("/config", (c) => c.redirect("/settings"));
+	app.get("/brand", (c) => c.redirect("/settings"));
+	app.get("/preferences", (c) => c.redirect("/settings"));
+
+	app.post("/settings", async (c) => {
 		try {
 			const body = await c.req.parseBody();
 			const overrides: Record<string, unknown> = {};
@@ -1696,11 +1728,9 @@ export function createWebApp(
 				// Block sensitive fields
 				if (BLOCKED_CONFIG_FIELDS.has(key)) {
 					return c.html(
-						ConfigPage({
-							config: liveConfig(),
+						SettingsPage({
+							...settingsBase(),
 							error: `Field "${key}" cannot be modified through the web UI`,
-							...getIcpConfig(),
-							agents: getAgentEntries(),
 						}),
 					);
 				}
@@ -1807,24 +1837,10 @@ export function createWebApp(
 			// already persist).
 			replaceConfigOverride("agents", agentsConfig);
 			saveConfigOverrides(overrides);
-			return c.html(
-				ConfigPage({
-					config: liveConfig(),
-					saved: true,
-					...getIcpConfig(),
-					agents: getAgentEntries(),
-				}),
-			);
+			return c.html(SettingsPage({ ...settingsBase(), saved: true }));
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			return c.html(
-				ConfigPage({
-					config: liveConfig(),
-					error: message,
-					...getIcpConfig(),
-					agents: getAgentEntries(),
-				}),
-			);
+			return c.html(SettingsPage({ ...settingsBase(), error: message }));
 		}
 	});
 
@@ -3293,7 +3309,13 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		};
 		const success = c.req.query("success") ? "Configuration saved." : undefined;
 		return c.html(
-			HeartbeatPage({ lastResult, history, config: hbConfig, success }),
+			HeartbeatPage({
+				lastResult,
+				history,
+				config: hbConfig,
+				success,
+				metrics: metricsSnapshot(kernel.database),
+			}),
 		);
 	});
 
@@ -3312,6 +3334,11 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 	app.get("/api/heartbeat/status", (c) => {
 		const lastResult = kernel.heartbeat?.lastResult ?? null;
 		return c.json({ enabled: config.heartbeat.enabled, lastResult });
+	});
+
+	// Live, REAL runtime metrics for the Heartbeat console KPIs (polled).
+	app.get("/api/heartbeat/metrics", (c) => {
+		return c.json(metricsSnapshot(kernel.database));
 	});
 
 	app.post("/api/heartbeat/config", async (c) => {
@@ -3445,22 +3472,9 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		return c.html(SubmissionsPage({ actions, submissions, actionFilter }));
 	});
 
-	app.get("/brand", (c) => {
-		return c.html(BrandPage({ brands: listBrands(kernel.database) }));
-	});
-
 	app.get("/prompts", (c) => {
 		const prompts = listPrompts(kernel.database, 200);
 		return c.html(PromptsPage({ prompts }));
-	});
-
-	app.get("/preferences", (c) => {
-		return c.html(
-			PreferencesPage({
-				defaultAvatar: config.companion?.avatar ?? "gel",
-				currentPath: "/preferences",
-			}),
-		);
 	});
 
 	app.get("/api/prompts", (c) => {
@@ -3899,7 +3913,8 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			expression = String(body.expression ?? "");
 			actionType = String(body.actionType ?? "prompt");
 			payload = String(body.payload ?? "");
-			toolArgs = body.toolArgs === undefined ? undefined : String(body.toolArgs);
+			toolArgs =
+				body.toolArgs === undefined ? undefined : String(body.toolArgs);
 		}
 
 		// Render the page with an error for form posts; JSON for API callers.

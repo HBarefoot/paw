@@ -45,7 +45,6 @@ export function pawMark(size = 17): string {
 	return `<svg class="paw" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="6.4" cy="9.2" rx="2.05" ry="2.6"/><ellipse cx="10.2" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="13.9" cy="6.1" rx="2.15" ry="2.85"/><ellipse cx="17.7" cy="9.2" rx="2.05" ry="2.6"/><path d="M12 11.4c-3 0-5.6 2.2-5.6 4.9 0 2.1 1.8 3 3.4 3 1 0 1.5-.4 2.2-.4s1.2.4 2.2.4c1.6 0 3.4-.9 3.4-3 0-2.7-2.6-4.9-5.6-4.9Z"/></svg>`;
 }
 
-
 const modalScript = `
 window.pawModal = {
   _overlay: null,
@@ -180,6 +179,40 @@ document.addEventListener("keydown", function(e) {
 });
 `;
 
+// Lightweight global toast. Plain DOM; the icon SVGs come from a trusted
+// internal map (never user data), so innerHTML on the icon span is safe. No
+// backslash escapes — this whole string is injected via a template literal
+// (the inline-script-template-trap). Any page can call window.pawToast(msg, icon).
+const toastScript = `
+window.pawToast = function(msg, icon) {
+  var wrap = document.getElementById("toast-wrap");
+  if (!wrap) return;
+  var ICONS = {
+    check: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>',
+    play: '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><path d="M6 4l14 8-14 8z"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+    download: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>',
+    send: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>',
+    calendar: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-9 8.5 9.5 9.5 0 0 1-4-.9L3 21l1.9-4.9A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 21 11.5z"/></svg>',
+    info: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>'
+  };
+  var t = document.createElement("div");
+  t.className = "toast";
+  var ic = document.createElement("span");
+  ic.style.display = "inline-flex";
+  ic.innerHTML = ICONS[icon] || ICONS.check;
+  var txt = document.createElement("span");
+  txt.textContent = msg == null ? "" : String(msg);
+  t.appendChild(ic);
+  t.appendChild(txt);
+  wrap.appendChild(t);
+  setTimeout(function() { t.style.transition = "opacity .2s, transform .2s"; t.style.opacity = "0"; t.style.transform = "translateY(8px)"; }, 2100);
+  setTimeout(function() { if (t.parentNode) t.parentNode.removeChild(t); }, 2400);
+};
+`;
+
 // Primary, always-visible operational pages.
 const navItems = [
 	{ path: "/", label: "Dashboard", icon: "dashboard" },
@@ -194,10 +227,8 @@ const navItems = [
 
 // Secondary pages tucked under a collapsible "Settings" group.
 const settingsItems = [
-	{ path: "/preferences", label: "AI Preferences", icon: "preferences" },
-	{ path: "/config", label: "Config", icon: "config" },
+	{ path: "/settings", label: "Settings", icon: "config" },
 	{ path: "/vault", label: "Vault", icon: "vault" },
-	{ path: "/brand", label: "Brand", icon: "brand" },
 	{ path: "/memory", label: "Memory", icon: "memory" },
 	{ path: "/sessions", label: "Sessions", icon: "sessions" },
 	{ path: "/audit", label: "Audit", icon: "audit" },
@@ -279,6 +310,7 @@ export const Layout: FC<LayoutProps> = ({
 			{raw(`<link rel="stylesheet" href="/api/brand/theme.css">`)}
 			{raw(`<script>${brandIdentityScript()}</script>`)}
 			{raw(`<script>${modalScript}</script>`)}
+			{raw(`<script>${toastScript}</script>`)}
 			{raw(`<script>(function(){
   function paint(n){var b=document.getElementById("nav-notif-badge");window.__pawNotifUnread=n;if(!b)return;if(n>0){b.textContent=n>99?"99+":String(n);b.style.display="inline-flex";}else{b.style.display="none";}}
   function poll(){fetch("/api/notifications").then(function(r){return r.json();}).then(function(d){paint((d&&d.unread)||0);}).catch(function(){});}
@@ -311,9 +343,7 @@ export const Layout: FC<LayoutProps> = ({
 								{raw(`<span class="nav-icon">${navIcon(item.icon)}</span>`)}
 								<span
 									class="nav-label"
-									data-brand-chat-label={
-										item.path === "/chat" ? "" : undefined
-									}
+									data-brand-chat-label={item.path === "/chat" ? "" : undefined}
 								>
 									{item.label}
 								</span>
@@ -412,6 +442,7 @@ export const Layout: FC<LayoutProps> = ({
 					<main class="content">{children}</main>
 				</div>
 			</div>
+			<div class="toast-wrap" id="toast-wrap" />
 			{raw(
 				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});})()</script>`,
 			)}

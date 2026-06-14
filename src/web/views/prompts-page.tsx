@@ -1,5 +1,6 @@
-import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
+import type { FC } from "hono/jsx";
+import { icon } from "./icons.js";
 import { Layout } from "./layout.js";
 
 export interface PromptRow {
@@ -16,12 +17,81 @@ export interface PromptsPageProps {
 	prompts: PromptRow[];
 }
 
+function parseTags(tags: string | null): string[] {
+	return (tags ?? "")
+		.split(",")
+		.map((t) => t.trim())
+		.filter(Boolean);
+}
+
 function promptsScript(): string {
 	return `
-    async function savePrompt(id) {
-      var title = document.getElementById(id ? "edit-title-" + id : "new-title").value.trim();
-      var body = document.getElementById(id ? "edit-body-" + id : "new-body").value;
-      var tags = document.getElementById(id ? "edit-tags-" + id : "new-tags").value.trim();
+    var activeTag = "all";
+
+    function filterPrompts() {
+      var q = (document.getElementById("prompt-search").value || "").toLowerCase();
+      var cards = document.querySelectorAll("#prompt-cards .pcard");
+      var shown = 0;
+      for (var i = 0; i < cards.length; i++) {
+        var card = cards[i];
+        var hay = card.getAttribute("data-search") || "";
+        var tags = card.getAttribute("data-tags") || "";
+        var tagOk = activeTag === "all" || tags.split("|").indexOf(activeTag) !== -1;
+        var textOk = !q || hay.indexOf(q) !== -1;
+        var on = tagOk && textOk;
+        card.style.display = on ? "" : "none";
+        if (on) shown++;
+      }
+      var empty = document.getElementById("prompt-empty");
+      if (empty) empty.style.display = shown === 0 ? "" : "none";
+    }
+
+    function selectTag(btn, tag) {
+      activeTag = tag;
+      var btns = btn.parentElement.querySelectorAll("button");
+      for (var i = 0; i < btns.length; i++) btns[i].classList.remove("on");
+      btn.classList.add("on");
+      filterPrompts();
+    }
+
+    function field(labelText, value, multiline) {
+      var f = document.createElement("div");
+      f.className = "field";
+      var lab = document.createElement("label");
+      lab.textContent = labelText;
+      f.appendChild(lab);
+      var input = document.createElement(multiline ? "textarea" : "input");
+      input.value = value || "";
+      if (multiline) { input.rows = 7; input.style.minHeight = "150px"; input.style.fontFamily = "var(--font-mono)"; }
+      f.appendChild(input);
+      f.__input = input;
+      return f;
+    }
+
+    function openPromptEditor(id) {
+      var card = id ? document.querySelector('.pcard[data-id="' + id + '"]') : null;
+      var title = card ? card.getAttribute("data-title") : "";
+      var body = card ? card.getAttribute("data-body") : "";
+      var tags = card ? card.getAttribute("data-tags-raw") : "";
+      var wrap = document.createElement("div");
+      wrap.style.display = "flex";
+      wrap.style.flexDirection = "column";
+      wrap.style.gap = "14px";
+      var fTitle = field("Title", title, false);
+      var fBody = field("Prompt body — use {{variables}} for fill-ins", body, true);
+      var fTags = field("Tags (comma separated)", tags, false);
+      wrap.appendChild(fTitle);
+      wrap.appendChild(fBody);
+      wrap.appendChild(fTags);
+      pawModal._show(id ? "Edit Prompt" : "New Prompt", wrap, [
+        { label: "Cancel", cls: "btn-cancel", onclick: function() { pawModal._close(); } },
+        { label: "Save", cls: "btn-confirm", onclick: function() { savePromptFrom(id, fTitle.__input.value, fBody.__input.value, fTags.__input.value); } }
+      ]);
+      fTitle.__input.focus();
+    }
+
+    async function savePromptFrom(id, title, body, tags) {
+      title = (title || "").trim();
       if (!title || !body.trim()) {
         await pawModal.alert("Missing fields", "Title and body are required.");
         return;
@@ -31,182 +101,179 @@ function promptsScript(): string {
       var res = await fetch(url, {
         method: method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title, body: body, tags: tags || null })
+        body: JSON.stringify({ title: title, body: body, tags: tags.trim() || null })
       });
-      if (!res.ok) {
-        var err = await res.json().catch(function() { return {}; });
-        await pawModal.alert("Save failed", err.error || ("HTTP " + res.status));
-        return;
-      }
-      window.location.reload();
+      if (res.ok) { window.location.reload(); return; }
+      var err = await res.json().catch(function() { return {}; });
+      await pawModal.alert("Save failed", err.error || ("HTTP " + res.status));
+    }
+
+    async function copyPrompt(id) {
+      var card = document.querySelector('.pcard[data-id="' + id + '"]');
+      if (!card) return;
+      try { await navigator.clipboard.writeText(card.getAttribute("data-body")); } catch (e) {}
+      if (window.pawToast) pawToast("Copied prompt", "copy");
     }
 
     async function duplicatePrompt(id) {
-      var title = document.getElementById("edit-title-" + id).value.trim();
-      var body = document.getElementById("edit-body-" + id).value;
-      var tags = document.getElementById("edit-tags-" + id).value.trim();
-      if (!title || !body.trim()) {
-        await pawModal.alert("Cannot duplicate", "Title and body are required.");
-        return;
-      }
+      var card = document.querySelector('.pcard[data-id="' + id + '"]');
+      if (!card) return;
       var res = await fetch("/api/prompts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title + " (copy)", body: body, tags: tags || null })
+        body: JSON.stringify({ title: card.getAttribute("data-title") + " (copy)", body: card.getAttribute("data-body"), tags: card.getAttribute("data-tags-raw") || null })
       });
-      if (res.ok) {
-        window.location.reload();
-      } else {
-        var err = await res.json().catch(function() { return {}; });
-        await pawModal.alert("Duplicate failed", err.error || ("HTTP " + res.status));
-      }
+      if (res.ok) window.location.reload();
+      else await pawModal.alert("Duplicate failed", "HTTP " + res.status);
     }
 
-    async function deletePromptRow(id, title) {
-      var ok = await pawModal.confirm("Delete prompt", "Delete \\"" + title + "\\"? This cannot be undone.", { confirmLabel: "Delete", danger: true });
+    async function deletePromptRow(id) {
+      var card = document.querySelector('.pcard[data-id="' + id + '"]');
+      var name = card ? card.getAttribute("data-title") : "";
+      var ok = await pawModal.confirm("Delete prompt", "Delete " + name + "? This cannot be undone.", { confirmLabel: "Delete", danger: true });
       if (!ok) return;
       var res = await fetch("/api/prompts/" + encodeURIComponent(id), { method: "DELETE" });
       if (res.ok) window.location.reload();
       else await pawModal.alert("Delete failed", "HTTP " + res.status);
     }
-
-    async function copyPromptBody(id) {
-      var ta = document.getElementById("edit-body-" + id);
-      if (!ta) return;
-      try { await navigator.clipboard.writeText(ta.value); } catch (e) {}
-      var btn = document.getElementById("copy-" + id);
-      if (btn) {
-        var orig = btn.textContent;
-        btn.textContent = "Copied!";
-        setTimeout(function() { btn.textContent = orig; }, 1200);
-      }
-    }
   `;
 }
 
-// Exposed for tests (cook+run the cooked client script, mirroring getChatScript).
+// Exposed for the cook+run template-trap test.
 export function getPromptsScript(): string {
 	return promptsScript();
 }
 
 export const PromptsPage: FC<PromptsPageProps> = ({ prompts }) => {
+	const allTags = Array.from(
+		new Set(prompts.flatMap((p) => parseTags(p.tags))),
+	);
 	return (
-		<Layout title="Prompt Library" currentPath="/prompts">
-			<div class="card mb-md">
-				<h3>New prompt</h3>
-				<div class="flex-col gap-sm max-w-form">
-					<input
-						type="text"
-						id="new-title"
-						placeholder="Title (e.g. 'Summarize meeting transcript')"
-						class="w-full"
-					/>
-					<textarea
-						id="new-body"
-						rows={4}
-						placeholder="Prompt body — use {placeholder} markers for parts you'll fill in when inserting."
-						class="w-full"
-						style="resize: vertical; font-family: var(--font-mono); font-size: 13px"
-					/>
-					<input
-						type="text"
-						id="new-tags"
-						placeholder="tags, comma, separated"
-						class="w-full"
-					/>
-					<button class="btn-primary self-start" onclick="savePrompt()">
-						Save prompt
+		<Layout title="Prompts" currentPath="/prompts">
+			<div class="page-grid">
+				<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+					<div class="search-box" style="width:280px">
+						{raw(icon("search", 15))}
+						<input
+							id="prompt-search"
+							type="search"
+							placeholder="Search prompts…"
+							oninput="filterPrompts()"
+						/>
+					</div>
+					<div class="seg">
+						<button type="button" class="on" onclick="selectTag(this,'all')">
+							all
+						</button>
+						{allTags.map((t) => (
+							<button
+								key={t}
+								type="button"
+								data-tag={t}
+								onclick="selectTag(this,this.dataset.tag)"
+							>
+								{t}
+							</button>
+						))}
+					</div>
+					<div style="flex:1" />
+					<button
+						type="button"
+						class="btn-primary"
+						onclick="openPromptEditor('')"
+					>
+						{raw(icon("plus", 14))} New Prompt
 					</button>
 				</div>
-			</div>
 
-			<div class="card">
-				<h3>Prompts ({prompts.length})</h3>
-				{prompts.length > 0 ? (
-					<div class="flex-col gap-sm">
-						{prompts.map((p) => (
-							<details class="prompt-row">
-								<summary class="flex justify-between items-center">
-									<div class="flex gap-sm items-center">
-										<strong>{p.title}</strong>
-										{p.tags && (
-											<span class="text-xs text-muted">
-												{p.tags
-													.split(",")
-													.map((t) => t.trim())
-													.filter(Boolean)
-													.join(" · ")}
+				<div class="cards" id="prompt-cards">
+					{prompts.map((p) => {
+						const tags = parseTags(p.tags);
+						const search =
+							`${p.title} ${p.body} ${tags.join(" ")}`.toLowerCase();
+						return (
+							<div
+								key={p.id}
+								class="pcard"
+								data-id={p.id}
+								data-title={p.title}
+								data-body={p.body}
+								data-tags={tags.join("|")}
+								data-tags-raw={p.tags ?? ""}
+								data-search={search}
+							>
+								<div class="ph">
+									<div class="pt">{p.title}</div>
+								</div>
+								<div class="ppreview">{p.body}</div>
+								{tags.length > 0 && (
+									<div class="ptags">
+										{tags.map((t) => (
+											<span key={t} class="tag">
+												{t}
 											</span>
-										)}
+										))}
 									</div>
-									<span class="text-xs text-muted">
+								)}
+								<div class="pfoot">
+									<span class="usage">
 										used {p.use_count}× · {p.updated_at}
 									</span>
-								</summary>
-								<div class="flex-col gap-sm max-w-form" style="padding-top: 8px">
-									<input
-										type="text"
-										id={`edit-title-${p.id}`}
-										value={p.title}
-										class="w-full"
-									/>
-									<textarea
-										id={`edit-body-${p.id}`}
-										rows={4}
-										class="w-full"
-										style="resize: vertical; font-family: var(--font-mono); font-size: 13px"
-									>
-										{p.body}
-									</textarea>
-									<input
-										type="text"
-										id={`edit-tags-${p.id}`}
-										value={p.tags ?? ""}
-										placeholder="tags"
-										class="w-full"
-									/>
-									<div class="flex gap-sm">
+									<div style="display:flex;gap:2px">
 										<button
-											class="btn-primary btn-sm"
-											data-prompt-id={p.id}
-											onclick="savePrompt(this.dataset.promptId)"
+											type="button"
+											class="icobtn"
+											title="Copy"
+											data-id={p.id}
+											onclick="copyPrompt(this.dataset.id)"
 										>
-											Save
-										</button>
-										<button
-											class="btn-secondary btn-sm"
-											id={`copy-${p.id}`}
-											data-prompt-id={p.id}
-											onclick="copyPromptBody(this.dataset.promptId)"
-										>
-											Copy body
+											{raw(icon("copy", 15))}
 										</button>
 										<button
 											type="button"
-											class="btn-secondary btn-sm"
-											data-prompt-id={p.id}
-											onclick="duplicatePrompt(this.dataset.promptId)"
+											class="icobtn"
+											title="Edit"
+											data-id={p.id}
+											onclick="openPromptEditor(this.dataset.id)"
 										>
-											Duplicate
+											{raw(icon("edit", 15))}
 										</button>
 										<button
-											class="btn-danger btn-sm"
-											data-prompt-id={p.id}
-											data-prompt-title={p.title}
-											onclick="deletePromptRow(this.dataset.promptId, this.dataset.promptTitle)"
+											type="button"
+											class="icobtn"
+											title="Duplicate"
+											data-id={p.id}
+											onclick="duplicatePrompt(this.dataset.id)"
 										>
-											Delete
+											{raw(icon("dots", 15))}
+										</button>
+										<button
+											type="button"
+											class="icobtn danger"
+											title="Delete"
+											data-id={p.id}
+											onclick="deletePromptRow(this.dataset.id)"
+										>
+											{raw(icon("trash", 15))}
 										</button>
 									</div>
 								</div>
-							</details>
-						))}
+							</div>
+						);
+					})}
+				</div>
+
+				<div
+					class="empty-state"
+					id="prompt-empty"
+					style={prompts.length === 0 ? "" : "display:none"}
+				>
+					{raw(icon("prompts", 30))}
+					<div class="t">
+						{prompts.length === 0 ? "No prompts yet" : "No prompts match"}
 					</div>
-				) : (
-					<div class="empty-state">
-						<p>No prompts yet — add one above.</p>
-					</div>
-				)}
+					<div class="s">Create one with “New Prompt”.</div>
+				</div>
 			</div>
 
 			{raw(`<script>${promptsScript()}</script>`)}

@@ -113,6 +113,54 @@ describe("Barefoot Digital design system", () => {
 			expect(DS_CSS).toContain(sel);
 	});
 
+	test("the full page-component vocabulary (Phase 1 port) is present", () => {
+		// REGRESSION: pre-port ds.css had none of these — pages couldn't adopt the
+		// design's panels/tables/cards/split/settings/search/toast layouts.
+		for (const sel of [
+			".kpi-strip {",
+			".tbl {",
+			".led {",
+			".st {",
+			".feed-row {",
+			".cards {",
+			".pcard {",
+			".split {",
+			".detail .kv {",
+			".notif {",
+			".settings-wrap {",
+			".set-nav ",
+			".set-row {",
+			".search-hero ",
+			".res {",
+			".pill-badge {",
+			".lrow {",
+			".toggle {",
+			".pbar {",
+			".icobtn {",
+			".toast {",
+			".toast-wrap {",
+		])
+			expect(DS_CSS).toContain(sel);
+	});
+
+	test("ported component tints are token-aware (no raw emerald rgba leaks)", () => {
+		// The design's source hardcodes rgba(63,224,143,…); the port must route
+		// accent tints through tokens / color-mix so light theme + brand accent
+		// still apply. Guard the specific raw value the design used most.
+		const ported = DS_CSS.slice(DS_CSS.indexOf("Barefoot Console — page"));
+		expect(ported).not.toContain("rgba(63,224,143");
+		expect(ported).toContain("color-mix(");
+		expect(ported).toContain("var(--accent-subtle)");
+	});
+
+	test("Layout wires a global toast mount + pawToast helper", () => {
+		const html = String(Layout({ title: "X", children: "y" }));
+		expect(html).toContain('class="toast-wrap" id="toast-wrap"');
+		expect(html).toContain("window.pawToast");
+		// the toast script must not carry backslash escapes (template-trap)
+		expect(LAYOUT_SRC).toContain("const toastScript");
+	});
+
 	test("the topbar renders the brand crumb + an Online conn-pill", () => {
 		const html = String(Layout({ title: "Config", children: "x" }));
 		expect(html).toContain('class="crumb" data-brand-name');
