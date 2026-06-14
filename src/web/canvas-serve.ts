@@ -52,15 +52,75 @@ const CANVAS_RUNTIME = `<script>(function(){document.addEventListener("click",fu
 // use String.fromCharCode(92) to normalize Windows watcher paths.
 const REFRESH_POLLER = `<script>(function(){if(location.pathname.indexOf("/api/app/")!==0)return;var meta=document.querySelector('meta[name="paw-refresh"]');if(!meta)return;var mode=(meta.getAttribute("content")||"").trim().toLowerCase()||"event";var parts=location.pathname.split("/").filter(Boolean);var space=parts.length>=3?parts[2]:"";var prefix=space?("apps/"+space+"/"):"";var bs=String.fromCharCode(92);var since=0,started=false;function tick(){fetch("/api/canvas/events?sessionId=__files__&since="+since,{headers:{Accept:"application/json"}}).then(function(r){return r.json();}).then(function(d){var evs=(d&&d.events)||[];var changed=[];for(var i=0;i<evs.length;i++){var e=evs[i];if(e.id>since)since=e.id;if(e.event!=="file-changed")continue;var p=((e.data&&e.data.path)||"").split(bs).join("/");if(!prefix||p.indexOf(prefix)===0)changed.push(p);}if(started&&changed.length){if(mode==="reload"){location.reload();return;}try{window.dispatchEvent(new CustomEvent("paw:files-changed",{detail:{paths:changed}}));}catch(e2){}}started=true;}).catch(function(){}).then(function(){setTimeout(tick,2000);});}tick();})();</script>`;
 
+// Floating companion launcher, injected ONLY for authenticated admins viewing a
+// served canvas page (the caller decides via the `companion` flag / the standalone
+// injectCompanionLauncher below). It is fully self-contained and carries NO
+// secrets: just static markup + the same-origin "/companion" URL, which itself
+// resolves the visitor's session server-side. Everything is scoped under the
+// `paw-cmp-*` ids so it can't clobber the page's own styles/scripts. The script
+// self-gates to TOP-LEVEL pages (window.top === window.self): when the page is
+// embedded (the console canvas pane, the share wrapper's inner preview, a
+// null-origin sandbox) the launcher stays hidden, so it never duplicates the
+// console's own companion or breaks inside a sandbox. CSP-safe: every canvas CSP
+// variant allows inline script/style + a same-origin frame ("/companion").
+const COMPANION_LAUNCHER = `<style>
+#paw-cmp-launcher,#paw-cmp-panel{position:fixed;right:20px;z-index:2147483000;}
+#paw-cmp-launcher{bottom:20px;}
+#paw-cmp-btn{width:52px;height:52px;border-radius:50%;border:none;cursor:pointer;background:#7458f5;color:#fff;font-size:22px;line-height:1;box-shadow:0 6px 20px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;}
+#paw-cmp-btn:hover{filter:brightness(1.08);}
+#paw-cmp-panel{bottom:84px;width:380px;height:560px;max-width:calc(100vw - 40px);max-height:calc(100vh - 110px);border-radius:16px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.35);background:#fff;display:none;}
+#paw-cmp-panel.paw-open{display:block;}
+#paw-cmp-frame{width:100%;height:100%;border:none;}
+</style>
+<div id="paw-cmp-launcher"><button id="paw-cmp-btn" type="button" aria-label="Open assistant" title="Assistant">✦</button></div>
+<div id="paw-cmp-panel" aria-hidden="true"><iframe id="paw-cmp-frame" title="Assistant" loading="lazy"></iframe></div>
+<script>(function(){try{if(window.top!==window.self)return;}catch(e){return;}var b=document.getElementById("paw-cmp-btn"),p=document.getElementById("paw-cmp-panel"),f=document.getElementById("paw-cmp-frame");if(!b||!p||!f)return;var loaded=false;b.addEventListener("click",function(){var open=p.classList.toggle("paw-open");p.setAttribute("aria-hidden",open?"false":"true");if(open&&!loaded){f.src="/companion";loaded=true;}});})();</script>`;
+
 /**
  * Inject the error overlay + form/anchor runtime shim + opt-in app-space
  * refresh poller into a served HTML document, before `</body>` when present
- * (otherwise appended).
+ * (otherwise appended). Pass `{ companion: true }` to also inject the companion
+ * launcher (authenticated admins only — the caller resolves the session). The
+ * one-arg signature is unchanged, so existing/legacy callers inject no companion.
  */
-export function injectCanvasRuntime(html: string): string {
-	const inject = ERROR_OVERLAY + CANVAS_RUNTIME + REFRESH_POLLER;
+export function injectCanvasRuntime(
+	html: string,
+	opts?: { companion?: boolean },
+): string {
+	let inject = ERROR_OVERLAY + CANVAS_RUNTIME + REFRESH_POLLER;
+	if (opts?.companion) inject += COMPANION_LAUNCHER;
 	if (html.includes("</body>")) {
 		return html.replace("</body>", `${inject}</body>`);
 	}
 	return html + inject;
+}
+
+/**
+ * Decide whether a served canvas page should carry the companion launcher: only
+ * for an authenticated admin. `admin` is the value the auth middleware sets on
+ * authed routes (truthy when present); on PUBLIC canvas routes the middleware
+ * skips session validation, so the caller passes the raw `paw_session` cookie
+ * and a `validateSession` probe for the fallback check. Anonymous → false.
+ */
+export function shouldServeCompanion(input: {
+	admin?: unknown;
+	sessionToken?: string | null;
+	validateSession: (token: string) => unknown;
+}): boolean {
+	if (input.admin) return true;
+	const token = input.sessionToken;
+	if (!token) return false;
+	return input.validateSession(token) != null;
+}
+
+/**
+ * Inject ONLY the companion launcher (no canvas runtime) — for pages that serve
+ * their own HTML without injectCanvasRuntime, e.g. the `/canvas/share` wrapper.
+ * Same before-`</body>` placement. Caller gates on an authenticated admin.
+ */
+export function injectCompanionLauncher(html: string): string {
+	if (html.includes("</body>")) {
+		return html.replace("</body>", `${COMPANION_LAUNCHER}</body>`);
+	}
+	return html + COMPANION_LAUNCHER;
 }

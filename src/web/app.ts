@@ -66,7 +66,12 @@ import { CANVAS_TEMPLATES } from "./canvas-templates.js";
 import { parseUploadedFiles } from "./file-parser.js";
 import { createAuthMiddleware } from "./middleware/auth.js";
 import { createSecurityHeaders } from "./middleware/security-headers.js";
-import { canvasContentType, injectCanvasRuntime } from "./canvas-serve.js";
+import {
+	canvasContentType,
+	injectCanvasRuntime,
+	injectCompanionLauncher,
+	shouldServeCompanion,
+} from "./canvas-serve.js";
 import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
 import { createFormReceiver } from "./routes/forms.js";
 import { createOpenAiApi } from "./routes/openai-api.js";
@@ -367,6 +372,18 @@ export function createWebApp(
 		maxAgeMinutes: config.web.session.maxAgeMinutes,
 		idleTimeoutMinutes: config.web.session.idleTimeoutMinutes,
 	});
+
+	// A served canvas page injects the in-context companion ONLY for an
+	// authenticated admin. On PUBLIC canvas routes (preview/share) the auth
+	// middleware short-circuits without validating the session cookie, so check
+	// it here directly; on the authed app-space route the middleware already set
+	// `admin`. Anonymous visitors get a byte-clean page (no companion code).
+	const isCanvasCompanionVisitor = (c: Context): boolean =>
+		shouldServeCompanion({
+			admin: c.get("admin"),
+			sessionToken: getCookie(c, "paw_session") ?? null,
+			validateSession: (token) => authManager.validateSession(token),
+		});
 
 	// --- Login rate limiter (5 attempts/min per IP) ---
 	const loginRateLimiter = new RateLimiter(5);
@@ -2527,7 +2544,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			canvasShareTokens.delete(token);
 			return c.text("Share link expired or invalid", 404);
 		}
-		return c.html(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+		const page = `<!DOCTYPE html><html><head><meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Shared Canvas - Paw</title>
       <style>
@@ -2536,7 +2553,12 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
         iframe { width: 100%; height: 100vh; border: none; display: block; }
       </style></head><body>
       <iframe src="/api/canvas/preview/${encodeURIComponent(meta.path)}"></iframe>
-    </body></html>`);
+    </body></html>`;
+		// This wrapper builds its own HTML (no injectCanvasRuntime), so inject the
+		// launcher directly — only for an authenticated admin opening the link.
+		return c.html(
+			isCanvasCompanionVisitor(c) ? injectCompanionLauncher(page) : page,
+		);
 	});
 
 	// CRC32 for ZIP file construction
@@ -3043,7 +3065,9 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 
 		// B2: Inject error overlay + runtime shim into HTML files at serve time.
 		if (ext === ".html" || ext === ".htm") {
-			const html = injectCanvasRuntime(await file.text());
+			const html = injectCanvasRuntime(await file.text(), {
+				companion: isCanvasCompanionVisitor(c),
+			});
 			c.header("Content-Type", contentType);
 			c.header("Cache-Control", "no-cache");
 			return c.body(html);
@@ -3110,7 +3134,9 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		const file = Bun.file(fullPath);
 
 		if (ext === ".html" || ext === ".htm") {
-			const html = injectCanvasRuntime(await file.text());
+			const html = injectCanvasRuntime(await file.text(), {
+				companion: isCanvasCompanionVisitor(c),
+			});
 			c.header("Content-Type", contentType);
 			c.header("Cache-Control", "no-cache");
 			return c.body(html);
