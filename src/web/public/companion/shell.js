@@ -379,7 +379,208 @@
 		},
 		step: stepFace,
 	};
-	const AVATARS = { gel: GEL_AVATAR };
+
+	// ── Robot avatars (ported from the "Robotic Faces" design) ──────────────────
+	// A curated set of CSS-state-driven robot faces. They share ONE step (robotStep)
+	// and ONE expression mapping; each variant differs only in build markup + CSS.
+	// The art is self-coloured (reads on light + dark, like the gel sphere); the
+	// glow/eyes/mouth follow the brand --accent. Native art is 188px, scaled to the
+	// requested size so the same markup serves the 178px main face and 54px subs.
+	const ROBOT_NATIVE = 188;
+	// engine state (9) → design state (7).
+	function mapRobotExp(expr) {
+		switch (expr) {
+			case "sleepy":
+				return "sleepy";
+			case "listening":
+				return "happy";
+			case "thinking":
+			case "waiting":
+				return "thinking";
+			case "working":
+				return "working";
+			case "success":
+				return "success";
+			case "worried":
+			case "wince":
+				return "error";
+			default:
+				return "idle";
+		}
+	}
+	function robotOrb(extra) {
+		const o = el("div", `orb${extra ? ` ${extra}` : ""}`);
+		o.setAttribute("data-body", "");
+		o.appendChild(el("div", "gloss"));
+		return o;
+	}
+	function trackEye(cls) {
+		const e = el("div", cls);
+		e.setAttribute("data-track", "");
+		return e;
+	}
+	// Each builder appends its markup to `scaler` and returns the [data-body] orb.
+	const ROBOT_VARIANTS = {
+		halo(scaler) {
+			const ant = el("div", "antenna");
+			ant.appendChild(el("i", "glow"));
+			scaler.appendChild(ant);
+			const orb = robotOrb("");
+			orb.appendChild(el("div", "ring"));
+			orb.appendChild(trackEye("eye l"));
+			orb.appendChild(trackEye("eye r"));
+			orb.appendChild(el("div", "mouth"));
+			scaler.appendChild(orb);
+			return orb;
+		},
+		visor(scaler) {
+			const orb = robotOrb("teal");
+			const visor = el("div", "visor");
+			visor.appendChild(trackEye("veye l"));
+			visor.appendChild(trackEye("veye r"));
+			visor.appendChild(el("div", "vsmile"));
+			orb.appendChild(visor);
+			scaler.appendChild(orb);
+			return orb;
+		},
+		cylon(scaler) {
+			const orb = robotOrb("");
+			const band = el("div", "band");
+			band.appendChild(el("div", "slit"));
+			orb.appendChild(band);
+			orb.appendChild(el("div", "mouth"));
+			scaler.appendChild(orb);
+			return orb;
+		},
+		lcd(scaler) {
+			const orb = robotOrb("");
+			const screen = el("div", "screen");
+			const eyes = el("div", "eyes");
+			eyes.appendChild(trackEye("reye"));
+			eyes.appendChild(trackEye("reye"));
+			screen.appendChild(eyes);
+			const smile = el("div", "smile");
+			for (let i = 0; i < 5; i++) smile.appendChild(el("span"));
+			screen.appendChild(smile);
+			orb.appendChild(screen);
+			scaler.appendChild(orb);
+			return orb;
+		},
+	};
+	function buildRobotFace(size, variantKey) {
+		const px = size || 178;
+		const cmp = el("div", `cmp robot-face rf-${variantKey}`);
+		cmp.style.setProperty("--sz", `${px}px`);
+		cmp.style.width = `${px}px`;
+		cmp.style.height = `${px}px`;
+		const scaler = el("div", "rf-scale");
+		scaler.style.transform = `scale(${(px / ROBOT_NATIVE).toFixed(4)})`;
+		const body = ROBOT_VARIANTS[variantKey](scaler);
+		cmp.appendChild(scaler);
+		cmp._face = {
+			sphere: body, // the [data-body] orb (gets data-avatar + the ping ring)
+			size: px,
+			phase: Math.random() * 6.28,
+			sx: 0,
+			sy: 0,
+			nextSacc: 0,
+			bNext: 0,
+			bUntil: 0,
+		};
+		return cmp;
+	}
+	// One frame for a robot face: map expression → data-exp, ease gaze (from the
+	// central look-toward target, NOT a private mousemove), breathe/tilt/tremor, and
+	// blink — all CSS-var driven (--gx/--gy/--blink) + a transform on the orb.
+	function robotStep(cmp, expr, now, opts) {
+		const f = cmp._face;
+		if (!f) return;
+		const reduced = opts.reduced;
+		const exp = mapRobotExp(expr);
+		if (cmp.dataset.exp !== exp) cmp.dataset.exp = exp;
+		const body = f.sphere;
+		const t = now / 1000;
+		let gx = 0;
+		let gy = 0;
+		const tgt = !reduced && opts.gaze ? opts.gaze : null;
+		if (tgt) {
+			const r = body.getBoundingClientRect();
+			const dx = tgt.x - (r.left + r.width / 2);
+			const dy = tgt.y - (r.top + r.height / 2);
+			const dist = Math.hypot(dx, dy) || 1;
+			const m = Math.min(1, dist / 330);
+			gx = (dx / dist) * m * 6;
+			gy = (dy / dist) * m * 6;
+		} else if (!reduced) {
+			if (now > f.nextSacc) {
+				if (Math.random() < 0.32) {
+					f.sx = 0;
+					f.sy = 0;
+				} else {
+					f.sx = (Math.random() * 2 - 1) * 5;
+					f.sy = (Math.random() * 2 - 1) * 3;
+				}
+				f.nextSacc = now + 1300 + Math.random() * 2400;
+			}
+			gx = f.sx;
+			gy = f.sy;
+		}
+		if (exp === "thinking") {
+			gy -= 5;
+			gx *= 0.5;
+		} else if (exp === "sleepy") {
+			gy = 6;
+			gx *= 0.3;
+		} else if (exp === "success" || exp === "happy") {
+			gy += 1;
+		}
+		cmp.style.setProperty("--gx", `${gx.toFixed(2)}px`);
+		cmp.style.setProperty("--gy", `${gy.toFixed(2)}px`);
+		let by = 0;
+		let bs = 1;
+		let bx = 0;
+		let rot = 0;
+		if (!reduced) {
+			by = Math.sin(t * 1.25 + f.phase) * 2.4 + Math.sin(t * 0.66 + f.phase) * 1.3;
+			bs = 1 + Math.sin(t * 1.25 + f.phase) * 0.011;
+			rot = gx * 0.45;
+			if (exp === "sleepy") {
+				by += Math.sin(t * 0.8 + f.phase) * 1.5;
+				bs = 1;
+				rot *= 0.3;
+			}
+			if (exp === "error") bx = Math.sin(now / 64) * 1.3;
+			if (exp === "working") bs += 0.004;
+		}
+		body.style.transform = `translate(${bx.toFixed(2)}px,${by.toFixed(2)}px) rotate(${rot.toFixed(2)}deg) scale(${bs.toFixed(4)})`;
+		if (!reduced && exp !== "sleepy") {
+			if (now > f.bNext) {
+				f.bUntil = now + 120;
+				f.bNext = now + (Math.random() < 0.18 ? 250 : 2800 + Math.random() * 4200);
+			}
+			cmp.style.setProperty("--blink", now < f.bUntil ? "0.1" : "1");
+		} else {
+			cmp.style.setProperty("--blink", "1");
+		}
+	}
+	function makeRobot(key, label, variantKey) {
+		return {
+			key,
+			label,
+			build(opts) {
+				return buildRobotFace((opts && opts.size) || 178, variantKey);
+			},
+			step: robotStep,
+		};
+	}
+
+	const AVATARS = {
+		gel: GEL_AVATAR,
+		"robot-halo": makeRobot("robot-halo", "Robot · Halo", "halo"),
+		"robot-visor": makeRobot("robot-visor", "Robot · Visor", "visor"),
+		"robot-cylon": makeRobot("robot-cylon", "Robot · Cylon", "cylon"),
+		"robot-lcd": makeRobot("robot-lcd", "Robot · LCD", "lcd"),
+	};
 	const DEFAULT_AVATAR_KEY = "gel";
 	// The active face type for ALL faces (main + sub-agents). PR1 leaves it at the
 	// default; the picker (PR2) sets it from config/localStorage and live-swaps.
@@ -423,6 +624,22 @@
 		tetherSvg.setAttribute("class", "tether-svg");
 		home.appendChild(tetherSvg);
 
+		// Avatar choice: per-user localStorage["paw-avatar"] wins over the brand /
+		// config default (cfg.avatar); unknown keys fall back to the gel sphere.
+		function isKnownAvatar(k) {
+			return !!k && getAvatar(k).key === k;
+		}
+		function resolveAvatarKey() {
+			try {
+				const stored = window.localStorage.getItem("paw-avatar");
+				if (isKnownAvatar(stored)) return stored;
+			} catch (e) {
+				/* localStorage blocked — fall through to config/default */
+			}
+			return isKnownAvatar(cfg.avatar) ? cfg.avatar : DEFAULT_AVATAR_KEY;
+		}
+		activeAvatarKey = resolveAvatarKey();
+
 		// Wrap-dock composition: centered avatar → sub-agents → skills wrapping →
 		// greeting → dynamic subtitle → ops feed (no stat cards).
 		const avatarZone = el("div", "avatar-zone");
@@ -434,14 +651,32 @@
 			typeof cfg.moodScalar === "number"
 				? Math.max(0, Math.min(1, cfg.moodScalar))
 				: 1;
-		(() => {
+		function applyMood() {
 			const av = avatarZone.firstChild;
 			const ball = av?.querySelector("[data-avatar]");
 			if (ball) {
 				ball.style.filter = `saturate(${(0.7 + 0.3 * mood).toFixed(2)}) brightness(${(0.85 + 0.15 * mood).toFixed(2)})`;
 			}
 			if (av) av.style.transform = `translateY(${((1 - mood) * 6).toFixed(1)}px)`;
-		})();
+		}
+		applyMood();
+		// Live avatar swap: the picker (a same-origin page) writes paw-avatar; the
+		// `storage` event reaches this iframe → rebuild the main avatar in place (no
+		// reload, no flash). Sub-agents pick up the new key when next (re)built.
+		function swapAvatar(key) {
+			if (!isKnownAvatar(key) || key === activeAvatarKey) return;
+			activeAvatarKey = key;
+			const old = avatarZone.firstChild;
+			if (old) avatarZone.removeChild(old);
+			avatarZone.appendChild(buildAvatar(cfg.faceTheme));
+			applyMood();
+		}
+		function onAvatarStorage(e) {
+			if (e.key === "paw-avatar") swapAvatar(e.newValue || DEFAULT_AVATAR_KEY);
+		}
+		if (window.addEventListener) {
+			window.addEventListener("storage", onAvatarStorage);
+		}
 		const subRow = el("div", "subagent-row");
 		const wrapDock = el("div", "wrap-dock");
 		home.appendChild(avatarZone);
@@ -1049,6 +1284,9 @@
 				engine.stop();
 				if (raf) window.cancelAnimationFrame(raf);
 				if (captionFadeTimer) clearTimeout(captionFadeTimer);
+				if (window.removeEventListener) {
+					window.removeEventListener("storage", onAvatarStorage);
+				}
 				if (inbox) {
 					wrapDock.removeEventListener("click", onDockClick);
 					root.ownerDocument.removeEventListener("keydown", onDocKeydown);

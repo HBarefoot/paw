@@ -111,6 +111,7 @@ import {
 } from "../store/brands.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
 import { ToolsPage, type ToolLogRow } from "./views/tools-page.js";
+import { PreferencesPage } from "./views/preferences-page.js";
 import { PromptsPage } from "./views/prompts-page.js";
 import {
 	createPrompt,
@@ -1961,6 +1962,8 @@ export function createWebApp(
 			brandName,
 			moodScalar,
 			skills,
+			// Deployment/brand default avatar; per-user localStorage wins (shell.js).
+			avatar: config.companion?.avatar,
 		}).replace(/</g, "\\u003c");
 		const v = `?v=${ASSET_VERSION}`;
 		// Theme bootstrap: the companion is a standalone same-origin iframe doc, so it
@@ -3371,6 +3374,15 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 	app.get("/prompts", (c) => {
 		const prompts = listPrompts(kernel.database, 200);
 		return c.html(PromptsPage({ prompts }));
+	});
+
+	app.get("/preferences", (c) => {
+		return c.html(
+			PreferencesPage({
+				defaultAvatar: config.companion?.avatar ?? "gel",
+				currentPath: "/preferences",
+			}),
+		);
 	});
 
 	app.get("/api/prompts", (c) => {

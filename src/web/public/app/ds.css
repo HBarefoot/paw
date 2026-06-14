@@ -1226,6 +1226,34 @@
     padding: 2px 0;
   }
 
+  /* Companion avatar picker (/preferences) */
+  .avatar-pick-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+  }
+  .avatar-pick {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+    text-align: left;
+    padding: 14px 16px;
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .avatar-pick:hover {
+    border-color: var(--text-tertiary);
+    background: var(--bg-secondary);
+  }
+  .avatar-pick.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
   /* Per-message action row (Copy / Quote / Edit) — revealed on hover/focus,
      keyboard-accessible. Reuses .feedback-btn.action-btn for button styling. */
   .msg-actions {
