@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import {
 	canvasContentType,
 	injectCanvasRuntime,
+	injectCompanionLauncher,
+	shouldServeCompanion,
 } from "../../src/web/canvas-serve.js";
 
 /**
@@ -82,9 +84,7 @@ describe("injectCanvasRuntime", () => {
 				// Return a <meta name="paw-refresh" content="event"> stub so the
 				// refresh poller takes its active branch (event mode, no reload).
 				querySelector: (sel: string) =>
-					sel.includes("paw-refresh")
-						? { getAttribute: () => "event" }
-						: null,
+					sel.includes("paw-refresh") ? { getAttribute: () => "event" } : null,
 				body: stub(),
 			},
 			{ get: (t, p) => (p in t ? (t as never)[p] : stub()) },
@@ -132,5 +132,136 @@ describe("injectCanvasRuntime", () => {
 		expect(() =>
 			(win.onerror as (...a: unknown[]) => void)("boom", "f.js", 1, 1),
 		).not.toThrow();
+	});
+});
+
+describe("shouldServeCompanion (authed-only gating)", () => {
+	// Stand-in for authManager.validateSession: only "good" tokens validate.
+	const validate = (t: string) => (t === "good" ? { user_id: 1 } : null);
+
+	it("authed app-space route: admin set on the context → companion", () => {
+		// validateSession should not even be consulted when admin is present.
+		expect(
+			shouldServeCompanion({
+				admin: { id: 1 },
+				validateSession: () => {
+					throw new Error("should not be called");
+				},
+			}),
+		).toBe(true);
+	});
+
+	it("public route + valid session cookie → companion", () => {
+		expect(
+			shouldServeCompanion({
+				admin: undefined,
+				sessionToken: "good",
+				validateSession: validate,
+			}),
+		).toBe(true);
+	});
+
+	it("anonymous (no cookie) → no companion", () => {
+		expect(
+			shouldServeCompanion({ sessionToken: null, validateSession: validate }),
+		).toBe(false);
+		expect(
+			shouldServeCompanion({ sessionToken: "", validateSession: validate }),
+		).toBe(false);
+	});
+
+	it("public route + invalid/expired session cookie → no companion", () => {
+		expect(
+			shouldServeCompanion({
+				sessionToken: "stale",
+				validateSession: validate,
+			}),
+		).toBe(false);
+	});
+});
+
+describe("companion launcher injection", () => {
+	const LAUNCHER_MARKER = 'id="paw-cmp-launcher"';
+
+	it("legacy one-arg injectCanvasRuntime injects NO companion", () => {
+		const out = injectCanvasRuntime("<html><body>hi</body></html>");
+		expect(out).not.toContain(LAUNCHER_MARKER);
+		expect(out).not.toContain('"/companion"');
+	});
+
+	it("injectCanvasRuntime({ companion: false }) injects no companion", () => {
+		const out = injectCanvasRuntime("<body>x</body>", { companion: false });
+		expect(out).not.toContain(LAUNCHER_MARKER);
+	});
+
+	it("injectCanvasRuntime({ companion: true }) injects the launcher before </body>", () => {
+		const out = injectCanvasRuntime("<html><body>page</body></html>", {
+			companion: true,
+		});
+		expect(out).toContain(LAUNCHER_MARKER);
+		// Lazy-loads the same-origin companion + self-gates to top-level pages.
+		expect(out).toContain('f.src="/companion"');
+		expect(out).toContain("window.top!==window.self");
+		// Original content preserved, launcher sits before </body>.
+		expect(out).toContain("page");
+		expect(out.indexOf(LAUNCHER_MARKER)).toBeLessThan(out.indexOf("</body>"));
+		// Still includes the normal canvas runtime alongside it.
+		expect(out).toContain("/api/canvas/events");
+	});
+
+	it("injectCompanionLauncher injects only the launcher (no canvas runtime)", () => {
+		const out = injectCompanionLauncher("<html><body>wrap</body></html>");
+		expect(out).toContain(LAUNCHER_MARKER);
+		expect(out).toContain("wrap");
+		expect(out.indexOf(LAUNCHER_MARKER)).toBeLessThan(out.indexOf("</body>"));
+		// It does NOT add the form/refresh runtime (that's injectCanvasRuntime's job).
+		expect(out).not.toContain("/api/canvas/events");
+	});
+
+	it("injectCompanionLauncher appends when there is no </body>", () => {
+		const out = injectCompanionLauncher("<div>x</div>");
+		expect(out.startsWith("<div>x</div>")).toBe(true);
+		expect(out).toContain(LAUNCHER_MARKER);
+	});
+
+	it("the injected launcher is inert — carries no secret/token material", () => {
+		const out = injectCanvasRuntime("<body></body>", { companion: true });
+		// Only the static markup + the same-origin /companion URL ship; nothing
+		// session/credential-bearing is ever baked into the page.
+		for (const needle of [
+			"paw_session",
+			"bearer",
+			"authorization",
+			"secret",
+			"api_key",
+			"apikey",
+			"vault",
+			"password",
+		]) {
+			expect(out.toLowerCase()).not.toContain(needle);
+		}
+	});
+
+	it("the launcher's cooked script parses and self-gates when framed", () => {
+		const re = /<script>([\s\S]*?)<\/script>/g;
+		const launcherHtml = injectCompanionLauncher("<body></body>");
+		const scripts: string[] = [];
+		let m: RegExpExecArray | null;
+		// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
+		while ((m = re.exec(launcherHtml)) !== null) scripts.push(m[1]);
+		expect(scripts.length).toBe(1);
+		// Framed (window.top !== window.self) → returns early, never touches the DOM.
+		const framedWin = { top: { a: 1 }, self: { b: 2 } };
+		let getById = 0;
+		const framedDoc = {
+			getElementById() {
+				getById++;
+				return null;
+			},
+		};
+		expect(() => {
+			new Function("window", "document", scripts[0])(framedWin, framedDoc);
+		}).not.toThrow();
+		expect(getById).toBe(0); // self-gate short-circuited before any DOM access
 	});
 });
