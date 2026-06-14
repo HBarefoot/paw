@@ -59,6 +59,7 @@ import { createSecurityHeaders } from "./middleware/security-headers.js";
 import { canvasContentType, injectCanvasRuntime } from "./canvas-serve.js";
 import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
 import { createFormReceiver } from "./routes/forms.js";
+import { createOpenAiApi } from "./routes/openai-api.js";
 import { approvalLabel } from "../integrations/github/approvals.js";
 import { buildOpsFeed } from "./routes/ops-feed.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
@@ -586,6 +587,25 @@ export function createWebApp(
 					!!config.web.authToken &&
 					authHeader === `Bearer ${config.web.authToken}`
 				);
+			},
+		}),
+	);
+
+	// OpenAI-compatible API (B7). Mounted BEFORE the session-auth middleware so it
+	// stays cookie-auth-free — it does its own bearer check (vault api.bearerToken)
+	// and is disabled when no key is set. Rate-limited (action class) per IP.
+	app.route(
+		"/",
+		createOpenAiApi({
+			runTurn: (msg) => kernel.handleInboundStream(msg),
+			getBearer: () =>
+				kernel.vault.get("api.bearerToken") || liveConfig().api.bearerToken,
+			rateLimit: (ip) => rateLimiters.action.check(ip),
+			getClientIp,
+			listModels: () => {
+				const primary = currentModel();
+				const vision = liveConfig().ai.vision?.model;
+				return vision && vision !== primary ? [primary, vision] : [primary];
 			},
 		}),
 	);
