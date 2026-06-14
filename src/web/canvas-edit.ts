@@ -79,6 +79,30 @@ function walkElements(node: PNode, visit: (el: PElement) => void): void {
 	}
 }
 
+export interface EditAnchor {
+	editId: string;
+	tag: string;
+	text: string;
+}
+
+/**
+ * List every anchored editable element in document order: its `data-edit-id`,
+ * tag name, and current decoded text. Lets the agent see what it can change (and
+ * pick an editId + originalText) without touching the live DOM. Call on
+ * already-stamped HTML (run stampEditAnchors first).
+ */
+export function listEditAnchors(html: string): EditAnchor[] {
+	const doc = parse(html, { sourceCodeLocationInfo: true });
+	const out: EditAnchor[] = [];
+	walkElements(doc, (el) => {
+		const editId = getAttr(el, "data-edit-id");
+		if (editId && isEditableLeaf(el)) {
+			out.push({ editId, tag: el.tagName, text: textOf(el) });
+		}
+	});
+	return out;
+}
+
 /**
  * Assign stable, append-only `data-edit-id="eN"` anchors to every editable leaf
  * that lacks one, by splicing the attribute into each start tag at its source

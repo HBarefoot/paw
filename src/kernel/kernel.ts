@@ -42,6 +42,7 @@ import { createProactiveTriggerTools } from "../cron/trigger-tools.js";
 import { detectCorrection } from "../feedback/correction-detector.js";
 import { FeedbackStore } from "../feedback/store.js";
 import { HeartbeatChecker } from "../heartbeat/checker.js";
+import { GitHubApprovals } from "../integrations/github/approvals.js";
 import { MCPClientManager } from "../mcp/client-manager.js";
 import {
 	extractMemories,
@@ -64,6 +65,11 @@ import { NotificationStore } from "../store/notifications.js";
 import { sessionTitleFromContent } from "../store/session-title.js";
 import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
 import { createActionTools } from "../tools/action-tools.js";
+import {
+	type ApplyEditParams,
+	applyCanvasEdit,
+	createCanvasBridgeTools,
+} from "../tools/canvas-bridge-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
 import { createCodeTools } from "../tools/code-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
@@ -400,6 +406,61 @@ export class Kernel {
 			);
 		}
 
+		// Approval queue — constructed ALWAYS (independent of the GitHub
+		// integration) so non-GitHub gated actions (canvas edits, hook
+		// `require-approval` verdicts) have a home and surface on /api/approvals/*.
+		// The GitHub client is attached later via setClient() when configured.
+		const approvalsAudit = new AuditLogger(this.db);
+		const approvals = new GitHubApprovals(
+			this.db,
+			undefined,
+			(action, details) => approvalsAudit.log(action, null, details),
+			this.bus,
+		);
+		this.githubApprovalsInstance = approvals;
+		// Wire the hook layer's require-approval verdict into the queue so a blocked
+		// tool call surfaces on the same approval surfaces (#110).
+		this.hookManager.setApprovalSink((ctx, reason) =>
+			approvals.enqueueExternal({
+				summary: `${ctx.toolName} — ${reason}`,
+				params: { tool: ctx.toolName, input: ctx.input },
+				requestedBy: ctx.sessionId ?? undefined,
+				origin: ctx.origin,
+			}),
+		);
+		// Resolve approvals decided from any channel surface (web modal, Slack
+		// buttons). Authorization is done here — plugins can't see the access
+		// controller. approve()/reject() emit `approval:resolved`.
+		this.bus.on("approval:decision", async (d) => {
+			try {
+				const authorized =
+					!this.accessController ||
+					this.accessController.isUserApproved(d.actorUserId, d.actorChannel);
+				const decidedBy = `${d.actorChannel}:${d.actorUserId}`;
+				if (!authorized) {
+					const row = approvals.get(d.id);
+					void this.bus.emit("approval:resolved", {
+						id: d.id,
+						status: "unauthorized",
+						decidedBy,
+						originChannel: row?.origin_channel ?? null,
+						originRef: row?.origin_ref ?? null,
+					});
+					return;
+				}
+				if (d.decision === "approve") {
+					await approvals.approve(d.id, decidedBy);
+				} else {
+					approvals.reject(d.id, decidedBy);
+				}
+			} catch (err) {
+				this.logger.warn("approval:decision failed", {
+					id: d.id,
+					error: String(err),
+				});
+			}
+		});
+
 		// Initialize memory system
 		if (config.memory.enabled) {
 			this.memoryStore = new MemoryStore(this.db, {
@@ -471,6 +532,24 @@ export class Kernel {
 					database: this.database,
 					// Lazy: the Supabase client boots later in start(); read at call time.
 					getSupabase: () => this.supabaseClient,
+				}),
+			);
+			// Companion-driven edit tools (PR C): list (read) + apply (human-approved,
+			// applied on approve via the executor below — same anchor-splice as the
+			// inline editor).
+			this.toolRegistry.register(
+				createCanvasBridgeTools({
+					canvasRoot,
+					db: this.database,
+					approvals,
+					audit: (action, details) => approvalsAudit.log(action, null, details),
+				}),
+			);
+			approvals.registerExecutor("canvas_apply_edit", (row) =>
+				applyCanvasEdit(row.params as unknown as ApplyEditParams, {
+					canvasRoot,
+					db: this.database,
+					audit: (action, details) => approvalsAudit.log(action, null, details),
 				}),
 			);
 			this.logger.info("Canvas tools registered", { canvasRoot });
@@ -717,9 +796,6 @@ export class Kernel {
 				const { createGitHubTools } = await import(
 					"../integrations/github/tools.js"
 				);
-				const { GitHubApprovals } = await import(
-					"../integrations/github/approvals.js"
-				);
 				const { AuditLogger } = await import("../security/audit-log.js");
 				const client = new GitHubClient(gh);
 				this.githubClient = client;
@@ -732,61 +808,16 @@ export class Kernel {
 				const ghAudit = new AuditLogger(this.db);
 				const ghAuditFn = (action: string, details: Record<string, unknown>) =>
 					ghAudit.log(action, null, details);
-				const approvals = new GitHubApprovals(
-					this.db,
-					client,
-					ghAuditFn,
-					this.bus,
-				);
-				this.githubApprovalsInstance = approvals;
-				// Wire the hook layer's require-approval verdict into the queue so a
-				// blocked tool call surfaces on the same approval surfaces (#110).
-				this.hookManager.setApprovalSink((ctx, reason) =>
-					approvals.enqueueExternal({
-						summary: `${ctx.toolName} — ${reason}`,
-						params: { tool: ctx.toolName, input: ctx.input },
-						requestedBy: ctx.sessionId ?? undefined,
-						origin: ctx.origin,
-					}),
-				);
-				this.toolRegistry.register(
-					createGitHubTools(client, { audit: ghAuditFn, approvals }),
-				);
-				// Resolve approvals decided from any channel surface (e.g. Slack
-				// buttons). Authorization is done here — the plugin can't see the
-				// access controller. approve()/reject() emit `approval:resolved`.
-				this.bus.on("approval:decision", async (d) => {
-					try {
-						const authorized =
-							!this.accessController ||
-							this.accessController.isUserApproved(
-								d.actorUserId,
-								d.actorChannel,
-							);
-						const decidedBy = `${d.actorChannel}:${d.actorUserId}`;
-						if (!authorized) {
-							const row = approvals.get(d.id);
-							void this.bus.emit("approval:resolved", {
-								id: d.id,
-								status: "unauthorized",
-								decidedBy,
-								originChannel: row?.origin_channel ?? null,
-								originRef: row?.origin_ref ?? null,
-							});
-							return;
-						}
-						if (d.decision === "approve") {
-							await approvals.approve(d.id, decidedBy);
-						} else {
-							approvals.reject(d.id, decidedBy);
-						}
-					} catch (err) {
-						this.logger.warn("approval:decision failed", {
-							id: d.id,
-							error: String(err),
-						});
-					}
-				});
+				// Attach the client to the always-on approval queue (constructed in the
+				// kernel constructor) + register GitHub tools. The setApprovalSink +
+				// approval:decision wiring is done once there, independent of GitHub.
+				const approvals = this.githubApprovalsInstance;
+				if (approvals) {
+					approvals.setClient(client);
+					this.toolRegistry.register(
+						createGitHubTools(client, { audit: ghAuditFn, approvals }),
+					);
+				}
 				// Reactor: webhook events → durable notifications (the agent
 				// "has something for you"). Phase B adds CI auto-investigation.
 				const { startGitHubReactor } = await import(
