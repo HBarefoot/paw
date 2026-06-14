@@ -86,6 +86,14 @@ export const configSchema = z.object({
 			requireApprovalTools: z.array(z.string()).default([]),
 		})
 		.default({}),
+	// OpenAI-compatible API server (B7). DISABLED unless `bearerToken` is set
+	// (vault slot `api.bearerToken`). A programmatic door to the whole agent —
+	// keep off until deliberately needed.
+	api: z
+		.object({
+			bearerToken: z.string().default(""),
+		})
+		.default({}),
 	cron: z.object({
 		enabled: z.boolean().default(true),
 		tickIntervalMs: z.number().int().positive().default(60_000),

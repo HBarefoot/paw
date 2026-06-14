@@ -48,6 +48,9 @@ export const defaults: PawConfig = {
 		denyTools: [],
 		requireApprovalTools: [],
 	},
+	api: {
+		bearerToken: "",
+	},
 	cron: {
 		enabled: true,
 		tickIntervalMs: 60_000,

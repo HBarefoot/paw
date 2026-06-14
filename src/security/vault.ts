@@ -50,6 +50,11 @@ export const KNOWN_SECRET_SLOTS: {
 	label: string;
 }[] = [
 	{ name: "ai.apiKey", scope: "ai", label: "Anthropic (Claude) API key" },
+	{
+		name: "api.bearerToken",
+		scope: "custom",
+		label: "OpenAI-compatible API bearer token",
+	},
 	{ name: "openai.apiKey", scope: "ai", label: "OpenAI API key" },
 	{ name: "gemini.apiKey", scope: "ai", label: "Gemini API key" },
 	{ name: "ollama.apiKey", scope: "ai", label: "Ollama cloud API key" },
@@ -271,6 +276,9 @@ export class VaultManager {
 
 		apply("ai.apiKey", (v) => {
 			if (config.ai) config.ai.apiKey = v;
+		});
+		apply("api.bearerToken", (v) => {
+			if (config.api) config.api.bearerToken = v;
 		});
 		apply("openai.apiKey", (v) => {
 			if (config.openai) config.openai.apiKey = v;

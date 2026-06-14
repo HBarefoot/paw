@@ -1366,7 +1366,7 @@ export class Kernel {
 		});
 
 		// Internal system channels (cron, heartbeat) bypass rate limiting and access control
-		const INTERNAL_CHANNELS = new Set(["cron", "heartbeat", "github"]);
+		const INTERNAL_CHANNELS = new Set(["cron", "heartbeat", "github", "api"]);
 		const isInternal = INTERNAL_CHANNELS.has(msg.channel);
 
 		// Rate limiting (skip for internal channels)
@@ -1764,7 +1764,7 @@ export class Kernel {
 		systemPrompt: string;
 	} | null> {
 		// Internal system channels (cron, heartbeat) bypass rate limiting and access control
-		const INTERNAL_CHANNELS = new Set(["cron", "heartbeat", "github"]);
+		const INTERNAL_CHANNELS = new Set(["cron", "heartbeat", "github", "api"]);
 		const isInternal = INTERNAL_CHANNELS.has(msg.channel);
 
 		// Rate limiting (skip for internal channels)

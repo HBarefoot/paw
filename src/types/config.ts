@@ -58,6 +58,9 @@ export interface PawConfig {
 		denyTools: string[];
 		requireApprovalTools: string[];
 	};
+	api: {
+		bearerToken: string;
+	};
 	cron: {
 		enabled: boolean;
 		tickIntervalMs: number;
