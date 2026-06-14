@@ -18,7 +18,17 @@ import { getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { logger as honoLogger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
-import { readConfigOverrides, saveConfigOverrides } from "../config/writer.js";
+import {
+	readConfigOverrides,
+	replaceConfigOverride,
+	saveConfigOverrides,
+} from "../config/writer.js";
+import {
+	dedupeMcpServers,
+	normalizeMcpName,
+	removeMcpServer,
+	upsertMcpServer,
+} from "../mcp/normalize.js";
 import { isValidCron } from "../cron/parser.js";
 import { resolveCronAction } from "../cron/scheduler.js";
 import type { StreamChunk } from "../ai/base-provider.js";
@@ -4070,14 +4080,17 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			if (Object.keys(headers).length > 0) serverConfig.headers = headers;
 		}
 
-		// Persist to config file
-		const existing = (
-			await import("../config/writer.js")
-		).readConfigOverrides();
-		const mcpServers = (existing.mcpServers ?? {}) as Record<string, unknown>;
-		mcpServers[name] = serverConfig;
-		existing.mcpServers = mcpServers;
-		(await import("../config/writer.js")).saveConfigOverrides(existing);
+		// Normalize the name to a canonical (lowercase) key and persist the whole
+		// mcpServers map wholesale (replace, not merge) so a re-add of a different
+		// casing updates the existing entry rather than forking a duplicate.
+		name = normalizeMcpName(name);
+		const existing = readConfigOverrides();
+		const mcpServers = upsertMcpServer(
+			(existing.mcpServers ?? {}) as Record<string, unknown>,
+			name,
+			serverConfig,
+		);
+		replaceConfigOverride("mcpServers", mcpServers);
 
 		// Live-connect the server
 		try {
@@ -4142,20 +4155,22 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			return c.json({ error: "No MCP servers found in the pasted JSON" }, 400);
 		}
 
-		const writer = await import("../config/writer.js");
-		const existing = writer.readConfigOverrides();
-		const mcpServers = (existing.mcpServers ?? {}) as Record<string, unknown>;
+		const existing = readConfigOverrides();
+		let mcpServers = (existing.mcpServers ?? {}) as Record<string, unknown>;
 		const imported: string[] = [];
 		const connected: string[] = [];
-		for (const name of names) {
-			const cfg = servers[name] as Record<string, unknown>;
+		for (const rawName of names) {
+			const cfg = servers[rawName] as Record<string, unknown>;
 			// Infer transport if missing: url → http, command → stdio.
 			if (!cfg.transport) cfg.transport = cfg.url ? "http" : "stdio";
-			mcpServers[name] = cfg;
+			// Canonical (lowercase) key; a re-import of a differently-cased name
+			// updates the existing entry instead of forking a duplicate.
+			const name = normalizeMcpName(rawName);
+			mcpServers = upsertMcpServer(mcpServers, name, cfg);
 			imported.push(name);
 		}
-		existing.mcpServers = mcpServers;
-		writer.saveConfigOverrides(existing);
+		// Persist the whole map wholesale (replace, not merge).
+		replaceConfigOverride("mcpServers", mcpServers);
 
 		// Live-connect each imported server (best-effort).
 		for (const name of imported) {
@@ -4408,30 +4423,32 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 	});
 
 	app.delete("/api/mcp/servers/:name", async (c) => {
-		const name = c.req.param("name");
+		const name = normalizeMcpName(c.req.param("name"));
 
-		// Disconnect live server
+		// Disconnect the live server (try the canonical name + the raw param, in
+		// case a legacy mixed-case entry is still connected this session).
 		await kernel.mcpManager.disconnectServer(name);
+		const raw = c.req.param("name");
+		if (raw !== name) await kernel.mcpManager.disconnectServer(raw);
 
-		// Remove from config file
-		const existing = (
-			await import("../config/writer.js")
-		).readConfigOverrides();
-		const mcpServers = (existing.mcpServers ?? {}) as Record<string, unknown>;
-		delete mcpServers[name];
-		existing.mcpServers = mcpServers;
-		(await import("../config/writer.js")).saveConfigOverrides(existing);
+		// Remove from config and persist the map WHOLESALE (replace, not merge) so
+		// the removal actually sticks — saveConfigOverrides deep-merges and would
+		// resurrect the deleted key from disk. removeMcpServer drops all casings.
+		const existing = readConfigOverrides();
+		const mcpServers = removeMcpServer(
+			(existing.mcpServers ?? {}) as Record<string, unknown>,
+			name,
+		);
+		replaceConfigOverride("mcpServers", mcpServers);
 
 		return c.json({ removed: true });
 	});
 
 	app.post("/api/mcp/servers/:name/reconnect", async (c) => {
-		const name = c.req.param("name");
+		const name = normalizeMcpName(c.req.param("name"));
 
-		// Read config for this server
-		const existing = (
-			await import("../config/writer.js")
-		).readConfigOverrides();
+		// Read config for this server (by canonical name).
+		const existing = readConfigOverrides();
 		const mcpServers = (existing.mcpServers ?? {}) as Record<string, unknown>;
 		const serverConfig = mcpServers[name] as
 			| Record<string, unknown>

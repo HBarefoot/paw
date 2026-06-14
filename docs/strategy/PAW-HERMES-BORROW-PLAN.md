@@ -15,7 +15,11 @@ All gaps below were **confirmed absent in `src/`** (not assumed): no `cache_cont
   (**#110**) effectively delivered the Tier-2 "confirm/deny risky actions" security item, built
   as **per-channel / origin-aware approvals** (Slack Block Kit ↔ web modal, resolving the same
   row everywhere) rather than a single global queue. See `docs/prompts/PROMPT-paw-approval-surfaces.md`.
-- **In flight:** B5 plugin/event hooks (the general guardrail/metrics layer); B7 OpenAI-compatible API.
+- **B5 plugin/event hooks — DONE (#112).** Typed before/after hook layer on the tool-execution
+  chokepoint (deny/modify/require-approval gates + metrics/audit/guardrail built-ins).
+- **B7 OpenAI-compatible API — DONE (#113).** `POST /v1/chat/completions` (+ `/v1/models`),
+  bearer-gated, disabled-by-default, rate-limited, session-isolated.
+- **Next:** B4 workspace checkpoints (uses the B5 hook seam); B8 learning loop (design-first).
 - B4, B6, B8, B9 remain as written below.
 
 ---
