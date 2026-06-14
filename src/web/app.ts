@@ -914,7 +914,6 @@ export function createWebApp(
 				accent: colors.accent || colors.primary || "",
 				model: currentModel(),
 				uptimeMs: process.uptime() * 1000,
-				brandLogo: getBrandUi(brand)?.logo ?? undefined,
 				assetVersion: ASSET_VERSION,
 			}),
 		);

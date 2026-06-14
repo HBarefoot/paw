@@ -88,23 +88,6 @@ html:not(.dark) .ops-app {
 	align-items: center;
 	gap: 11px;
 }
-.ops-brand-logo {
-	width: 26px;
-	height: 26px;
-	border-radius: 7px;
-	object-fit: contain;
-}
-.ops-brand-mark {
-	width: 26px;
-	height: 26px;
-	border-radius: 7px;
-	border: 1px solid var(--ops-line2);
-	background: radial-gradient(
-		circle at 50% 50%,
-		color-mix(in srgb, var(--accent) 55%, transparent),
-		transparent 70%
-	);
-}
 .ops-brand .name {
 	font-family: var(--ops-sans);
 	font-weight: 600;

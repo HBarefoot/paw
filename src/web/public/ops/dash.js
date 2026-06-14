@@ -17,13 +17,6 @@
 		root.innerHTML = "";
 
 		// ---- top bar ----------------------------------------------------------
-		const brandMark = cfg.brandLogo
-			? el("img", {
-					class: "ops-brand-logo",
-					src: cfg.brandLogo,
-					alt: cfg.brandName || "",
-				})
-			: el("span", { class: "ops-brand-mark" });
 		refs.connPill = el("span", { class: "ops-conn-pill" });
 		refs.actChip = el("span", { class: "ops-activity-chip" });
 		refs.modelChip = el("span", { class: "ops-model-chip" });
@@ -39,7 +32,6 @@
 		});
 		const topbar = el("div", { class: "ops-topbar" }, [
 			el("div", { class: "ops-brand" }, [
-				brandMark,
 				el("div", null, [
 					el("div", { class: "name", text: "AGENT OPS" }),
 					el("div", { class: "sub", text: "Operations monitor" }),

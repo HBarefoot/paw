@@ -11,9 +11,6 @@ interface OpsPageProps {
 	/** Process uptime in ms at render (informational; the live engine tracks the
 	 *  session clock from the server feed). */
 	uptimeMs: number;
-	/** Real brand logo URL (from `/api/brand/ui` → getBrandUi) — the topbar mark.
-	 *  Falls back to an accent glyph when there's no brand logo. */
-	brandLogo?: string;
 	/** Asset version for cache-busting the static ops modules. */
 	assetVersion?: string;
 	/** Route this page is mounted at, for the sidebar nav active-state. */
@@ -34,7 +31,6 @@ export const OpsPage: FC<OpsPageProps> = ({
 	accent,
 	model,
 	uptimeMs,
-	brandLogo,
 	assetVersion = "",
 	currentPath = "/",
 }) => {
@@ -43,7 +39,6 @@ export const OpsPage: FC<OpsPageProps> = ({
 		model: model || "",
 		uptimeMs,
 		accent: safeAccent,
-		brandLogo: brandLogo || "",
 	}).replace(/</g, "\\u003c");
 	const v = assetVersion ? `?v=${encodeURIComponent(assetVersion)}` : "";
 	return (
