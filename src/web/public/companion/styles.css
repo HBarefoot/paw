@@ -99,8 +99,9 @@ body {
  * A slow-breathing LED + the live skill count; colour/border are accent-driven. */
 .status-chip {
 	position: absolute;
-	top: 2px;
-	left: 2px;
+	/* Inset from the corner so the chip has breathing room (was flush at 2px). */
+	top: 16px;
+	left: 16px;
 	z-index: 6;
 	display: inline-flex;
 	align-items: center;
