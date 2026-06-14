@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { EventBus } from "../../kernel/bus.js";
+import type { EventMap } from "../../types/events.js";
 import type { GitHubClient } from "./client.js";
 
 export type GitHubGatedAction =
@@ -318,5 +319,48 @@ export class GitHubApprovals {
 			default:
 				throw new Error(`Unknown gated action: ${row.action}`);
 		}
+	}
+}
+
+export interface ApprovalDecisionDeps {
+	approvals: Pick<GitHubApprovals, "approve" | "reject" | "get">;
+	/** null ⇒ security disabled ⇒ authorized (matches the rest of the kernel). */
+	accessController: {
+		isUserApproved(userId: string, channel: string): boolean;
+	} | null;
+	/** Emit the resolution for the unauthorized case (approve()/reject() emit their own). */
+	emit: (payload: EventMap["approval:resolved"]) => void;
+}
+
+/**
+ * Resolve an `approval:decision` from any surface. This is the SECURITY GATE:
+ * the acting user is authorized via `accessController.isUserApproved` before any
+ * `approve()`/`reject()` runs; an unauthorized decision changes no state and only
+ * emits an `unauthorized` resolution. Extracted from the kernel handler so the
+ * gate is unit-testable without booting a kernel.
+ */
+export async function resolveApprovalDecision(
+	d: EventMap["approval:decision"],
+	deps: ApprovalDecisionDeps,
+): Promise<void> {
+	const decidedBy = `${d.actorChannel}:${d.actorUserId}`;
+	const authorized =
+		!deps.accessController ||
+		deps.accessController.isUserApproved(d.actorUserId, d.actorChannel);
+	if (!authorized) {
+		const row = deps.approvals.get(d.id);
+		deps.emit({
+			id: d.id,
+			status: "unauthorized",
+			decidedBy,
+			originChannel: row?.origin_channel ?? null,
+			originRef: row?.origin_ref ?? null,
+		});
+		return;
+	}
+	if (d.decision === "approve") {
+		await deps.approvals.approve(d.id, decidedBy);
+	} else {
+		deps.approvals.reject(d.id, decidedBy);
 	}
 }

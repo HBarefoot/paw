@@ -665,7 +665,7 @@ export class Kernel {
 				const { createGitHubTools } = await import(
 					"../integrations/github/tools.js"
 				);
-				const { GitHubApprovals } = await import(
+				const { GitHubApprovals, resolveApprovalDecision } = await import(
 					"../integrations/github/approvals.js"
 				);
 				const { AuditLogger } = await import("../security/audit-log.js");
@@ -695,29 +695,12 @@ export class Kernel {
 				// access controller. approve()/reject() emit `approval:resolved`.
 				this.bus.on("approval:decision", async (d) => {
 					try {
-						const authorized =
-							!this.accessController ||
-							this.accessController.isUserApproved(
-								d.actorUserId,
-								d.actorChannel,
-							);
-						const decidedBy = `${d.actorChannel}:${d.actorUserId}`;
-						if (!authorized) {
-							const row = approvals.get(d.id);
-							void this.bus.emit("approval:resolved", {
-								id: d.id,
-								status: "unauthorized",
-								decidedBy,
-								originChannel: row?.origin_channel ?? null,
-								originRef: row?.origin_ref ?? null,
-							});
-							return;
-						}
-						if (d.decision === "approve") {
-							await approvals.approve(d.id, decidedBy);
-						} else {
-							approvals.reject(d.id, decidedBy);
-						}
+						await resolveApprovalDecision(d, {
+							approvals,
+							accessController: this.accessController,
+							emit: (payload) =>
+								void this.bus.emit("approval:resolved", payload),
+						});
 					} catch (err) {
 						this.logger.warn("approval:decision failed", {
 							id: d.id,

@@ -1,10 +1,12 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import {
+	type ApprovalDecisionDeps,
 	GitHubApprovals,
 	type PendingActionRow,
 	approvalLabel,
 	originFromSessionId,
+	resolveApprovalDecision,
 } from "../../../src/integrations/github/approvals.js";
 import type { GitHubClient } from "../../../src/integrations/github/client.js";
 import { EventBus } from "../../../src/kernel/bus.js";
@@ -173,5 +175,113 @@ describe("GitHubApprovals — origin + lifecycle + events", () => {
 		// Idempotent: a second sweep doesn't re-audit.
 		q.expireStale(24);
 		expect(audits.filter((a) => a.endsWith(".expired"))).toHaveLength(1);
+	});
+});
+
+describe("resolveApprovalDecision (authz gate)", () => {
+	// Spy approvals + access controller built from plain closures (no kernel boot,
+	// no live bus). approve/reject record their calls; get returns a slack-origin row.
+	function harness(opts: { approved: boolean }) {
+		const calls = {
+			approve: [] as Array<[string, string]>,
+			reject: [] as Array<[string, string]>,
+			isUserApproved: [] as Array<[string, string]>,
+			emitted: [] as EventMap["approval:resolved"][],
+		};
+		const approvals: ApprovalDecisionDeps["approvals"] = {
+			approve: async (id, by) => {
+				calls.approve.push([id, by]);
+				return { id, status: "executed" } as PendingActionRow;
+			},
+			reject: (id, by) => {
+				calls.reject.push([id, by]);
+				return { id, status: "rejected" } as PendingActionRow;
+			},
+			get: () =>
+				({
+					origin_channel: "slack",
+					origin_ref: '{"channel":"C1","threadTs":"1.2"}',
+				}) as PendingActionRow,
+		};
+		const deps: ApprovalDecisionDeps = {
+			approvals,
+			accessController: {
+				isUserApproved: (userId, channel) => {
+					calls.isUserApproved.push([userId, channel]);
+					return opts.approved;
+				},
+			},
+			emit: (p) => calls.emitted.push(p),
+		};
+		return { deps, calls };
+	}
+
+	test("unapproved Slack user → no approve/reject, emits unauthorized", async () => {
+		const { deps, calls } = harness({ approved: false });
+		await resolveApprovalDecision(
+			{
+				id: "a1",
+				decision: "approve",
+				actorChannel: "slack",
+				actorUserId: "U_evil",
+			},
+			deps,
+		);
+		// The gate consulted the access controller with the ACTING slack user.
+		expect(calls.isUserApproved).toEqual([["U_evil", "slack"]]);
+		// No state change.
+		expect(calls.approve).toHaveLength(0);
+		expect(calls.reject).toHaveLength(0);
+		// Surfaced as unauthorized (so the Slack message can say so).
+		expect(calls.emitted).toHaveLength(1);
+		expect(calls.emitted[0].status).toBe("unauthorized");
+		expect(calls.emitted[0].decidedBy).toBe("slack:U_evil");
+	});
+
+	test("approved Slack user → approve() runs once, tagged with the actor", async () => {
+		const { deps, calls } = harness({ approved: true });
+		await resolveApprovalDecision(
+			{
+				id: "a2",
+				decision: "approve",
+				actorChannel: "slack",
+				actorUserId: "U_ok",
+			},
+			deps,
+		);
+		expect(calls.isUserApproved).toEqual([["U_ok", "slack"]]);
+		expect(calls.approve).toEqual([["a2", "slack:U_ok"]]);
+		expect(calls.reject).toHaveLength(0);
+		expect(calls.emitted).toHaveLength(0); // approve() emits its own resolution
+	});
+
+	test("approved user + reject → reject() runs, approve() does not", async () => {
+		const { deps, calls } = harness({ approved: true });
+		await resolveApprovalDecision(
+			{
+				id: "a3",
+				decision: "reject",
+				actorChannel: "slack",
+				actorUserId: "U_ok",
+			},
+			deps,
+		);
+		expect(calls.reject).toEqual([["a3", "slack:U_ok"]]);
+		expect(calls.approve).toHaveLength(0);
+	});
+
+	test("accessController null (security disabled) → authorized", async () => {
+		const { deps, calls } = harness({ approved: false });
+		deps.accessController = null;
+		await resolveApprovalDecision(
+			{
+				id: "a4",
+				decision: "approve",
+				actorChannel: "slack",
+				actorUserId: "U_any",
+			},
+			deps,
+		);
+		expect(calls.approve).toEqual([["a4", "slack:U_any"]]);
 	});
 });
