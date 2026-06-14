@@ -110,10 +110,13 @@ export function createSecurityHeaders(
 		}
 
 		// The live companion (/companion) is framed inside the same-origin chat
-		// page's pinned Home tab. The default X-Frame-Options: DENY blocks that,
-		// so allow SAMEORIGIN framing with a CSP that lets it load its modules
-		// (script-src 'self' + the inline bootstrap) and fetch /api/ops/feed.
-		if (path === "/companion") {
+		// page's pinned Home tab; the page-scoped Assistant console
+		// (/canvas/assistant) is framed inside the canvas admin toolbar's panel.
+		// The default X-Frame-Options: DENY blocks that, so allow SAMEORIGIN framing
+		// with a CSP that lets them load their modules (script-src 'self' + the
+		// inline bootstrap) and fetch same-origin APIs (/api/ops/feed,
+		// /api/canvas/stream).
+		if (path === "/companion" || path === "/canvas/assistant") {
 			c.header("X-Content-Type-Options", "nosniff");
 			c.header("Referrer-Policy", "strict-origin-when-cross-origin");
 			c.header("X-Frame-Options", "SAMEORIGIN");

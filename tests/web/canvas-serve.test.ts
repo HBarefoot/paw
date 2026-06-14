@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
 	canvasContentType,
+	canvasFileFromUrlPath,
 	injectCanvasRuntime,
 	injectCompanionLauncher,
 	shouldServeCompanion,
@@ -52,6 +55,47 @@ describe("canvasContentType", () => {
 	it("falls back to octet-stream", () => {
 		expect(canvasContentType(".xyz")).toBe("application/octet-stream");
 		expect(canvasContentType("")).toBe("application/octet-stream");
+	});
+});
+
+describe("canvasFileFromUrlPath (page-context mapping for the Assistant)", () => {
+	it("maps a preview URL to its canvas file", () => {
+		expect(
+			canvasFileFromUrlPath("/api/canvas/preview/market-report.html"),
+		).toBe("market-report.html");
+		expect(canvasFileFromUrlPath("/api/canvas/preview/sales/index.html")).toBe(
+			"sales/index.html",
+		);
+	});
+	it("maps an app-space URL to apps/<space>/<sub> (default index.html)", () => {
+		expect(canvasFileFromUrlPath("/api/app/shop/index.html")).toBe(
+			"apps/shop/index.html",
+		);
+		expect(canvasFileFromUrlPath("/api/app/shop/")).toBe(
+			"apps/shop/index.html",
+		);
+		expect(canvasFileFromUrlPath("/api/app/shop")).toBe("apps/shop/index.html");
+		expect(canvasFileFromUrlPath("/api/app/shop/about/")).toBe(
+			"apps/shop/about/index.html",
+		);
+	});
+	it("decodes percent-encoding", () => {
+		expect(canvasFileFromUrlPath("/api/canvas/preview/my%20page.html")).toBe(
+			"my page.html",
+		);
+	});
+	it("returns null for non-canvas URLs and traversal attempts", () => {
+		expect(canvasFileFromUrlPath("/chat")).toBeNull();
+		expect(canvasFileFromUrlPath("/api/canvas/preview/")).toBeNull();
+		expect(
+			canvasFileFromUrlPath("/api/canvas/preview/../../etc/passwd"),
+		).toBeNull();
+		expect(canvasFileFromUrlPath("/api/app/")).toBeNull();
+	});
+	it("honors a custom app namespace", () => {
+		expect(canvasFileFromUrlPath("/api/app/x/index.html", "spaces")).toBe(
+			"spaces/x/index.html",
+		);
 	});
 });
 
@@ -199,8 +243,9 @@ describe("companion launcher injection", () => {
 			companion: true,
 		});
 		expect(out).toContain(LAUNCHER_MARKER);
-		// Lazy-loads the same-origin companion + self-gates to top-level pages.
-		expect(out).toContain('f.src="/companion"');
+		// Lazy-loads the same-origin page-scoped Assistant console (with the host
+		// page path as context) + self-gates to top-level pages.
+		expect(out).toContain('f.src="/canvas/assistant?path="');
 		expect(out).toContain("window.top!==window.self");
 		// Original content preserved, launcher sits before </body>.
 		expect(out).toContain("page");
@@ -348,30 +393,44 @@ describe("companion launcher: single entry point per page", () => {
 		expect(revealed).toBe(false); // never added paw-cmp-top → stays display:none
 	});
 
-	it("top-level: script reveals the launcher and wires the open button", () => {
+	it("top-level: reveals the toolbar, Assistant opens the page-scoped console, Edit toggles edit mode", () => {
 		const topWin = {} as Record<string, unknown>;
 		topWin.top = topWin;
 		topWin.self = topWin;
+		topWin.location = { pathname: "/api/canvas/preview/market-report.html" };
+		topWin.encodeURIComponent = encodeURIComponent;
 		const added: string[] = [];
-		let clickHandler: (() => void) | null = null;
-		const launcher = { classList: { add: (c: string) => added.push(c) } };
-		const btn = {
+		const handlers: Record<string, () => void> = {};
+		const mkBtn = (name: string) => ({
 			addEventListener: (_t: string, fn: () => void) => {
-				clickHandler = fn;
+				handlers[name] = fn;
 			},
-		};
-		const panel = {
-			classList: { toggle: () => true },
 			setAttribute: () => {},
-		};
+		});
+		const launcher = { classList: { add: (c: string) => added.push(c) } };
+		const assistant = mkBtn("assistant");
+		const edit = mkBtn("edit");
+		const panel = { classList: { toggle: () => true }, setAttribute: () => {} };
 		const frame = { src: "" };
+		const docClasses: string[] = [];
 		const byId: Record<string, unknown> = {
 			"paw-cmp-launcher": launcher,
-			"paw-cmp-btn": btn,
+			"paw-cmp-assistant": assistant,
+			"paw-cmp-edit": edit,
 			"paw-cmp-panel": panel,
 			"paw-cmp-frame": frame,
 		};
-		const doc = { getElementById: (id: string) => byId[id] };
+		const doc = {
+			getElementById: (id: string) => byId[id],
+			documentElement: {
+				classList: {
+					toggle: (c: string) => {
+						docClasses.push(c);
+						return true;
+					},
+				},
+			},
+		};
 		new Function(
 			"window",
 			"document",
@@ -379,9 +438,38 @@ describe("companion launcher: single entry point per page", () => {
 		)(topWin, doc);
 		// Revealed at top-level.
 		expect(added).toContain("paw-cmp-top");
-		// Clicking lazy-loads the same-origin companion exactly once.
-		expect(typeof clickHandler).toBe("function");
-		(clickHandler as unknown as () => void)();
-		expect(frame.src).toBe("/companion");
+		// Assistant click lazy-loads the page-scoped console WITH the host page path.
+		expect(typeof handlers.assistant).toBe("function");
+		handlers.assistant();
+		expect(frame.src).toBe(
+			`/canvas/assistant?path=${encodeURIComponent("/api/canvas/preview/market-report.html")}`,
+		);
+		// Edit click toggles Edit Mode (html.paw-edit-on).
+		expect(typeof handlers.edit).toBe("function");
+		handlers.edit();
+		expect(docClasses).toContain("paw-edit-on");
+	});
+});
+
+describe("assistant console module", () => {
+	const src = readFileSync(
+		resolve(import.meta.dir, "../../src/web/public/companion/assistant.js"),
+		"utf-8",
+	);
+
+	it("parses without a syntax error (compile guard)", () => {
+		// new Function compiles the source (throws SyntaxError on bad JS) without
+		// executing it — a cheap guard against shipping a broken console module.
+		expect(() => new Function(src)).not.toThrow();
+	});
+
+	it("drives the canvas stream endpoint with the page path as context", () => {
+		expect(src).toContain("/api/canvas/stream");
+		expect(src).toContain("pagePath");
+		// Reads the host page from its own ?path= query.
+		expect(src).toContain('"path"');
+		// Consumes the SSE stream and renders streamed text.
+		expect(src).toContain("getReader");
+		expect(src).toContain("text_delta");
 	});
 });

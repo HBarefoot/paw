@@ -25,6 +25,50 @@ export function canvasContentType(ext: string): string {
 	return CANVAS_MIME_MAP[ext.toLowerCase()] || "application/octet-stream";
 }
 
+/**
+ * Map a served-page URL pathname to the canvas workspace file it renders, so the
+ * agent can be told which page the admin is looking at. Preview pages
+ * (`/api/canvas/preview/<file>`) map to `<file>`; app-space pages
+ * (`/api/app/<space>/<sub>`) map to `<appNamespace>/<space>/<sub>` (default
+ * index.html when the subpath is empty/trailing-slash). Returns null for anything
+ * else (so callers can omit page context rather than guess). Pure + URL-decoding,
+ * with a traversal guard (`..` / NUL → null).
+ */
+export function canvasFileFromUrlPath(
+	pathname: string,
+	appNamespace = "apps",
+): string | null {
+	let p: string;
+	try {
+		p = decodeURIComponent(pathname);
+	} catch {
+		return null;
+	}
+	const reject = (f: string): boolean =>
+		f.includes("\0") || f.split("/").some((seg) => seg === "..");
+
+	const PREVIEW = "/api/canvas/preview/";
+	if (p.startsWith(PREVIEW)) {
+		const file = p.slice(PREVIEW.length).replace(/^\/+/, "");
+		if (!file || reject(file)) return null;
+		return file;
+	}
+	const APP = "/api/app/";
+	if (p.startsWith(APP)) {
+		const rest = p.slice(APP.length).replace(/^\/+/, "");
+		const slash = rest.indexOf("/");
+		const space = slash === -1 ? rest : rest.slice(0, slash);
+		let sub = slash === -1 ? "" : rest.slice(slash + 1);
+		if (!space || space === "..") return null;
+		sub = sub.replace(/^\/+/, "");
+		if (!sub || sub.endsWith("/")) sub += "index.html";
+		const file = `${appNamespace}/${space}/${sub}`;
+		if (reject(file)) return null;
+		return file;
+	}
+	return null;
+}
+
 // ⚠️ The two strings below are BROWSER JS embedded in a template literal — the
 // recurring "inline-script-template-trap": backslashes are cooked once here
 // before the browser sees them, so `\\n` here becomes a literal `\n` escape in
@@ -58,36 +102,45 @@ const REFRESH_POLLER = `<script>(function(){if(location.pathname.indexOf("/api/a
  *  second one. */
 export const COMPANION_LAUNCHER_MARKER = 'id="paw-cmp-launcher"';
 
-// Floating companion launcher, injected ONLY for authenticated admins viewing a
-// served canvas page (the caller decides via the `companion` flag / the standalone
-// injectCompanionLauncher below). It is fully self-contained and carries NO
-// secrets: just static markup + the same-origin "/companion" URL, which itself
-// resolves the visitor's session server-side. Everything is scoped under the
-// `paw-cmp-*` ids so it can't clobber the page's own styles/scripts.
+// Floating admin TOOLBAR (Vercel-Toolbar style), injected ONLY for authenticated
+// admins viewing a served canvas page (the caller decides via the `companion`
+// flag / the standalone injectCompanionLauncher below). It is fully self-contained
+// and carries NO secrets: just static markup + same-origin URLs, which resolve the
+// visitor's session server-side. Everything is scoped under the `paw-cmp-*` ids so
+// it can't clobber the page's own styles/scripts. It expands to two actions:
+//   • Assistant — opens the same-origin page-scoped chat console
+//     (`/canvas/assistant?path=<this page>`) in the panel iframe — the SINGLE
+//     entry point (a real promptable console, not the display-only face).
+//   • Edit — toggles Edit Mode by flipping `html.paw-edit-on` (the inline
+//     click-to-edit wiring lands in a follow-up; this is the affordance toggle).
 //
-// SINGLE ENTRY POINT PER TOP-LEVEL PAGE: the launcher markup is HIDDEN by
-// default (`#paw-cmp-launcher{display:none}`) and the script only REVEALS it when
-// the page is genuinely top-level (window.top === window.self). When the page is
-// embedded — the console canvas pane, the /canvas/share wrapper's inner preview
-// iframe, a null-origin sandbox — the script returns early and the launcher stays
-// display:none, so an embedded copy can NEVER paint a second (dead) ✦ button next
-// to the real top-level one. (Previously the self-gate only skipped the JS wiring
-// but left the fixed-position button visible — the duplication this fixes.)
-// CSP-safe: every canvas CSP variant allows inline script/style + a same-origin
-// frame ("/companion").
+// SINGLE ENTRY POINT PER TOP-LEVEL PAGE: the markup is HIDDEN by default
+// (`#paw-cmp-launcher{display:none}`) and the script only REVEALS it (adds
+// `paw-cmp-top`) when the page is genuinely top-level (window.top === window.self).
+// When embedded — the console canvas pane, the /canvas/share wrapper's inner
+// preview iframe, a null-origin sandbox — the script returns early and the toolbar
+// stays display:none, so an embedded copy can NEVER paint a duplicate next to the
+// real top-level one. CSP-safe: every canvas CSP variant allows inline
+// script/style + a same-origin frame. (Cooked template literal — NO regex
+// literals / NO backslashes; guarded by tests/web/canvas-serve.test.ts.)
 const COMPANION_LAUNCHER = `<style>
 #paw-cmp-launcher,#paw-cmp-panel{position:fixed;right:20px;z-index:2147483000;}
 #paw-cmp-launcher{bottom:20px;display:none;}
 #paw-cmp-launcher.paw-cmp-top{display:block;}
-#paw-cmp-btn{width:52px;height:52px;border-radius:50%;border:none;cursor:pointer;background:#7458f5;color:#fff;font-size:22px;line-height:1;box-shadow:0 6px 20px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;}
-#paw-cmp-btn:hover{filter:brightness(1.08);}
+#paw-cmp-bar{display:flex;gap:4px;align-items:center;background:#7458f5;border-radius:26px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.25);}
+.paw-cmp-act{height:40px;min-width:40px;padding:0 14px;border-radius:20px;border:none;cursor:pointer;background:transparent;color:#fff;font:600 13px/1 system-ui,-apple-system,sans-serif;display:flex;align-items:center;gap:6px;}
+.paw-cmp-act:hover{background:rgba(255,255,255,.16);}
+.paw-cmp-act[aria-pressed="true"]{background:#fff;color:#7458f5;}
 #paw-cmp-panel{bottom:84px;width:380px;height:560px;max-width:calc(100vw - 40px);max-height:calc(100vh - 110px);border-radius:16px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.35);background:#fff;display:none;}
 #paw-cmp-panel.paw-open{display:block;}
 #paw-cmp-frame{width:100%;height:100%;border:none;}
 </style>
-<div id="paw-cmp-launcher"><button id="paw-cmp-btn" type="button" aria-label="Open assistant" title="Assistant">✦</button></div>
+<div id="paw-cmp-launcher"><div id="paw-cmp-bar">
+<button id="paw-cmp-assistant" class="paw-cmp-act" type="button" aria-pressed="false" aria-label="Open assistant" title="Assistant">✦ Assistant</button>
+<button id="paw-cmp-edit" class="paw-cmp-act" type="button" aria-pressed="false" aria-label="Toggle edit mode" title="Edit">✎ Edit</button>
+</div></div>
 <div id="paw-cmp-panel" aria-hidden="true"><iframe id="paw-cmp-frame" title="Assistant" loading="lazy"></iframe></div>
-<script>(function(){try{if(window.top!==window.self)return;}catch(e){return;}var l=document.getElementById("paw-cmp-launcher"),b=document.getElementById("paw-cmp-btn"),p=document.getElementById("paw-cmp-panel"),f=document.getElementById("paw-cmp-frame");if(!l||!b||!p||!f)return;l.classList.add("paw-cmp-top");var loaded=false;b.addEventListener("click",function(){var open=p.classList.toggle("paw-open");p.setAttribute("aria-hidden",open?"false":"true");if(open&&!loaded){f.src="/companion";loaded=true;}});})();</script>`;
+<script>(function(){try{if(window.top!==window.self)return;}catch(e){return;}var l=document.getElementById("paw-cmp-launcher"),a=document.getElementById("paw-cmp-assistant"),ed=document.getElementById("paw-cmp-edit"),p=document.getElementById("paw-cmp-panel"),f=document.getElementById("paw-cmp-frame");if(!l||!a||!ed||!p||!f)return;l.classList.add("paw-cmp-top");var loaded=false;a.addEventListener("click",function(){var open=p.classList.toggle("paw-open");p.setAttribute("aria-hidden",open?"false":"true");a.setAttribute("aria-pressed",open?"true":"false");if(open&&!loaded){f.src="/canvas/assistant?path="+encodeURIComponent(window.location.pathname);loaded=true;}});ed.addEventListener("click",function(){var on=document.documentElement.classList.toggle("paw-edit-on");ed.setAttribute("aria-pressed",on?"true":"false");});})();</script>`;
 
 /**
  * Inject the error overlay + form/anchor runtime shim + opt-in app-space
