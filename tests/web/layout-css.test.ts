@@ -52,6 +52,78 @@ describe("design system is a served stylesheet, not a JS template literal", () =
 		const html = String(Layout({ title: "X", children: "y" }));
 		expect(html).toContain("/app/static/ds.css");
 	});
+});
+
+describe("Barefoot Digital design system", () => {
+	test("ds.css keeps the legacy token names AND adds the design vocabulary", () => {
+		// legacy names every page already references (kept so the reskin is value-only)
+		for (const t of [
+			"--bg-primary",
+			"--bg-card",
+			"--border-primary",
+			"--text-primary",
+			"--accent",
+			"--radius-md",
+			"--font-sans",
+		])
+			expect(DS_CSS).toContain(`${t}:`);
+		// the design's own vocabulary, aliased onto paw tokens
+		for (const t of [
+			"--green:",
+			"--panel:",
+			"--panel-2:",
+			"--ink:",
+			"--ink-bright:",
+			"--line:",
+			"--sans:",
+			"--mono:",
+			"--r:",
+		])
+			expect(DS_CSS).toContain(t);
+	});
+
+	test("the accent is emerald (dark hero) — not the old violet", () => {
+		expect(DS_CSS).toContain("#3fe08f"); // emerald accent (dark)
+		expect(DS_CSS).not.toContain("#6a4bf0"); // old violet light accent
+		expect(DS_CSS).not.toContain("#7458f5"); // old violet dark accent
+	});
+
+	test("fonts are vendored Space Grotesk + JetBrains Mono, NOT a Google CDN", () => {
+		expect(DS_CSS).toContain("@font-face");
+		expect(DS_CSS).toContain("/fonts/space-grotesk-400.woff2");
+		expect(DS_CSS).toContain("/fonts/jetbrains-mono-400.woff2");
+		expect(DS_CSS).toContain('"Space Grotesk"');
+		expect(DS_CSS).not.toContain("Geist");
+		// no external font CDN anywhere in the page
+		expect(LAYOUT_SRC).not.toContain("fonts.googleapis.com");
+		expect(String(Layout({ title: "X", children: "y" }))).not.toContain(
+			"fonts.googleapis.com",
+		);
+	});
+
+	test("the design's component vocabulary is present for pages to adopt", () => {
+		for (const sel of [
+			".panel {",
+			".panel-hd ",
+			".kpi {",
+			".section-hd ",
+			".seg {",
+			".conn-pill {",
+		])
+			expect(DS_CSS).toContain(sel);
+	});
+
+	test("the topbar renders the brand crumb + an Online conn-pill", () => {
+		const html = String(Layout({ title: "Config", children: "x" }));
+		expect(html).toContain('class="crumb" data-brand-name');
+		expect(html).toContain('class="conn-pill"');
+		expect(html).toContain("conn-dot pulse");
+		// hidden when the page suppresses the topbar (e.g. /chat, /)
+		const noTop = String(
+			Layout({ title: "Chat", children: "x", hideTopbar: true }),
+		);
+		expect(noTop).not.toContain('class="conn-pill"');
+	});
 
 	// The /chat viewport-scroll guard (PR #97) — the rules now live in ds.css.
 	test("no-topbar /chat is hard-capped to the viewport (scroll guard)", () => {
