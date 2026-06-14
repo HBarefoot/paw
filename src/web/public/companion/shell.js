@@ -426,16 +426,20 @@
 		home.appendChild(subtitle);
 		home.appendChild(opsFeed);
 
-		// On-brand status chip (top-left): a breathing LED + the REAL live skill
-		// count. Peripheral to the greeting; count refreshed in buildDock.
+		// On-brand status chip: a breathing LED + the REAL live skill count, pinned
+		// to the visible TOP-LEFT corner. It lives on `root` (the full-iframe,
+		// non-scaled layer) — NOT inside `.home`, which is a narrow column centered
+		// by #companion-root and shrunk by scaleToFit, so a chip in there floats
+		// next to the avatar and drifts as the screen gets busier. count refreshed
+		// in buildDock.
 		const statusChip = el("div", "status-chip");
 		statusChip.appendChild(el("span", "led"));
 		const statusText = el("span", "status-text", "Online");
 		statusChip.appendChild(statusText);
-		home.appendChild(statusChip);
 
 		fit.appendChild(home);
 		root.appendChild(fit);
+		root.appendChild(statusChip);
 
 		window.addEventListener("message", (e) => {
 			const d = e && e.data;

@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-// fix/companion-chip-spacing — the `ONLINE · N SKILLS` status chip was pinned
-// flush to the top-left corner (top/left: 2px) and read as cramped. It should
-// stay top-left but sit inset with proper breathing room. This test fails on the
-// pre-fix 2px values.
-const CSS = readFileSync(
-	new URL("../../src/web/public/companion/styles.css", import.meta.url),
-	"utf8",
-);
+// fix/companion-chip-spacing — the `ONLINE · N SKILLS` status chip must sit at
+// the VISIBLE top-left corner with breathing room. Two parts:
+//  1) it's pinned to `root` (the full-iframe, non-scaled layer), NOT inside the
+//     narrow centered `.home` column (where it floated next to the avatar and
+//     drifted as the screen got busier);
+//  2) it's inset from the corner (was flush at 2px).
+// Both assertions fail on the pre-fix code.
+const ROOT = new URL("../../src/web/public/companion/", import.meta.url);
+const CSS = readFileSync(new URL("styles.css", ROOT), "utf8");
+const SHELL = readFileSync(new URL("shell.js", ROOT), "utf8");
 
 /** Body of the first `<selector> { … }` rule (no nested braces in this sheet). */
 function ruleBody(css: string, selector: string): string {
@@ -28,5 +30,13 @@ describe("companion status chip spacing", () => {
 		// …but with breathing room (was the flush 2px on both axes pre-fix).
 		expect(px(chip, "top")).toBeGreaterThanOrEqual(12);
 		expect(px(chip, "left")).toBeGreaterThanOrEqual(12);
+	});
+
+	test("the chip is pinned to the iframe layer (root), not the centered .home column", () => {
+		// Anchoring to root (position:absolute, fills the iframe, NOT inside the
+		// scaled .fit) is what keeps the chip in the true top-left corner — even as
+		// the dock/feed grow and scaleToFit shrinks .home.
+		expect(SHELL).toContain("root.appendChild(statusChip)");
+		expect(SHELL).not.toContain("home.appendChild(statusChip)");
 	});
 });
