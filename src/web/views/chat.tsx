@@ -1092,15 +1092,81 @@ export function getChatScript(): string {
       prev.style.marginTop = "4px";
       prev.textContent = preview + "...";
       row.appendChild(prev);
-      row.onclick = async function() {
-        var pid = row.dataset.pid;
-        pawModal._close();
-        var useRes = await fetch("/api/prompts/" + encodeURIComponent(pid) + "/use", { method: "POST" });
-        if (!useRes.ok) return;
+
+      // Record usage and return the freshest body for an insert action.
+      async function recordUseAndGetBody() {
+        var useRes = await fetch("/api/prompts/" + encodeURIComponent(row.dataset.pid) + "/use", { method: "POST" });
+        if (!useRes.ok) return null;
         var useData = await useRes.json();
-        var body = (useData.prompt && useData.prompt.body) || "";
-        insertIntoComposer(body);
+        return (useData.prompt && useData.prompt.body) || "";
+      }
+
+      // Primary click on the row inserts the prompt body raw.
+      row.onclick = async function() {
+        pawModal._close();
+        var body = await recordUseAndGetBody();
+        if (body !== null) insertIntoComposer(body);
       };
+
+      // Secondary actions (stopPropagation so they don't trigger the row insert).
+      var actions = document.createElement("div");
+      actions.className = "prompt-pick-actions";
+
+      var quoteBtn = document.createElement("button");
+      quoteBtn.className = "feedback-btn action-btn";
+      quoteBtn.type = "button";
+      quoteBtn.textContent = "Insert as quote";
+      quoteBtn.title = "Insert wrapped as a quoted block";
+      quoteBtn.onclick = async function(ev) {
+        ev.stopPropagation();
+        pawModal._close();
+        var body = await recordUseAndGetBody();
+        if (body !== null) insertIntoComposer(buildQuote(body));
+      };
+      actions.appendChild(quoteBtn);
+
+      var copyBtn = document.createElement("button");
+      copyBtn.className = "feedback-btn action-btn";
+      copyBtn.type = "button";
+      copyBtn.textContent = "Copy body";
+      copyBtn.title = "Copy the prompt body to the clipboard";
+      copyBtn.onclick = function(ev) {
+        ev.stopPropagation();
+        copyToClipboard(p.body || "", copyBtn);
+      };
+      actions.appendChild(copyBtn);
+
+      var dupBtn = document.createElement("button");
+      dupBtn.className = "feedback-btn action-btn";
+      dupBtn.type = "button";
+      dupBtn.textContent = "Duplicate";
+      dupBtn.title = "Save a copy to the library";
+      dupBtn.onclick = async function(ev) {
+        ev.stopPropagation();
+        var res = await fetch("/api/prompts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: (p.title || "Untitled") + " (copy)", body: p.body || "", tags: p.tags || null })
+        });
+        if (res.ok) {
+          var orig = dupBtn.textContent;
+          dupBtn.textContent = "Duplicated!";
+          setTimeout(function() { dupBtn.textContent = orig; }, 1200);
+        } else {
+          await pawModal.alert("Duplicate failed", "HTTP " + res.status);
+        }
+      };
+      actions.appendChild(dupBtn);
+
+      var editLink = document.createElement("a");
+      editLink.className = "feedback-btn action-btn";
+      editLink.textContent = "Edit on Prompts page";
+      editLink.title = "Open the Prompt Library to edit this prompt";
+      editLink.href = "/prompts";
+      editLink.onclick = function(ev) { ev.stopPropagation(); };
+      actions.appendChild(editLink);
+
+      row.appendChild(actions);
       list.appendChild(row);
     });
     pawModal._show("Insert a prompt", list, [

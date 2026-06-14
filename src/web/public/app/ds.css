@@ -1078,6 +1078,10 @@
   .prompt-pick:hover {
     border-color: var(--accent); background: var(--bg-hover);
   }
+  .prompt-pick-actions {
+    display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px;
+  }
+  .prompt-pick-actions a.action-btn { text-decoration: none; }
   details.prompt-row {
     padding: 10px 12px; border: 1px solid var(--border-primary);
     border-radius: var(--radius-sm); background: var(--bg-card);
