@@ -169,4 +169,13 @@ describe("chat client script", () => {
 		const body = script.slice(start, start + 1600);
 		expect(body).toContain("ev.stopPropagation()");
 	});
+
+	test("appendMsg stacks bubble + actions in a .msg-col (actions render below)", () => {
+		// Claude-style layout: the action row sits BELOW the bubble, so appendMsg
+		// wraps the bubble in a .msg-col and appends the actions to that column.
+		expect(script).toContain('col.className = "msg-col"');
+		expect(script).toContain("col.appendChild(bubble)");
+		expect(script).toContain("addMessageActions(col, role,");
+		expect(script).toContain("wrapper.appendChild(col)");
+	});
 });

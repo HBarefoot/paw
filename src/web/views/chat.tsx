@@ -1311,13 +1311,17 @@ export function getChatScript(): string {
       }
     }
 
-    // Copy/Quote (+ Edit on user messages) on every bubble — covers user
-    // messages (send + DB load) and DB-loaded assistant messages. Live
-    // assistant bubbles get theirs in finalize().
-    addMessageActions(bubble, role, function() { return text; });
+    // Stack the bubble + its action row in a column so Copy/Quote (+ Edit on
+    // user messages) sit BELOW the bubble (Claude-style), not inside it. Covers
+    // user messages (send + DB load) and DB-loaded assistant messages; live
+    // assistant bubbles get their actions in finalize().
+    var col = document.createElement("div");
+    col.className = "msg-col";
+    col.appendChild(bubble);
+    addMessageActions(col, role, function() { return text; });
 
     wrapper.appendChild(avatar);
-    wrapper.appendChild(bubble);
+    wrapper.appendChild(col);
     messagesDiv.insertBefore(wrapper, typingDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   }
