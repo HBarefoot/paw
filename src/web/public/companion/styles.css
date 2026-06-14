@@ -6,12 +6,8 @@
  */
 :root {
 	--accent: #2ee6a8;
-	--bg: #050807;
-	--text: #f2f7f4;
-	--muted: #87a496;
-	--faint: #5e8f7c;
 	--mono: ui-monospace, "SF Mono", Menlo, monospace;
-	/* accent at alpha (themeable) */
+	/* accent at alpha (themeable, mode-independent) */
 	--a05: color-mix(in srgb, var(--accent) 5%, transparent);
 	--a06: color-mix(in srgb, var(--accent) 6%, transparent);
 	--a12: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -24,8 +20,44 @@
 	--a50: color-mix(in srgb, var(--accent) 50%, transparent);
 	--a55: color-mix(in srgb, var(--accent) 55%, transparent);
 	--a80: color-mix(in srgb, var(--accent) 80%, transparent);
-	--pill-border: var(--a28);
+
+	/* ── Surface/stroke tokens — LIGHT is the default (companion renders on a
+	 * white panel when the console is in light mode); html.dark restores the
+	 * original dark palette. --accent stays the single brand hue; per-mode pill
+	 * tints are DERIVED from it via the --aNN color-mix tints, never hardcoded.
+	 * The class is the same `.dark` the rest of the console uses (set on this
+	 * iframe doc by the /companion theme bootstrap). */
+	--bg: #ffffff;
+	--text: #0f1f19;
+	--muted: #47584f;
+	--faint: #566b60;
+	--pill-text: #15281f;
+	--pill-bg: var(--a16);
+	--pill-border: var(--a50);
+	--op-text: #1f3329;
+	--op-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+	--op-border: var(--a35);
+	--sub-name: #1f3329;
+	--sub-status: #566b60;
+	/* failed-state label text (a sub-agent frowns) — readable red per ground */
+	--danger-text: #c4322b;
+	/* text that sits ON the accent fill (active pill) — mode-independent */
+	--on-accent: #03130c;
+}
+html.dark {
+	--bg: #050807;
+	--text: #f2f7f4;
+	--muted: #87a496;
+	--faint: #5e8f7c;
+	--pill-text: #d9efe6;
 	--pill-bg: var(--a06);
+	--pill-border: var(--a28);
+	--op-text: #cfe9dd;
+	--op-bg: color-mix(in srgb, var(--accent) 3.5%, transparent);
+	--op-border: var(--a16);
+	--sub-name: #cfe9dd;
+	--sub-status: #4a705f;
+	--danger-text: #ff8a83;
 }
 
 * {
@@ -78,7 +110,7 @@ body {
 	letter-spacing: 0.06em;
 	text-transform: uppercase;
 	color: var(--faint);
-	border: 1px solid var(--a28);
+	border: 1px solid var(--pill-border);
 	border-radius: 999px;
 	padding: 6px 12px 6px 10px;
 	background: color-mix(in srgb, var(--bg) 55%, transparent);
@@ -457,7 +489,7 @@ body {
 }
 .subagent-name {
 	font-size: 12px;
-	color: #cfe9dd;
+	color: var(--sub-name);
 	font-weight: 500;
 }
 .subagent-status {
@@ -465,13 +497,13 @@ body {
 	font-size: 9.5px;
 	text-transform: uppercase;
 	letter-spacing: 0.1em;
-	color: #4a705f;
+	color: var(--sub-status);
 }
 .subagent.acting .subagent-status {
 	color: var(--accent);
 }
 .subagent.failed .subagent-status {
-	color: #ff8a83;
+	color: var(--danger-text);
 }
 @keyframes spawnBud {
 	0% {
@@ -506,7 +538,7 @@ body {
 	border-radius: 999px;
 	border: 1px solid var(--pill-border);
 	background: var(--pill-bg);
-	color: #d9efe6;
+	color: var(--pill-text);
 	white-space: nowrap;
 	transition: transform 0.25s, background 0.25s, color 0.25s, box-shadow 0.25s;
 }
@@ -566,7 +598,7 @@ body {
 }
 .pill.active {
 	background: var(--accent);
-	color: #03130c;
+	color: var(--on-accent);
 	border-color: transparent;
 	font-weight: 600;
 	transform: scale(1.08);
@@ -574,8 +606,8 @@ body {
 	box-shadow: 0 0 28px var(--a55);
 }
 .pill.active .pill-dot {
-	background: #03130c;
-	border-color: #03130c;
+	background: var(--on-accent);
+	border-color: var(--on-accent);
 	box-shadow: none;
 }
 .pill.active::after {
@@ -623,10 +655,10 @@ body {
 	gap: 11px;
 	padding: 10px 16px;
 	border-radius: 11px;
-	border: 1px solid var(--a16);
-	background: color-mix(in srgb, var(--accent) 3.5%, transparent);
+	border: 1px solid var(--op-border);
+	background: var(--op-bg);
 	font-size: 13px;
-	color: #cfe9dd;
+	color: var(--op-text);
 	animation: opIn 0.3s ease-out;
 }
 .op-dot {

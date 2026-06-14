@@ -1918,8 +1918,17 @@ export function createWebApp(
 			skills,
 		}).replace(/</g, "\\u003c");
 		const v = `?v=${ASSET_VERSION}`;
+		// Theme bootstrap: the companion is a standalone same-origin iframe doc, so it
+		// never runs the layout.tsx bootstrap and would otherwise be stuck on the
+		// dark :root palette. Apply the EXISTING `.dark` toggle here from the shared
+		// localStorage("paw-theme") BEFORE the stylesheet paints (no flash), and keep
+		// it live: __pawSetTheme writes paw-theme → the `storage` event fires in this
+		// (other) same-origin doc; system-pref changes update when theme === "system".
+		// Regex/backslash-free — this is browser JS cooked from a template literal
+		// (the inline-script-template-trap).
 		return c.html(`<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){function apply(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);}apply();window.addEventListener("storage",function(e){if(e.key==="paw-theme")apply();});window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",apply);})()</script>
 <link rel="stylesheet" href="/companion/static/styles.css${v}"></head>
 <body><div id="companion-root"></div>
 <script src="/companion/static/router.js${v}"></script>
