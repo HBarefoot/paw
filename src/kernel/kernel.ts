@@ -585,6 +585,23 @@ export class Kernel {
 			}),
 		);
 
+		// One-time cleanup: collapse pre-existing case-variant MCP server keys
+		// (e.g. HubSpot/hubSpot/hubspot) into a single canonical lowercase key and
+		// persist it. Idempotent — a no-op when there are no dupes.
+		{
+			const { dedupeMcpServers } = await import("../mcp/normalize.js");
+			const { servers, changed } = dedupeMcpServers(this.config.mcpServers ?? {});
+			if (changed) {
+				const { replaceConfigOverride } = await import("../config/writer.js");
+				replaceConfigOverride("mcpServers", servers);
+				this.config.mcpServers =
+					servers as typeof this.config.mcpServers;
+				this.logger.info("Collapsed case-variant MCP server names", {
+					count: Object.keys(servers).length,
+				});
+			}
+		}
+
 		// Connect MCP servers in parallel. n8n is a first-class integration whose
 		// workflow endpoints are just authenticated MCP servers — merge them in as
 		// synthetic entries (NOT persisted into config.mcpServers) so they ride the

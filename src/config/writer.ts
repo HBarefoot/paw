@@ -63,26 +63,81 @@ export function saveConfigOverrides(overrides: Record<string, unknown>): void {
 	configCacheMtimeMs = -1;
 	const existing = readConfigOverrides();
 	const merged = deepMergeOverrides(existing, overrides);
+	writeOverridesObject(merged);
+}
 
+/**
+ * Replace the subtree at a dotted `path` WHOLESALE — no deep-merge against disk.
+ * Unlike `saveConfigOverrides` (which unions keys and so can never remove one),
+ * this lets a caller that already holds the complete desired subtree express
+ * removals: e.g. `replaceConfigOverride("mcpServers", map)` persists exactly
+ * `map`, dropping any server no longer present. Other top-level keys are left
+ * untouched. The `store.dbPath` infra guard still applies on write.
+ */
+export function replaceConfigOverride(path: string, value: unknown): void {
+	configCache = null;
+	configCacheMtimeMs = -1;
+	const next = { ...readConfigOverrides() };
+	setAtPath(next, path, value);
+	writeOverridesObject(next);
+}
+
+/** Remove the key at a dotted `path` and persist (wholesale; no re-merge). */
+export function deleteConfigOverride(path: string): void {
+	configCache = null;
+	configCacheMtimeMs = -1;
+	const next = { ...readConfigOverrides() };
+	deleteAtPath(next, path);
+	writeOverridesObject(next);
+}
+
+/** Strip the infra-only DB path, then write + refresh the cache. Shared by all writers. */
+function writeOverridesObject(obj: Record<string, unknown>): void {
 	// Never persist the DB path: it's a deployment/infra concern driven by
 	// PAW_DB_PATH + defaults. Baking it into config.json (e.g. the default
 	// "./data/paw.db") would shadow PAW_DB_PATH and send the DB off-volume on
 	// Railway, wiping sessions each redeploy. Strip it (and an emptied store).
-	if (merged.store && typeof merged.store === "object") {
-		const store = merged.store as Record<string, unknown>;
+	if (obj.store && typeof obj.store === "object") {
+		const store = obj.store as Record<string, unknown>;
 		delete store.dbPath;
-		if (Object.keys(store).length === 0) delete merged.store;
+		if (Object.keys(store).length === 0) delete obj.store;
 	}
 
 	const CONFIG_FILE = configFile();
 	mkdirSync(configDir(), { recursive: true });
-	writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
+	writeFileSync(CONFIG_FILE, JSON.stringify(obj, null, 2), "utf-8");
 	try {
 		configCacheMtimeMs = statSync(CONFIG_FILE).mtimeMs;
 	} catch {
 		configCacheMtimeMs = -1;
 	}
-	configCache = merged;
+	configCache = obj;
+}
+
+function setAtPath(
+	obj: Record<string, unknown>,
+	path: string,
+	value: unknown,
+): void {
+	const keys = path.split(".");
+	let cur = obj;
+	for (let i = 0; i < keys.length - 1; i++) {
+		const k = keys[i];
+		if (typeof cur[k] !== "object" || cur[k] === null) cur[k] = {};
+		cur = cur[k] as Record<string, unknown>;
+	}
+	cur[keys[keys.length - 1]] = value;
+}
+
+function deleteAtPath(obj: Record<string, unknown>, path: string): void {
+	const keys = path.split(".");
+	let cur = obj;
+	for (let i = 0; i < keys.length - 1; i++) {
+		const k = keys[i];
+		if (typeof cur[k] !== "object" || cur[k] === null) return; // nothing to delete
+		cur = cur[k] as Record<string, unknown>;
+	}
+	delete cur[keys[keys.length - 1]];
 }
 
 function deepMergeOverrides(
