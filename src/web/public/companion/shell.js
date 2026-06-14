@@ -361,6 +361,36 @@
 		return { kind: "center" };
 	}
 
+	// ── Avatar renderer registry ────────────────────────────────────────────────
+	// An "avatar" is a face TYPE (the gel sphere, or a future robot). Each renderer
+	// is { key, label, build(opts) -> a `.cmp` node whose `_face.sphere` is the
+	// visible orb, step(node, expr, now, opts) }. The registry lets a picker swap the
+	// face type while the engine, expression machine, gaze, mouth-sync, springs,
+	// --accent and light/dark all stay central. The gel sphere is the default; an
+	// unknown key falls back to it. `build` returns just the face — the callers wrap
+	// it (main avatar antenna / sub-agent node).
+	const GEL_AVATAR = {
+		key: "gel",
+		label: "Gel Sphere",
+		build(opts) {
+			const cmp = buildFace((opts && opts.size) || 178);
+			themeFace(cmp, (opts && opts.theme) || "mint");
+			return cmp;
+		},
+		step: stepFace,
+	};
+	const AVATARS = { gel: GEL_AVATAR };
+	const DEFAULT_AVATAR_KEY = "gel";
+	// The active face type for ALL faces (main + sub-agents). PR1 leaves it at the
+	// default; the picker (PR2) sets it from config/localStorage and live-swaps.
+	let activeAvatarKey = DEFAULT_AVATAR_KEY;
+	function getAvatar(key) {
+		return AVATARS[key] || AVATARS[DEFAULT_AVATAR_KEY];
+	}
+	function avatarList() {
+		return Object.keys(AVATARS).map((k) => ({ key: k, label: AVATARS[k].label }));
+	}
+
 	function buildAvatar(themeKey) {
 		const wrap = el("div", "avatar");
 		const antenna = el("div", "antenna");
@@ -368,8 +398,7 @@
 		antenna.appendChild(el("span"));
 		antenna.appendChild(el("span"));
 		wrap.appendChild(antenna);
-		const cmp = buildFace(178);
-		themeFace(cmp, themeKey || "mint");
+		const cmp = getAvatar(activeAvatarKey).build({ size: 178, theme: themeKey || "mint" });
 		// data-avatar stays on the transformed/visible orb (the sphere) so the mood
 		// filter, the physics transform, and the gaze/tether lookups all target it.
 		cmp._face.sphere.setAttribute("data-avatar", "1");
@@ -608,8 +637,10 @@
 			// Each little agent is the SAME gel face, just small (54px) and themed a
 			// distinct colour (blue/violet/cyan) by spawn order — so it reads as its
 			// own agent, linked to the mint orchestrator.
-			const cmp = buildFace(54);
-			themeFace(cmp, SUB_THEME_CYCLE[a.gradIndex % SUB_THEME_CYCLE.length]);
+			const cmp = getAvatar(activeAvatarKey).build({
+				size: 54,
+				theme: SUB_THEME_CYCLE[a.gradIndex % SUB_THEME_CYCLE.length],
+			});
 			node.appendChild(cmp); // node.firstChild = the face (carries data-subagent)
 			node.appendChild(el("span", "subagent-name", a.name));
 			node.appendChild(el("span", "subagent-status", "idle"));
@@ -814,7 +845,7 @@
 						}
 					}
 				}
-				stepFace(cmp, expr, now, { gaze, popValue: 0, reduced, dt });
+				getAvatar(activeAvatarKey).step(cmp, expr, now, { gaze, popValue: 0, reduced, dt });
 			});
 		}
 
@@ -826,7 +857,7 @@
 			const av = avatarZone.firstChild;
 			const mainCmp = av && av.querySelector(".cmp");
 			if (mainCmp) {
-				stepFace(mainCmp, st.expression || "idle", now, {
+				getAvatar(activeAvatarKey).step(mainCmp, st.expression || "idle", now, {
 					gaze: mainGazePx(st),
 					popValue: pop.value,
 					reduced,
@@ -1028,5 +1059,14 @@
 		};
 	}
 
-	window.Companion = { mount, gazeTarget, captionFor, visibleAgents };
+	window.Companion = {
+		mount,
+		gazeTarget,
+		captionFor,
+		visibleAgents,
+		// Avatar registry surface (the picker enumerates `avatars`; `getAvatar`
+		// resolves a key with default fallback).
+		avatars: avatarList,
+		getAvatar,
+	};
 })();
