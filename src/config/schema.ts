@@ -163,6 +163,14 @@ export const configSchema = z.object({
 		maxPages: z.number().int().positive().default(3),
 		defaultTimeout: z.number().int().positive().default(30_000),
 	}),
+	// Companion (avatar) preferences. `avatar` is the deployment/brand DEFAULT
+	// face key (e.g. "gel" | "robot-halo"); a per-user localStorage["paw-avatar"]
+	// choice overrides it client-side.
+	companion: z
+		.object({
+			avatar: z.string().optional(),
+		})
+		.default({}),
 	agent: z
 		.object({
 			name: z.string().default("Paw"),

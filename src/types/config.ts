@@ -122,6 +122,10 @@ export interface PawConfig {
 		maxPages: number;
 		defaultTimeout: number;
 	};
+	// Default companion avatar key; per-user localStorage["paw-avatar"] overrides.
+	companion: {
+		avatar?: string;
+	};
 	agent: {
 		name: string;
 		systemPrompt: string;
