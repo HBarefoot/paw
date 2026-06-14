@@ -8,6 +8,47 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > and bumps `package.json`'s `version`. After the PR merges, tag from `main`:
 > `git tag vX.Y.Z && git push --tags` — never tag from the feature branch.
 
+## [0.7.0] - 2026-06-14
+
+The Barefoot Console re-theme — the whole web console moves onto the design system,
+with a consolidated Settings page and brand-aware light/dark. Builds on `0.6.0`
+(#138, #139).
+
+### Console design system
+- Re-themed the console to the Barefoot Console design: served `ds.css` token system
+  (emerald accent, vendored Space Grotesk + JetBrains Mono, light/dark via `:root` /
+  `:root.dark`) and the redesigned Dashboard (#138).
+- Ported the full page-component vocabulary into `ds.css` (`.panel`, `.kpi-strip`,
+  `.tbl`, `.feed`, `.cards`, `.split`, `.notif`, `.set-nav`, `.search-hero`,
+  `.pill-badge`, `.lrow`, `.toggle`, `.toast`, …), token-aware + dark-aware; upgraded
+  `.card` to the panel aesthetic so admin pages match without per-page rewrites (#139).
+
+### Pages rebuilt to the design (real data, no mock)
+- Cron, Heartbeat, Search, Prompts, Submissions, and Notifications rebuilt to the
+  design and wired to real data; shared inline-SVG icon set + a global `pawToast`
+  helper (#139).
+- Heartbeat KPIs are real runtime metrics — memory, uptime, event-loop lag, a timed
+  DB ping, and request rate — via `GET /api/heartbeat/metrics` (#139).
+- Command Center toolbar restyled to compact, uniform pills (soft-emerald New Chat,
+  fixed-width session dropdown) (#139).
+
+### Settings consolidation
+- One `/settings` page (set-nav sections: General, Agent, AI Provider, Memory, Web &
+  Canvas, Security, Advanced, Agents, Integrations, Brand Kit, Companion, Secrets)
+  wired to the existing save handler; the standalone `/config`, `/brand`, and
+  `/preferences` pages were removed and now redirect to `/settings` (#139).
+
+### Brand × theme fixes
+- The active brand now contributes **accent + fonts only**; the design system owns the
+  light/dark neutrals, so the theme toggle works consistently on every page (it was
+  frozen because the brand pinned background/text tokens onto both `:root` and
+  `:root.dark`) (#139).
+- Brand fonts now actually load: allow `@`/`;` in Google-Fonts URLs (these were
+  silently dropping the whole `@import`) and auto-merge any configured font families
+  missing from the URL (#139).
+- Re-themed the standalone login / TOTP pages from the old violet + Geist to emerald +
+  Space Grotesk / JetBrains Mono (#139).
+
 ## [0.6.0] - 2026-06-14
 
 Everything merged since `0.5.0` (#70–#136). Grouped by theme; each entry cites the
