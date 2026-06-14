@@ -914,6 +914,7 @@ export function createWebApp(
 				accent: colors.accent || colors.primary || "",
 				model: currentModel(),
 				uptimeMs: process.uptime() * 1000,
+				assetVersion: ASSET_VERSION,
 			}),
 		);
 	});
@@ -985,6 +986,18 @@ export function createWebApp(
 		const approvalRows = kernel.githubApprovals
 			? kernel.githubApprovals.actionable(liveConfig().approvals.ttlHours)
 			: [];
+		// Real session cost + token totals from usage_log (since this process
+		// booted, matching the dashboard's "session uptime"). Zeros when no usage.
+		const bootSince = new Date(Date.now() - process.uptime() * 1000)
+			.toISOString()
+			.slice(0, 19)
+			.replace("T", " ");
+		const c2 = kernel.costs?.getTotalCost({ since: bootSince });
+		const usage = {
+			costUsd: c2?.estimatedCostUsd ?? 0,
+			tokIn: c2?.totalInputTokens ?? 0,
+			tokOut: c2?.totalOutputTokens ?? 0,
+		};
 		return c.json(
 			buildOpsFeed(
 				{
@@ -998,6 +1011,7 @@ export function createWebApp(
 					pendingApprovals: approvalRows.length,
 					pendingApprovalsLabel: approvalLabel(approvalRows),
 					toolMetrics: kernel.hooks.metrics(),
+					usage,
 				},
 				since,
 			),

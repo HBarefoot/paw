@@ -57,13 +57,20 @@ export interface OpsOp {
 	duration: number;
 	tokIn: number;
 	tokOut: number;
-	latency: number | null;
 	args: string;
 	/** Stable per-task id (hash of the sub-agent session) — 0 for orchestrator
-	 *  / main-session ops (the Swarm lens groups agents by non-zero taskId). */
+	 *  / main-session ops (the dashboard groups sub-agent runs by non-zero taskId). */
 	taskId: number;
 	taskLabel: string;
-	session: string;
+}
+
+/** Real session usage from `usage_log` (CostTracker) — cost + token totals the
+ *  dashboard's cost/token KPIs render. Injected by the route (kept out of
+ *  buildOpsFeed's pure core); zeros when no usage tracker / no usage yet. */
+export interface OpsUsage {
+	costUsd: number;
+	tokIn: number;
+	tokOut: number;
 }
 
 /** A tool_log row (structural — matches ToolLogEntry). */
@@ -110,6 +117,8 @@ export interface OpsFeedDeps {
 		string,
 		{ count: number; errors: number; totalMs: number }
 	>;
+	/** Real session usage (cost + tokens) from the CostTracker / usage_log. */
+	usage?: OpsUsage;
 }
 
 export interface OpsFeedResponse {
@@ -131,6 +140,8 @@ export interface OpsFeedResponse {
 		string,
 		{ count: number; errors: number; totalMs: number }
 	>;
+	/** Real session usage (cost + tokens) from the CostTracker / usage_log. */
+	usage: OpsUsage;
 }
 
 function cleanName(name: string): string {
@@ -206,17 +217,12 @@ export function buildOpsFeed(
 	function attribute(session: string | null): {
 		taskId: number;
 		taskLabel: string;
-		session: string;
 	} {
 		const s = session ?? "";
 		const agent = s ? agentBySession.get(s) : undefined;
 		const isAgent = !!agent || s.startsWith("agent-");
-		if (!isAgent) return { taskId: 0, taskLabel: "", session: s };
-		return {
-			taskId: hashTask(s),
-			taskLabel: agent?.task || "sub-agent",
-			session: s,
-		};
+		if (!isAgent) return { taskId: 0, taskLabel: "" };
+		return { taskId: hashTask(s), taskLabel: agent?.task || "sub-agent" };
 	}
 
 	const rows = deps.toolLog?.query({ limit: OPS_MAX_ROWS }) ?? [];
@@ -242,11 +248,9 @@ export function buildOpsFeed(
 			duration,
 			tokIn: estimateTokens(r.input_preview ?? ""),
 			tokOut: estimateTokens(r.output_preview ?? ""),
-			latency: null,
 			args: r.input_preview ?? "",
 			taskId: attr.taskId,
 			taskLabel: attr.taskLabel,
-			session: attr.session,
 		});
 	}
 	ops.sort((a, b) => a.startedAt - b.startedAt);
@@ -263,11 +267,9 @@ export function buildOpsFeed(
 			duration: Math.max(0, now - f.startedAt),
 			tokIn: estimateTokens(JSON.stringify(f.input ?? "")),
 			tokOut: 0,
-			latency: null,
 			args: "",
 			taskId: attr.taskId,
 			taskLabel: attr.taskLabel,
-			session: attr.session,
 		};
 	});
 
@@ -284,5 +286,6 @@ export function buildOpsFeed(
 		pendingApprovals: deps.pendingApprovals ?? 0,
 		pendingApprovalsLabel: deps.pendingApprovalsLabel ?? "",
 		toolMetrics: deps.toolMetrics ?? {},
+		usage: deps.usage ?? { costUsd: 0, tokIn: 0, tokOut: 0 },
 	};
 }

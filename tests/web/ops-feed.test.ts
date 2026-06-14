@@ -236,10 +236,30 @@ describe("buildOpsFeed", () => {
 		const sub = f.ops.find((o) => o.op === "gh_search");
 		expect(sub?.taskId).not.toBe(0);
 		expect(sub?.taskLabel).toBe("deep dig");
-		expect(sub?.session).toBe(agentSession);
 		const main = f.ops.find((o) => o.op === "plan");
 		expect(main?.taskId).toBe(0); // orchestrator / main session, not a budded agent
 		expect(main?.taskLabel).toBe("");
+	});
+
+	test("usage (cost + token totals) passes through from deps", () => {
+		const f = buildOpsFeed(
+			deps({ usage: { costUsd: 0.42, tokIn: 1200, tokOut: 800 } }),
+			0,
+		);
+		expect(f.usage).toEqual({ costUsd: 0.42, tokIn: 1200, tokOut: 800 });
+	});
+
+	test("usage defaults to zeros when not provided", () => {
+		const f = buildOpsFeed(deps(), 0);
+		expect(f.usage).toEqual({ costUsd: 0, tokIn: 0, tokOut: 0 });
+	});
+
+	test("ops no longer carry the removed latency / session fields", () => {
+		const f = buildOpsFeed(deps(), 0);
+		const op = f.ops[0];
+		expect(op).toBeDefined();
+		expect("latency" in (op as object)).toBe(false);
+		expect("session" in (op as object)).toBe(false);
 	});
 
 	test("finished sub-agent ops still attribute via the agent- prefix", () => {
