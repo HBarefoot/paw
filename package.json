@@ -10,7 +10,8 @@
 		"dev": "bun --watch run bin/paw.ts start",
 		"test": "bun test",
 		"lint": "biome check .",
-		"format": "biome format --write ."
+		"format": "biome format --write .",
+		"gen:llms": "bun run scripts/gen-llms-txt.ts"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.39.0",

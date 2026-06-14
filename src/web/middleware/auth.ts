@@ -10,6 +10,11 @@ const PUBLIC_ROUTES = new Set([
 	"/paw-logo.jpg",
 	"/favicon.png",
 	"/favicon.ico",
+	// Public doc index for coding agents (llms.txt convention).
+	"/llms.txt",
+	"/llms-full.txt",
+	"/docs/llms.txt",
+	"/docs/llms-full.txt",
 ]);
 const PUBLIC_PREFIXES = [
 	"/api/canvas/events",

@@ -72,6 +72,7 @@ import {
 	injectCompanionLauncher,
 	shouldServeCompanion,
 } from "./canvas-serve.js";
+import { generateLlmsDocs } from "./llms-docs.js";
 import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
 import { createFormReceiver } from "./routes/forms.js";
 import { createOpenAiApi } from "./routes/openai-api.js";
@@ -1844,6 +1845,24 @@ export function createWebApp(
 	});
 
 	app.get("/favicon.ico", (c) => c.redirect("/favicon.png", 301));
+
+	// llms.txt / llms-full.txt — a curated doc index + full concatenation for
+	// coding agents. Generated from the live repo (never drifts), memoized per
+	// boot. Public (see PUBLIC_ROUTES); served at the root and under /docs/.
+	let llmsDocsCache: { index: string; full: string } | null = null;
+	function llmsDocs(): { index: string; full: string } {
+		if (!llmsDocsCache) llmsDocsCache = generateLlmsDocs();
+		return llmsDocsCache;
+	}
+	function serveText(c: Context, body: string) {
+		c.header("Content-Type", "text/plain; charset=utf-8");
+		c.header("Cache-Control", "public, max-age=3600");
+		return c.body(body);
+	}
+	app.get("/llms.txt", (c) => serveText(c, llmsDocs().index));
+	app.get("/llms-full.txt", (c) => serveText(c, llmsDocs().full));
+	app.get("/docs/llms.txt", (c) => serveText(c, llmsDocs().index));
+	app.get("/docs/llms-full.txt", (c) => serveText(c, llmsDocs().full));
 
 	// App design-system stylesheet (ds.css) served from 'self' as a REAL .css file
 	// instead of an inline <style> built from a JS template literal — a stray
