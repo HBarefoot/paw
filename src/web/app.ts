@@ -73,6 +73,7 @@ import {
 	injectCompanionLauncher,
 	shouldServeCompanion,
 } from "./canvas-serve.js";
+import { createCanvasEditRoutes } from "./routes/canvas-edit.js";
 import { generateLlmsDocs } from "./llms-docs.js";
 import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
 import { createFormReceiver } from "./routes/forms.js";
@@ -2860,6 +2861,23 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			created_at: version.created_at,
 		});
 	});
+
+	// Inline click-to-edit (owner-only; NOT in PUBLIC_PREFIXES → auth-gated).
+	// Extracted to a factory so it's app-testable; mounted at "/" so its absolute
+	// /api/canvas/edit* paths resolve. Stamps stable data-edit-id anchors on
+	// edit-prep, byte-splices inner text on save (round-trip guarded), and reverts
+	// to the latest canvas_versions snapshot on restore — all through writeCanvasFile.
+	app.route(
+		"/",
+		createCanvasEditRoutes({
+			canvasRoot,
+			db: database,
+			appNamespace: APP_NAMESPACE,
+			audit: (action, userId, details, ip) =>
+				authManager.audit.log(action, userId, details, ip),
+			getClientIp,
+		}),
+	);
 
 	// B3: Canvas templates — list available templates
 	app.get("/api/canvas/templates", (c) => {

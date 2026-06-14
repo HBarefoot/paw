@@ -393,35 +393,57 @@ describe("companion launcher: single entry point per page", () => {
 		expect(revealed).toBe(false); // never added paw-cmp-top → stays display:none
 	});
 
-	it("top-level: reveals the toolbar, Assistant opens the page-scoped console, Edit toggles edit mode", () => {
-		const topWin = {} as Record<string, unknown>;
+	// A fuller harness: the toolbar script now also wires Edit Mode (document
+	// listeners, fetch to the edit routes, sessionStorage resume). Run the whole
+	// cooked script top-level with stubs — this is the footgun guard (catches
+	// SyntaxError / ReferenceError from the template trap) plus a wiring check.
+	function runToolbar(opts: { resume?: boolean } = {}) {
+		const added: string[] = [];
+		const docClasses: string[] = [];
+		const docHandlers: Record<string, () => void> = {};
+		const btnHandlers: Record<string, () => void> = {};
+		const fetches: string[] = [];
+		const store: Record<string, string> = opts.resume
+			? { "paw-edit-resume": "1" }
+			: {};
+
+		const topWin: Record<string, unknown> = {
+			location: {
+				pathname: "/api/canvas/preview/market-report.html",
+				reload() {},
+			},
+			getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
+			confirm: () => true,
+		};
 		topWin.top = topWin;
 		topWin.self = topWin;
-		topWin.location = { pathname: "/api/canvas/preview/market-report.html" };
-		topWin.encodeURIComponent = encodeURIComponent;
-		const added: string[] = [];
-		const handlers: Record<string, () => void> = {};
+
 		const mkBtn = (name: string) => ({
 			addEventListener: (_t: string, fn: () => void) => {
-				handlers[name] = fn;
+				btnHandlers[name] = fn;
 			},
 			setAttribute: () => {},
+			disabled: false,
 		});
-		const launcher = { classList: { add: (c: string) => added.push(c) } };
-		const assistant = mkBtn("assistant");
-		const edit = mkBtn("edit");
-		const panel = { classList: { toggle: () => true }, setAttribute: () => {} };
 		const frame = { src: "" };
-		const docClasses: string[] = [];
 		const byId: Record<string, unknown> = {
-			"paw-cmp-launcher": launcher,
-			"paw-cmp-assistant": assistant,
-			"paw-cmp-edit": edit,
-			"paw-cmp-panel": panel,
+			"paw-cmp-launcher": { classList: { add: (c: string) => added.push(c) } },
+			"paw-cmp-assistant": mkBtn("assistant"),
+			"paw-cmp-edit": mkBtn("edit"),
+			"paw-cmp-restore": mkBtn("restore"),
+			"paw-cmp-panel": {
+				classList: { toggle: () => true },
+				setAttribute: () => {},
+			},
 			"paw-cmp-frame": frame,
 		};
 		const doc = {
-			getElementById: (id: string) => byId[id],
+			getElementById: (id: string) => byId[id] ?? null,
+			addEventListener: (t: string, fn: () => void) => {
+				docHandlers[t] = fn;
+			},
+			createElement: () => ({}) as Record<string, unknown>,
+			body: { appendChild: () => {} },
 			documentElement: {
 				classList: {
 					toggle: (c: string) => {
@@ -431,23 +453,55 @@ describe("companion launcher: single entry point per page", () => {
 				},
 			},
 		};
+		const fetchStub = (url: string) => {
+			fetches.push(url);
+			return Promise.resolve({
+				ok: true,
+				status: 200,
+				json: () => Promise.resolve({ ok: true, changed: false }),
+			});
+		};
+		const ss = {
+			getItem: (k: string) => store[k] ?? null,
+			setItem: (k: string, v: string) => {
+				store[k] = v;
+			},
+			removeItem: (k: string) => {
+				delete store[k];
+			},
+		};
 		new Function(
 			"window",
 			"document",
+			"fetch",
+			"sessionStorage",
+			"setTimeout",
 			onlyScript(injectCompanionLauncher("<body></body>")),
-		)(topWin, doc);
-		// Revealed at top-level.
-		expect(added).toContain("paw-cmp-top");
-		// Assistant click lazy-loads the page-scoped console WITH the host page path.
-		expect(typeof handlers.assistant).toBe("function");
-		handlers.assistant();
-		expect(frame.src).toBe(
+		)(topWin, doc, fetchStub, ss, () => 0);
+		return { added, docClasses, docHandlers, btnHandlers, fetches, frame };
+	}
+
+	it("top-level: reveals the toolbar and Assistant opens the page-scoped console", () => {
+		const t = runToolbar();
+		expect(t.added).toContain("paw-cmp-top");
+		expect(typeof t.btnHandlers.assistant).toBe("function");
+		t.btnHandlers.assistant();
+		expect(t.frame.src).toBe(
 			`/canvas/assistant?path=${encodeURIComponent("/api/canvas/preview/market-report.html")}`,
 		);
-		// Edit click toggles Edit Mode (html.paw-edit-on).
-		expect(typeof handlers.edit).toBe("function");
-		handlers.edit();
-		expect(docClasses).toContain("paw-edit-on");
+	});
+
+	it("Edit button enters edit mode via the edit-prep route", () => {
+		const t = runToolbar();
+		expect(typeof t.btnHandlers.edit).toBe("function");
+		t.btnHandlers.edit();
+		expect(t.fetches).toContain("/api/canvas/edit-prep");
+	});
+
+	it("resumes edit mode after the prep-triggered reload (sessionStorage flag)", () => {
+		const t = runToolbar({ resume: true });
+		// setMode(true) runs synchronously at load when the resume flag is set.
+		expect(t.docClasses).toContain("paw-edit-on");
 	});
 });
 
