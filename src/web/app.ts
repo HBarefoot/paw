@@ -2444,6 +2444,9 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			user: { id: userId, name: userName },
 			timestamp: new Date().toISOString(),
 			metadata: { canvas: true },
+			// Authenticated admin session — exempt from the pairing-code access
+			// controller (still rate-limited).
+			authenticated: !!admin,
 		};
 
 		// Consume stream in background, push each chunk as a canvas event
@@ -2506,6 +2509,9 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 				user: { id: userId, name: userName },
 				timestamp: new Date().toISOString(),
 				metadata: { canvas: true },
+				// Authenticated admin session — exempt from the pairing-code access
+				// controller (still rate-limited).
+				authenticated: !!admin,
 			};
 
 			const targetFile = parseCanvasFilename(body.message ?? "");
@@ -3940,6 +3946,9 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 				attachments: attachments.length > 0 ? attachments : undefined,
 				user: { id: userId, name: userName },
 				timestamp: new Date().toISOString(),
+				// Authenticated admin session — exempt from the pairing-code access
+				// controller (still rate-limited). See src/kernel/inbound-gate.ts.
+				authenticated: !!admin,
 			};
 
 			return streamSSE(c, async (stream) => {
@@ -4063,6 +4072,9 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 					attachments: attachments.length > 0 ? attachments : undefined,
 					user: { id: userId, name: userName },
 					timestamp: new Date().toISOString(),
+					// Authenticated admin session — exempt from the pairing-code
+					// access controller (still rate-limited).
+					authenticated: !!admin,
 				})
 				.catch((err) => {
 					// If handleInbound throws before emitting outbound, resolve the promise with the error
