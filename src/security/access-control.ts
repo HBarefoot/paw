@@ -160,6 +160,25 @@ export class AccessController {
 		this.logger.info("User revoked", { userId });
 	}
 
+	/** Users who have an outstanding pairing code (asked the bot but not yet
+	 *  approved). Drives the `/access` pending-approvals list. */
+	listPendingPairings(): Array<{
+		userId: string;
+		expiresAt: string;
+		createdAt: string;
+	}> {
+		return this.db
+			.prepare<{ user_id: string; expires_at: string; created_at: string }, []>(
+				"SELECT user_id, expires_at, created_at FROM pairing_codes ORDER BY created_at DESC",
+			)
+			.all()
+			.map((r) => ({
+				userId: r.user_id,
+				expiresAt: r.expires_at,
+				createdAt: r.created_at,
+			}));
+	}
+
 	listApprovedUsers(): ApprovedUser[] {
 		return this.db
 			.prepare<

@@ -2913,6 +2913,11 @@ export class Kernel {
 		return this.vercelClient;
 	}
 
+	/** Access control (pairing codes + approved users) — drives the /access page. */
+	get access(): AccessController | null {
+		return this.accessController;
+	}
+
 	/** Durable proactive-notification inbox (nav badge + canvas portrait). */
 	get notifications(): NotificationStore {
 		return this.notificationStoreInstance;

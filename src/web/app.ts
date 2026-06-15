@@ -82,6 +82,7 @@ import { approvalLabel } from "../integrations/github/approvals.js";
 import { buildOpsFeed } from "./routes/ops-feed.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
 import { SettingsPage } from "./views/settings-page.js";
+import { AccessPage } from "./views/access-page.js";
 import { VaultPage, type VaultSlotStatus } from "./views/vault-page.js";
 import { GitHubPage } from "./views/github-page.js";
 import { VercelPage } from "./views/vercel-page.js";
@@ -1162,6 +1163,66 @@ export function createWebApp(
 			ip,
 		);
 		return c.json({ saved: true, name, restartRequired: true });
+	});
+
+	// --- Access control: pairing approvals + approved users ---
+	app.get("/access", (c) => {
+		const ac = kernel.access;
+		return c.html(
+			AccessPage({
+				enabled: !!ac,
+				pending: ac ? ac.listPendingPairings() : [],
+				approved: ac ? ac.listApprovedUsers() : [],
+			}),
+		);
+	});
+
+	app.post("/api/access/approve", async (c) => {
+		const ac = kernel.access;
+		if (!ac) return c.json({ error: "Access control is not active" }, 400);
+		const body = await c.req
+			.json<{ userId?: string }>()
+			.catch(() => ({}) as { userId?: string });
+		const userId = (body.userId ?? "").trim();
+		if (!userId) return c.json({ error: "userId is required" }, 400);
+		const session = c.get("session") as { user_id: number } | undefined;
+		ac.approveUser(userId, `web:${session?.user_id ?? "admin"}`, "all");
+		authManager.audit.log(
+			"access.approve",
+			session?.user_id ?? null,
+			{ userId },
+			getClientIp(c),
+		);
+		// Let the user know in Slack (reuses the message:outbound → Slack DM path;
+		// Slack accepts a user id as the channel). The code-verify path DMs on its
+		// own, so this is the ONLY DM for page-driven approvals — no listener.
+		kernel.eventBus.emit("security:user-approved", { userId });
+		kernel.eventBus.emit("message:outbound", {
+			sessionId: `slack-${userId}`,
+			channel: "slack",
+			content: "Access granted! You can now chat with me. ✅",
+			metadata: { slackChannel: userId },
+		} as never);
+		return c.json({ ok: true });
+	});
+
+	app.post("/api/access/revoke", async (c) => {
+		const ac = kernel.access;
+		if (!ac) return c.json({ error: "Access control is not active" }, 400);
+		const body = await c.req
+			.json<{ userId?: string }>()
+			.catch(() => ({}) as { userId?: string });
+		const userId = (body.userId ?? "").trim();
+		if (!userId) return c.json({ error: "userId is required" }, 400);
+		const session = c.get("session") as { user_id: number } | undefined;
+		ac.revokeUser(userId);
+		authManager.audit.log(
+			"access.revoke",
+			session?.user_id ?? null,
+			{ userId },
+			getClientIp(c),
+		);
+		return c.json({ ok: true });
 	});
 
 	app.delete("/api/vault/:name", (c) => {
