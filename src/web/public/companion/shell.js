@@ -1275,6 +1275,13 @@
 			raf = window.requestAnimationFrame(frame);
 		}
 		frame();
+		// Fix B: enable the smooth fit-scale transition AFTER the initial layout,
+		// so the companion snaps to size on mount instead of animating a zoom-in.
+		// (.fit only — the breathing orb is .cmp-sphere, still driven by the rAF
+		// loop and never transitioned.) Double rAF lets the first transform paint.
+		window.requestAnimationFrame(() =>
+			window.requestAnimationFrame(() => fit.classList.add("fit-anim")),
+		);
 		if (typeof ResizeObserver === "function") {
 			new ResizeObserver(scaleToFit).observe(root);
 		}
