@@ -8,6 +8,7 @@ import {
 	VERCEL_DEFAULT_BASE_URL,
 	type VercelConfig,
 	VercelError,
+	type VercelStatus,
 } from "./types.js";
 
 /** Normalize an arbitrary string into a valid Vercel project name:
@@ -84,6 +85,27 @@ export class VercelClient implements DeployTarget {
 
 	isConfigured(): boolean {
 		return Boolean(this.token);
+	}
+
+	/** Live connection check for the console page: project count or an error.
+	 *  Never throws and never returns the token. */
+	async getStatus(): Promise<VercelStatus> {
+		if (!this.isConfigured()) return { configured: false, ok: false };
+		try {
+			const projects = await this.listProjects();
+			return {
+				configured: true,
+				ok: true,
+				projectCount: projects.length,
+				team: this.teamId,
+			};
+		} catch (err) {
+			return {
+				configured: true,
+				ok: false,
+				error: err instanceof Error ? err.message : String(err),
+			};
+		}
 	}
 
 	async getOrCreateProject(opts: CreateProjectOptions): Promise<ProjectResult> {

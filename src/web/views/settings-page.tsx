@@ -1131,6 +1131,42 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 									placeholder="McDonald's, Subway, Starbucks"
 								/>
 							</div>
+
+							<h4 class="bright" style="margin:18px 0 8px">
+								Vercel (deploy target)
+							</h4>
+							<table style="width:100%">
+								<tbody>
+									<tr>
+										<td style="width:120px">Enabled</td>
+										<td>
+											<Bool
+												name="vercel.enabled"
+												value={!!config.vercel?.enabled}
+											/>
+										</td>
+									</tr>
+									<tr>
+										<td>Team ID</td>
+										<td>
+											<input
+												type="text"
+												name="vercel.teamId"
+												value={config.vercel?.teamId ?? ""}
+												class="w-full"
+												placeholder="team_xxxxxxxx (blank = personal account)"
+											/>
+										</td>
+									</tr>
+								</tbody>
+							</table>
+							<p class="text-muted text-sm" style="margin-top:8px">
+								The API token is stored in the <a href="/vault">Vault</a> (slot{" "}
+								<code>vercel.token</code>), never here. Full status, the live
+								connection check, and your projects are on the{" "}
+								<a href="/vercel">Vercel page</a>. Changes take effect after a
+								restart.
+							</p>
 						</Section>
 
 						<div class="settings-save" id="settings-save">

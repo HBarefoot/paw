@@ -86,6 +86,15 @@ export interface DeployTarget {
 	listProjects(): Promise<ProjectSummary[]>;
 }
 
+/** Live connection summary for the console page. Never carries the token. */
+export interface VercelStatus {
+	configured: boolean;
+	ok: boolean;
+	projectCount?: number;
+	team?: string;
+	error?: string;
+}
+
 /** Thrown by the Vercel client for any non-2xx response or transport failure.
  *  `status` is the HTTP status when one is available (undefined for timeouts). */
 export class VercelError extends Error {
