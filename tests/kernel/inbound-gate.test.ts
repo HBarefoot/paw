@@ -6,6 +6,7 @@ import {
 	gateDenialMessage,
 	isAccessExempt,
 	isExternalTurnDenied,
+	isTrustedRelay,
 } from "../../src/kernel/inbound-gate.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { AccessController } from "../../src/security/access-control.js";
@@ -223,6 +224,70 @@ describe("fail-closed access control", () => {
 		expect(
 			isExternalTurnDenied(slack, { ...noCtrl, allowUnapprovedExternal: true }),
 		).toBe(false);
+	});
+});
+
+// Default-off, owner-channel-scoped trust for an app relay carrying only a shared
+// app id. NEVER trusts a bare app id globally — only an exact (appId, channel).
+describe("trustedRelayApps — isTrustedRelay (fail-closed)", () => {
+	const trustedRelayApps = [{ appId: "A0CLAUDE", channel: "D_OWNER_DM" }];
+
+	test("true ONLY for the exact configured (appId, channel)", () => {
+		expect(
+			isTrustedRelay({
+				appId: "A0CLAUDE",
+				channelId: "D_OWNER_DM",
+				trustedRelayApps,
+			}),
+		).toBe(true);
+	});
+
+	test("same app in a DIFFERENT channel is NOT trusted", () => {
+		expect(
+			isTrustedRelay({
+				appId: "A0CLAUDE",
+				channelId: "C_PUBLIC",
+				trustedRelayApps,
+			}),
+		).toBe(false);
+	});
+
+	test("empty config (default) → never trusts; missing fields → false", () => {
+		expect(
+			isTrustedRelay({
+				appId: "A0CLAUDE",
+				channelId: "D_OWNER_DM",
+				trustedRelayApps: [],
+			}),
+		).toBe(false);
+		expect(isTrustedRelay({ channelId: "D_OWNER_DM", trustedRelayApps })).toBe(
+			false,
+		);
+		expect(isTrustedRelay({ appId: "A0CLAUDE", trustedRelayApps })).toBe(false);
+	});
+
+	test("relayTrusted bypasses the gate for an otherwise-denied app id; default denies", () => {
+		const relayMsg = msg({
+			channel: "slack",
+			user: { id: "app:A0CLAUDE" },
+			origin: { appId: "A0CLAUDE", relay: true },
+			metadata: { slackChannel: "D_OWNER_DM" },
+		});
+		// no controller, not exempt → denied UNLESS relayTrusted
+		expect(
+			isExternalTurnDenied(relayMsg, {
+				isInternal: false,
+				accessController: null,
+				relayTrusted: true,
+			}),
+		).toBe(false);
+		expect(
+			isExternalTurnDenied(relayMsg, {
+				isInternal: false,
+				accessController: null,
+				relayTrusted: false,
+			}),
+		).toBe(true);
 	});
 });
 

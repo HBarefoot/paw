@@ -12,8 +12,18 @@ export interface ApprovedUser {
  *  the exact sender id the kernel keyed on so the operator can approve the RIGHT
  *  id (a relay like the Claude Slack app can present a different id than the
  *  channel UI implies). Pure + exported for unit testing. */
-export function unrecognizedUserMessage(userId: string, code: string): string {
-	return `Hi! I don't recognize you yet. Please ask an admin to approve your access, or enter this pairing code: *${code}*\n_(your id: ${userId})_`;
+export function unrecognizedUserMessage(
+	userId: string,
+	code: string,
+	isApp?: boolean,
+): string {
+	// App/relay senders (id like `app:A0123`) get an explicit note so the admin
+	// approving knows they'd be trusting an APP identity, not a single human.
+	const appNote =
+		isApp || userId.startsWith("app:") || userId.startsWith("bot:")
+			? `\n_(this was sent via a Slack app — \`${userId}\` — not a direct user; approving it trusts everything that app relays here)_`
+			: "";
+	return `Hi! I don't recognize you yet. Please ask an admin to approve your access, or enter this pairing code: *${code}*\n_(your id: ${userId})_${appNote}`;
 }
 
 export class AccessController {

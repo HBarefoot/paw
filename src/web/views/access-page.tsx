@@ -47,6 +47,14 @@ export function recognizedIds(
 	];
 }
 
+/** True when a gated/approved id is a synthesized app/bot sender (`app:<id>` /
+ *  `bot:<id>`) — a Slack app relayed the message (e.g. "Sent using @Claude") and
+ *  Slack carried no recoverable human id. Such rows are flagged so an admin never
+ *  blind-approves a shared app identity as if it were a person. */
+export function isAppSourcedId(id: string): boolean {
+	return id.startsWith("app:") || id.startsWith("bot:");
+}
+
 /** Human "expires in N min" / "expired" from an ISO timestamp, computed at
  *  render time. */
 function expiryLabel(expiresAt: string): { text: string; expired: boolean } {
@@ -125,6 +133,15 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 								>
 									<div>
 										<code>{p.userId}</code>{" "}
+										{isAppSourcedId(p.userId) && (
+											<span
+												class="badge"
+												style="background:var(--warning-bg,#7c5e10);color:var(--warning-fg,#ffd479)"
+												title="App-sourced sender (a Slack app relayed this, e.g. @Claude) — approving trusts EVERY message that app relays into this channel, not one human. Prefer a native DM from the real user."
+											>
+												⚠ via app
+											</span>
+										)}{" "}
 										<span
 											class="text-sm"
 											style={

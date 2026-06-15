@@ -21,6 +21,29 @@ export interface GateDeps {
 	 *  with no approval. The ONLY way to open external access — the absence of a
 	 *  controller (e.g. misconfig / config-loss) otherwise fails CLOSED. */
 	allowUnapprovedExternal?: boolean;
+	/** True ONLY when this turn matched a `security.trustedRelayApps` entry (an
+	 *  explicit app_id in an explicit owner channel). Computed by the caller via
+	 *  `isTrustedRelay`. Default false → app/relay senders stay gated. */
+	relayTrusted?: boolean;
+}
+
+/**
+ * Whether an app-relayed turn matches a configured `trustedRelayApps` entry.
+ * FAIL-CLOSED: false on any missing field or empty list; true only on an exact
+ * (appId, channel) match. This is the ONLY way an app/bot-relayed message is
+ * recognized without an explicit `approved_users` row — and it trusts the app
+ * ONLY inside the named (owner-only) channel, never globally.
+ */
+export function isTrustedRelay(opts: {
+	appId?: string;
+	channelId?: string;
+	trustedRelayApps?: { appId: string; channel: string }[];
+}): boolean {
+	const { appId, channelId, trustedRelayApps } = opts;
+	if (!appId || !channelId || !trustedRelayApps?.length) return false;
+	return trustedRelayApps.some(
+		(t) => t.appId === appId && t.channel === channelId,
+	);
 }
 
 /**
@@ -50,12 +73,21 @@ export function isExternalTurnDenied(
 	msg: InboundMessage,
 	deps: Pick<
 		GateDeps,
-		"isInternal" | "accessController" | "allowUnapprovedExternal"
+		| "isInternal"
+		| "accessController"
+		| "allowUnapprovedExternal"
+		| "relayTrusted"
 	>,
 ): boolean {
-	const { isInternal, accessController, allowUnapprovedExternal } = deps;
+	const {
+		isInternal,
+		accessController,
+		allowUnapprovedExternal,
+		relayTrusted,
+	} = deps;
 	if (isAccessExempt(msg, isInternal)) return false; // internal / authed web
 	if (allowUnapprovedExternal) return false; // explicit opt-in to open
+	if (relayTrusted) return false; // matched a configured trustedRelayApps entry
 	return (
 		!accessController ||
 		!accessController.isUserApproved(msg.user.id, msg.channel)
@@ -87,8 +119,13 @@ export function evaluateInboundGate(
 	msg: InboundMessage,
 	deps: GateDeps,
 ): GateResult {
-	const { isInternal, rateLimiter, accessController, allowUnapprovedExternal } =
-		deps;
+	const {
+		isInternal,
+		rateLimiter,
+		accessController,
+		allowUnapprovedExternal,
+		relayTrusted,
+	} = deps;
 
 	// Rate limiting (skip for internal channels). Authenticated web sessions are
 	// still rate-limited — only the access gate exempts them.
@@ -110,6 +147,7 @@ export function evaluateInboundGate(
 			isInternal,
 			accessController,
 			allowUnapprovedExternal,
+			relayTrusted,
 		})
 	) {
 		return { ok: false, reason: "access_denied" };

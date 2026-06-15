@@ -1215,12 +1215,17 @@ export function createWebApp(
 		// Slack accepts a user id as the channel). The code-verify path DMs on its
 		// own, so this is the ONLY DM for page-driven approvals — no listener.
 		kernel.eventBus.emit("security:user-approved", { userId });
-		kernel.eventBus.emit("message:outbound", {
-			sessionId: `slack-${userId}`,
-			channel: "slack",
-			content: "Access granted! You can now chat with me. ✅",
-			metadata: { slackChannel: userId },
-		} as never);
+		// Skip the DM for a synthesized app/bot sender (`app:A0123`) — that's not a
+		// real Slack channel/user, so chat.postMessage would just error. The DB
+		// approval above still applies, so the app's relayed turns are now allowed.
+		if (!userId.startsWith("app:") && !userId.startsWith("bot:")) {
+			kernel.eventBus.emit("message:outbound", {
+				sessionId: `slack-${userId}`,
+				channel: "slack",
+				content: "Access granted! You can now chat with me. ✅",
+				metadata: { slackChannel: userId },
+			} as never);
+		}
 		return c.json({ ok: true });
 	});
 
