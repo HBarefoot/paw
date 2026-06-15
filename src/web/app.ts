@@ -18,86 +18,35 @@ import { getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { logger as honoLogger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
+import type { StreamChunk } from "../ai/base-provider.js";
+import {
+	type StoredCredentials,
+	loadCredentials as loadStoredCredentials,
+	saveCredentials,
+} from "../auth/credential-store.js";
 import {
 	readConfigOverrides,
 	replaceConfigOverride,
 	saveConfigOverrides,
 } from "../config/writer.js";
+import { isValidCron } from "../cron/parser.js";
+import { resolveCronAction } from "../cron/scheduler.js";
+import { approvalLabel } from "../integrations/github/approvals.js";
+import type { Kernel } from "../kernel/kernel.js";
 import {
 	dedupeMcpServers,
 	normalizeMcpName,
 	removeMcpServer,
 	upsertMcpServer,
 } from "../mcp/normalize.js";
-import { isValidCron } from "../cron/parser.js";
-import { resolveCronAction } from "../cron/scheduler.js";
-import type { StreamChunk } from "../ai/base-provider.js";
-import type { Kernel } from "../kernel/kernel.js";
+import { createLogger } from "../observability/logger.js";
 import { resolveProjectPath } from "../paths.js";
 import { RateLimiter } from "../security/rate-limiter.js";
-import {
-	ACTION_LIMIT_PER_MIN,
-	APP_ASSET_LIMIT_PER_MIN,
-	CHROME_LIMIT_PER_MIN,
-	LIVE_LIMIT_PER_MIN,
-	type RateClass,
-	chrome429ContentType,
-	resolveRateClass,
-} from "./rate-limit-policy.js";
 import { buildOtpauthUri } from "../security/totp.js";
+import { KNOWN_SECRET_SLOTS, type VaultScope } from "../security/vault.js";
 import { WebAuthManager } from "../security/web-auth.js";
 import {
-	deleteSession,
-	deleteSessionOwnedBy,
-	forkSessionAtMessage,
-	forkSessionOwnedBy,
-	getSessionOwnedBy,
-	countAllSessions,
-	getSessionWithMessages,
-	listRecentSessions,
-	listRecentSessionsForUser,
-	updateSessionTitle,
-	updateSessionTitleOwnedBy,
-} from "../store/sessions.js";
-import { createLogger } from "../observability/logger.js";
-import type { PawConfig } from "../types/config.js";
-import { ASSET_VERSION } from "./asset-version.js";
-import { metricsSnapshot, recordRequest } from "./metrics.js";
-import { CANVAS_TEMPLATES } from "./canvas-templates.js";
-import { parseUploadedFiles } from "./file-parser.js";
-import { createAuthMiddleware } from "./middleware/auth.js";
-import { createSecurityHeaders } from "./middleware/security-headers.js";
-import {
-	canvasContentType,
-	canvasFileFromUrlPath,
-	injectCanvasRuntime,
-	shouldServeCompanion,
-} from "./canvas-serve.js";
-import { createCanvasEditRoutes } from "./routes/canvas-edit.js";
-import { generateLlmsDocs } from "./llms-docs.js";
-import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
-import { createFormReceiver } from "./routes/forms.js";
-import { createOpenAiApi } from "./routes/openai-api.js";
-import { approvalLabel } from "../integrations/github/approvals.js";
-import { buildOpsFeed } from "./routes/ops-feed.js";
-import { ChatPage, getChatScript } from "./views/chat.js";
-import { SettingsPage } from "./views/settings-page.js";
-import { AccessPage } from "./views/access-page.js";
-import { VaultPage, type VaultSlotStatus } from "./views/vault-page.js";
-import { GitHubPage } from "./views/github-page.js";
-import { VercelPage } from "./views/vercel-page.js";
-import { NotificationsPage } from "./views/notifications-page.js";
-import { KNOWN_SECRET_SLOTS, type VaultScope } from "../security/vault.js";
-// canvas-page.tsx removed — canvas is now merged into chat
-import { CronPage } from "./views/cron-page.js";
-import { OpsPage } from "./views/ops-page.js";
-import { HeartbeatPage } from "./views/heartbeat-page.js";
-import { LoginPage } from "./views/login-page.js";
-import { MCPPage } from "./views/mcp-page.js";
-import { MemoryPage } from "./views/memory-page.js";
-import { SearchPage, type SearchHit } from "./views/search-page.js";
-import { getSessionMessages, searchMessages } from "../store/messages.js";
-import {
+	type BrandDefinition,
 	activateBrand,
 	compileBrandBrief,
 	createBrand,
@@ -110,11 +59,8 @@ import {
 	renderBrandAppThemeCss,
 	renderBrandTokensCss,
 	updateBrand,
-	type BrandDefinition,
 } from "../store/brands.js";
-import { AuditPage, type AuditRow } from "./views/audit-page.js";
-import { ToolsPage, type ToolLogRow } from "./views/tools-page.js";
-import { PromptsPage } from "./views/prompts-page.js";
+import { getSessionMessages, searchMessages } from "../store/messages.js";
 import {
 	createPrompt,
 	deletePrompt,
@@ -124,20 +70,74 @@ import {
 	updatePrompt,
 } from "../store/prompts.js";
 import {
-	loadCredentials as loadStoredCredentials,
-	saveCredentials,
-	type StoredCredentials,
-} from "../auth/credential-store.js";
-import { exportSession, type ExportFormat } from "./exporters.js";
-import { SessionDetailPage, SessionsListPage } from "./views/sessions-page.js";
-import { SkillsPage } from "./views/skills-page.js";
-import { TotpSetupPage } from "./views/totp-setup-page.js";
-import { WebhooksPage } from "./views/webhooks-page.js";
+	countAllSessions,
+	deleteSession,
+	deleteSessionOwnedBy,
+	forkSessionAtMessage,
+	forkSessionOwnedBy,
+	getSessionOwnedBy,
+	getSessionWithMessages,
+	listRecentSessions,
+	listRecentSessionsForUser,
+	updateSessionTitle,
+	updateSessionTitleOwnedBy,
+} from "../store/sessions.js";
+import type { PawConfig } from "../types/config.js";
+import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
+import { ASSET_VERSION } from "./asset-version.js";
 import {
-	SubmissionsPage,
+	canvasContentType,
+	canvasFileFromUrlPath,
+	injectCanvasRuntime,
+	shouldServeCompanion,
+} from "./canvas-serve.js";
+import { CANVAS_TEMPLATES } from "./canvas-templates.js";
+import { type ExportFormat, exportSession } from "./exporters.js";
+import { parseUploadedFiles } from "./file-parser.js";
+import { generateLlmsDocs } from "./llms-docs.js";
+import { metricsSnapshot, recordRequest } from "./metrics.js";
+import { createAuthMiddleware } from "./middleware/auth.js";
+import { createSecurityHeaders } from "./middleware/security-headers.js";
+import {
+	ACTION_LIMIT_PER_MIN,
+	APP_ASSET_LIMIT_PER_MIN,
+	CHROME_LIMIT_PER_MIN,
+	LIVE_LIMIT_PER_MIN,
+	type RateClass,
+	chrome429ContentType,
+	resolveRateClass,
+} from "./rate-limit-policy.js";
+import { createCanvasEditRoutes } from "./routes/canvas-edit.js";
+import { createFormReceiver } from "./routes/forms.js";
+import { createOpenAiApi } from "./routes/openai-api.js";
+import { buildOpsFeed } from "./routes/ops-feed.js";
+import { AccessPage } from "./views/access-page.js";
+import { AuditPage, type AuditRow } from "./views/audit-page.js";
+import { ChatPage, getChatScript } from "./views/chat.js";
+// canvas-page.tsx removed — canvas is now merged into chat
+import { CronPage } from "./views/cron-page.js";
+import { GitHubPage } from "./views/github-page.js";
+import { HeartbeatPage } from "./views/heartbeat-page.js";
+import { LoginPage } from "./views/login-page.js";
+import { MCPPage } from "./views/mcp-page.js";
+import { MemoryPage } from "./views/memory-page.js";
+import { NotificationsPage } from "./views/notifications-page.js";
+import { OpsPage } from "./views/ops-page.js";
+import { PromptsPage } from "./views/prompts-page.js";
+import { type SearchHit, SearchPage } from "./views/search-page.js";
+import { SessionDetailPage, SessionsListPage } from "./views/sessions-page.js";
+import { SettingsPage } from "./views/settings-page.js";
+import { SkillsPage } from "./views/skills-page.js";
+import {
 	type CanvasAction,
 	type CanvasSubmission,
+	SubmissionsPage,
 } from "./views/submissions-page.js";
+import { type ToolLogRow, ToolsPage } from "./views/tools-page.js";
+import { TotpSetupPage } from "./views/totp-setup-page.js";
+import { VaultPage, type VaultSlotStatus } from "./views/vault-page.js";
+import { VercelPage } from "./views/vercel-page.js";
+import { WebhooksPage } from "./views/webhooks-page.js";
 
 // Fields that cannot be modified through the web config form
 const BLOCKED_CONFIG_FIELDS = new Set([
@@ -148,6 +148,10 @@ const BLOCKED_CONFIG_FIELDS = new Set([
 	"slack.appToken",
 	"slack.signingSecret",
 	"web.authToken",
+	// PostHog personal API key is vault-only (slot `posthog.personalApiKey`); the
+	// /settings UI renders no input for it, but block it so it can never be written
+	// to plaintext config via a hand-crafted form POST.
+	"posthog.personalApiKey",
 ]);
 
 type SecretStatusRow = {
@@ -1336,6 +1340,11 @@ export function createWebApp(
 	app.get("/api/vercel/status", async (c) => {
 		if (!kernel.vercel) return c.json({ configured: false, ok: false });
 		return c.json(await kernel.vercel.getStatus());
+	});
+
+	app.get("/api/posthog/status", async (c) => {
+		if (!kernel.posthog) return c.json({ configured: false, ok: false });
+		return c.json(await kernel.posthog.getStatus());
 	});
 
 	app.post("/api/vercel/settings", async (c) => {

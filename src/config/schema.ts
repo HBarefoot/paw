@@ -348,7 +348,9 @@ export const configSchema = z.object({
 			// `posthog.personalApiKey`. Server-side only; never reaches the model.
 			personalApiKey: z.string().default(""),
 			// Numeric project id for the Query API (PostHog project settings).
-			projectId: z.string().default(""),
+			// `coerce` so the /settings form's all-digits→number coercion round-trips
+			// back to a string instead of failing this schema at boot.
+			projectId: z.coerce.string().default(""),
 			// Ingestion/app host: https://us.i.posthog.com (or eu, or self-hosted).
 			host: z.string().default("https://us.i.posthog.com"),
 			timeout: z.number().int().positive().default(15_000),
