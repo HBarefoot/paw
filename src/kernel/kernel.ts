@@ -94,6 +94,7 @@ import {
 	evaluateInboundGate,
 	gateDenialMessage,
 	isAccessExempt,
+	isTrustedRelay,
 } from "./inbound-gate.js";
 import { discoverPlugins } from "./plugin-loader.js";
 import { Sandbox } from "./sandbox.js";
@@ -1608,9 +1609,17 @@ export class Kernel {
 		// explicit `allowUnapprovedExternal` opt-in. A missing controller denies
 		// (never silently opens) — but it's always constructed now, so the pairing
 		// flow below runs normally.
+		// Default-off, owner-channel-scoped trust for an app relay (e.g. "@Claude")
+		// that carries only a shared app id. Empty config → false → app stays gated.
+		const relayTrusted = isTrustedRelay({
+			appId: msg.origin?.appId,
+			channelId: msg.metadata?.slackChannel as string | undefined,
+			trustedRelayApps: this.config.security.trustedRelayApps,
+		});
 		if (
 			!isAccessExempt(msg, isInternal) &&
-			!this.config.security.allowUnapprovedExternal
+			!this.config.security.allowUnapprovedExternal &&
+			!relayTrusted
 		) {
 			const ac = this.accessController;
 			if (!ac?.isUserApproved(msg.user.id, msg.channel)) {
@@ -2024,6 +2033,11 @@ export class Kernel {
 			rateLimiter: this.rateLimiter,
 			accessController: this.accessController,
 			allowUnapprovedExternal: this.config.security.allowUnapprovedExternal,
+			relayTrusted: isTrustedRelay({
+				appId: msg.origin?.appId,
+				channelId: msg.metadata?.slackChannel as string | undefined,
+				trustedRelayApps: this.config.security.trustedRelayApps,
+			}),
 		});
 		if (!gate.ok) {
 			return gate.reason === "rate_limited"

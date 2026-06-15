@@ -243,6 +243,38 @@ describe("unrecognizedUserMessage", () => {
 		expect(msg).toContain("255274");
 		expect(msg).toContain("U0ABC123");
 	});
+
+	test("an app-sourced id (app:<id>) is labeled as a Slack app, not a human", () => {
+		const msg = unrecognizedUserMessage("app:A0CLAUDE", "255274", true);
+		expect(msg).toContain("app:A0CLAUDE");
+		expect(msg).toContain("Slack app");
+		// self-detects from the id prefix even without the explicit flag
+		expect(unrecognizedUserMessage("app:A0CLAUDE", "1")).toContain("Slack app");
+		// a real user id gets NO app note
+		expect(unrecognizedUserMessage("U0ABC123", "1")).not.toContain("Slack app");
+	});
+});
+
+// An untrusted app/relay sender (synthesized `app:<id>`) is DENIED, but is now
+// OBSERVABLE: it gets a pairing_codes row so it lands in /access Pending, and the
+// denial reply reveals the exact id. (Pre-change the Slack plugin dropped the
+// relayed message before the gate, so there was no row and no revealed id.)
+describe("an app-relayed sender is denied but observable + approvable", () => {
+	test("app:<id> is not approved, but generatePairingCode lands it in Pending", () => {
+		const db = new Database(":memory:");
+		db.run(APPROVED_DDL);
+		db.run(PAIRING_DDL);
+		const ac = new AccessController(db, createLogger("test"), {});
+		expect(ac.isUserApproved("app:A0CLAUDE", "slack")).toBe(false);
+		ac.generatePairingCode("app:A0CLAUDE");
+		expect(ac.listPendingPairings().map((p) => p.userId)).toContain(
+			"app:A0CLAUDE",
+		);
+		// And once an admin approves that exact app id, it's recognized.
+		ac.approveUser("app:A0CLAUDE", "web:admin", "all");
+		expect(ac.isUserApproved("app:A0CLAUDE", "slack")).toBe(true);
+		db.close();
+	});
 });
 
 // A DB approval must survive a process restart against the SAME db file. This

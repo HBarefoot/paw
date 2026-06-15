@@ -12,7 +12,12 @@ import {
 	parseSlackRef,
 	resolvedText,
 } from "./approvals.js";
-import { evaluateSlackMessage } from "./filter.js";
+import {
+	deriveInboundIdentity,
+	evaluateSlackMessage,
+	isReprocessableSubtype,
+	shouldSkipSlackEvent,
+} from "./filter.js";
 import { createSlackTools } from "./tools.js";
 
 interface SavedApprovalMsg {
@@ -28,6 +33,10 @@ export default class SlackPlugin implements ChannelPlugin {
 	/** This bot's own Slack user id, resolved at start() via auth.test. Used to
 	 *  detect @mentions in shared channels and to ignore self-authored posts. */
 	private botUserId: string | null = null;
+	/** This bot's own Slack bot id (auth.test().bot_id) — the loop guard for the
+	 *  app/bot path: Paw's own posts come back carrying THIS bot_id and must be
+	 *  skipped, while OTHER apps' bot ids reach the (fail-closed) access gate. */
+	private botId: string | null = null;
 	private unsubOutbound: (() => void) | null = null;
 	private unsubNotify: (() => void) | null = null;
 	private unsubApprovalPending: (() => void) | null = null;
@@ -48,61 +57,88 @@ export default class SlackPlugin implements ChannelPlugin {
 		ctx.registerTools(createSlackTools(this.app));
 
 		// Listen for all messages
-		this.app.message(async ({ message }) => {
-			// Diagnostic: log the RAW shape before any guard so relayed messages
-			// (e.g. the Claude Slack app posting "on behalf of" a user) are visible
-			// even when later skipped — reveals the exact user/bot_id/app_id Paw
-			// keys on vs the apparent author in the channel UI.
-			const m = message as Record<string, unknown>;
+		this.app.message(async ({ message, body }) => {
+			const m = message as unknown as Record<string, unknown>;
+			const env = body as unknown as Record<string, unknown>;
+			const authorizations = Array.isArray(env?.authorizations)
+				? (env.authorizations as Array<{ user_id?: string; is_bot?: boolean }>)
+				: undefined;
+			// Diagnostic: log the RAW shape BEFORE any guard so relayed messages
+			// (e.g. the Claude Slack app posting "on behalf of" a user) are fully
+			// visible. `authorizations` is Slack-populated (NOT sender-controllable)
+			// and is the field that reveals whether a real human id survives the
+			// relay — the Case A vs Case B decision. See deriveInboundIdentity.
 			ctx.logger.info("Slack inbound raw", {
 				user: m.user,
 				bot_id: m.bot_id,
 				app_id: m.app_id,
+				api_app_id: env?.api_app_id,
 				subtype: m.subtype,
+				username: m.username,
+				parent_user_id: m.parent_user_id,
+				nested_user: (m.message as Record<string, unknown> | undefined)?.user,
+				authorizations,
 				channel_type: m.channel_type,
+				team: m.team ?? env?.team_id,
 				hasText: typeof m.text === "string",
 			});
-			// Skip bot messages and message subtypes (edits, deletes, etc.)
-			if (message.subtype) return;
-			if (!("text" in message) || !message.text) return;
-			if ("bot_id" in message && message.bot_id) return;
-			// Never react to our own posts (belt-and-suspenders against loops in
-			// channels shared with other agents).
-			if ("user" in message && message.user === this.botUserId) return;
+
+			// Only (re)process real turns; skip edits/deletes/joins. A `bot_message`
+			// (and file_share/thread_broadcast) DOES carry text and must reach the
+			// access gate so a relayed sender is OBSERVABLE (id revealed + landed in
+			// /access Pending), not silently dropped as before.
+			if (!isReprocessableSubtype(m.subtype as string | undefined)) return;
+			if (typeof m.text !== "string" || !m.text) return;
+			// Loop guard: skip ONLY Paw's own posts (our bot_id / bot user id). Paw's
+			// denial/reply is re-delivered carrying our bot_id and dropped here.
+			// OTHER apps' bot ids fall through to the fail-closed access gate.
+			if (
+				shouldSkipSlackEvent({
+					user: m.user as string | undefined,
+					botId: m.bot_id as string | undefined,
+					botUserId: this.botUserId,
+					ourBotId: this.botId,
+				})
+			)
+				return;
 
 			// In shared/multi-agent channels only respond when explicitly
-			// @mentioned; DMs (channel_type "im") are handled unchanged. The
-			// returned text has the mention token stripped.
-			const channelType =
-				"channel_type" in message
-					? (message.channel_type as string | undefined)
-					: undefined;
+			// @mentioned; DMs (channel_type "im") are handled unchanged. This also
+			// bounds the app/bot path: only DM'd or @mentioned bot posts reach the gate.
+			const channelType = m.channel_type as string | undefined;
 			const decision = evaluateSlackMessage({
 				channelType,
-				text: message.text,
+				text: m.text,
 				botUserId: this.botUserId,
 			});
 			if (!decision.handle) return;
 
-			const threadTs =
-				("thread_ts" in message ? message.thread_ts : message.ts) ?? message.ts;
+			// Identity for the access gate: a real Slack user id when recoverable
+			// from Slack-populated fields, else a synthesized, clearly app-sourced
+			// `app:<id>`. Top-level `user` on a bot post is sender-controllable and
+			// is never trusted for identity (see filter.ts).
+			const identity = deriveInboundIdentity({ event: m, authorizations });
+
+			const threadTs = (m.thread_ts as string | undefined) ?? (m.ts as string);
 
 			const inbound: InboundMessage = {
 				id: randomUUID(),
-				sessionId: `slack-${message.channel}-${threadTs}`,
+				sessionId: `slack-${m.channel}-${threadTs}`,
 				channel: "slack",
 				content: decision.text,
-				user: { id: message.user ?? "unknown" },
-				timestamp: message.ts,
+				user: { id: identity.userId },
+				timestamp: m.ts as string,
 				metadata: {
-					slackChannel: message.channel,
+					slackChannel: m.channel,
 					threadTs: threadTs,
 				},
+				origin: identity.origin,
 			};
 
 			ctx.logger.info("Slack message received", {
 				user: inbound.user.id,
-				channel: message.channel,
+				isApp: identity.isApp,
+				channel: m.channel,
 			});
 			await ctx.bus.emit("message:inbound", inbound);
 		});
@@ -263,8 +299,10 @@ export default class SlackPlugin implements ChannelPlugin {
 		try {
 			const auth = await this.app.client.auth.test();
 			this.botUserId = (auth.user_id as string | undefined) ?? null;
+			this.botId = (auth.bot_id as string | undefined) ?? null;
 			this.ctx?.logger.info("Slack Socket Mode connected", {
 				botUserId: this.botUserId,
+				botId: this.botId,
 			});
 		} catch (err) {
 			this.ctx?.logger.warn("Slack auth.test failed; @mention gating off", {

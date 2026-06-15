@@ -22,6 +22,13 @@ export interface InboundMessage {
 	 * (Slack) leave this unset and stay fully gated.
 	 */
 	authenticated?: boolean;
+	/**
+	 * Where an external turn was actually posted from (Slack app/bot relay). Set
+	 * for app/relay-sourced messages (e.g. "Sent using @Claude"). NEVER decides
+	 * recognition — the gate keys only on `user.id`; this labels an app sender in
+	 * the denial + drives the default-off trusted-relay check.
+	 */
+	origin?: { botId?: string; appId?: string; relay?: boolean };
 }
 
 export interface OutboundMessage {

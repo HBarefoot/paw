@@ -86,6 +86,11 @@ export interface PawConfig {
 		allowedUsers: string[];
 		blockedUsers: string[];
 		ownerUserIds: string[];
+		/** DANGER, default empty. Trusts EVERY message a Slack app relays into the
+		 *  named channel regardless of the human behind it — only ever an owner-only
+		 *  DM. For the "@Claude" relay case (Slack carries only a shared app id).
+		 *  Empty = no trust (app sender stays gated + observable in /access). */
+		trustedRelayApps: { appId: string; channel: string }[];
 	};
 	web: {
 		enabled: boolean;

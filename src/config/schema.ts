@@ -126,6 +126,16 @@ export const configSchema = z.object({
 		// `security` (not `slack`) because the exemption is channel-agnostic: the
 		// id itself is the qualifier, and any future channel inherits it.
 		ownerUserIds: z.array(z.string()).default([]),
+		// DANGER, default EMPTY. Trusts EVERY message a given Slack app relays into
+		// the named channel, REGARDLESS of the human behind it — so only ever name
+		// an owner-only DM/channel. Exists for the "Sent using @Claude" relay case
+		// where Slack carries no recoverable human id, only a shared app id. Empty =
+		// no trust (the app sender stays pairing-gated, observable in /access). Do
+		// NOT add an entry unless you accept that anyone who can post through that
+		// app into that channel can command the agent.
+		trustedRelayApps: z
+			.array(z.object({ appId: z.string(), channel: z.string() }))
+			.default([]),
 	}),
 	web: z.object({
 		enabled: z.boolean().default(false),

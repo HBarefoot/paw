@@ -73,6 +73,7 @@ export const defaults: PawConfig = {
 		allowedUsers: [],
 		blockedUsers: [],
 		ownerUserIds: [],
+		trustedRelayApps: [],
 	},
 	web: {
 		enabled: false,
