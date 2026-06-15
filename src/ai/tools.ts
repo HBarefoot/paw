@@ -292,6 +292,12 @@ export class ToolRegistry {
 			tool.name === "remove_proactive_trigger"
 		)
 			return "cron:create";
+		// The real `git`/`gh` exec tools (#159) are named literally, so they miss the
+		// `github_*` prefix below and would fall through to the bare plugin name.
+		// clone/branch/commit/push are writes; `gh pr merge` is approval-gated and
+		// push-to-protected refused INSIDE the tool, so github:write (already granted
+		// to the github plugin) is the right tier — no github:admin needed.
+		if (tool.name === "git" || tool.name === "gh") return "github:write";
 		if (tool.name.startsWith("github_")) {
 			// Read = get/list/read/search/check; admin = merge/delete/dispatch/
 			// close/rerun (irreversible, approval-gated); everything else is write.
