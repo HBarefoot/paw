@@ -13,6 +13,9 @@ export interface AccessPageProps {
 	enabled: boolean;
 	pending: PendingPairing[];
 	approved: ApprovedUser[];
+	/** Ids recognized from config (security.allowedUsers ∪ ownerUserIds) — these
+	 *  survive a redeploy regardless of DB state, so they render as "persisted". */
+	persistedIds: string[];
 }
 
 /** Human "expires in N min" / "expired" from an ISO timestamp, computed at
@@ -26,7 +29,8 @@ function expiryLabel(expiresAt: string): { text: string; expired: boolean } {
 }
 
 export const AccessPage: FC<AccessPageProps> = (props) => {
-	const { enabled, pending, approved } = props;
+	const { enabled, pending, approved, persistedIds } = props;
+	const persisted = new Set(persistedIds);
 
 	return (
 		<Layout title="Access" currentPath="/access">
@@ -36,9 +40,13 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 					Who is allowed to talk to the agent. When an unrecognized Slack user
 					messages the bot, they appear under <strong>Pending</strong> below —
 					approve them in one click and they get a "Access granted" DM, no
-					pairing code needed. Approvals are stored in the database; for ones
-					that must survive a redeploy, add the user to{" "}
-					<code>security.allowedUsers</code> in config.
+					pairing code needed. Approvals are stored in the database (persistent
+					on a correctly-configured deploy). For a user who must{" "}
+					<strong>always</strong> be recognized regardless of DB state, hit{" "}
+					<strong>Persist</strong> on their row — it adds them to{" "}
+					<code>security.allowedUsers</code> so they survive every redeploy. Set
+					your own Slack id in <code>security.ownerUserIds</code> for the no-DB,
+					always-recognized owner path.
 				</p>
 				{!enabled && (
 					<div class="alert alert-error" style="margin-top:10px">
@@ -112,14 +120,33 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 										{u.channel && u.channel !== "all" ? ` · ${u.channel}` : ""}
 									</div>
 								</div>
-								<button
-									type="button"
-									class="btn btn-secondary"
-									data-id={u.userId}
-									onclick="acRevoke(this.dataset.id)"
-								>
-									Revoke
-								</button>
+								<div style="display:flex;align-items:center;gap:8px">
+									{persisted.has(u.userId) ? (
+										<span
+											class="badge"
+											title="In security.allowedUsers / ownerUserIds — recognized even if the DB is reset"
+										>
+											✓ survives redeploys
+										</span>
+									) : (
+										<button
+											type="button"
+											class="btn btn-secondary"
+											data-id={u.userId}
+											onclick="acPersist(this.dataset.id)"
+										>
+											Persist
+										</button>
+									)}
+									<button
+										type="button"
+										class="btn btn-secondary"
+										data-id={u.userId}
+										onclick="acRevoke(this.dataset.id)"
+									>
+										Revoke
+									</button>
+								</div>
 							</div>
 						))}
 					</div>
@@ -150,6 +177,21 @@ async function acApprove(userId) {
     pawToast("Approved " + userId);
     setTimeout(function(){ window.location.reload(); }, 500);
   } catch (e) { pawModal.alert("Approve failed", String(e)); }
+}
+async function acPersist(userId) {
+  var ok = await pawModal.confirm("Persist access", "Add " + userId + " to security.allowedUsers so they're recognized after every redeploy?", { confirmLabel: "Persist" });
+  if (!ok) return;
+  try {
+    var res = await fetch("/api/access/persist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: userId })
+    });
+    var data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) { pawModal.alert("Persist failed", data.error || ("HTTP " + res.status)); return; }
+    pawToast("Persisted " + userId + " — survives redeploys");
+    setTimeout(function(){ window.location.reload(); }, 500);
+  } catch (e) { pawModal.alert("Persist failed", String(e)); }
 }
 async function acRevoke(userId) {
   var ok = await pawModal.confirm("Revoke access", "Revoke access for " + userId + "?", { danger: true, confirmLabel: "Revoke" });
