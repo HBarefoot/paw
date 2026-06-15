@@ -14,6 +14,8 @@ const SESSION_AWARE_TOOLS = new Set<string>([
 	"github_delete_branch",
 	"github_close_issue",
 	"github_dispatch_workflow",
+	// `gh pr merge` enqueues a gated merge — needs origin for routing the prompt.
+	"gh",
 ]);
 
 export function needsSessionId(toolName: string): boolean {

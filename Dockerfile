@@ -8,9 +8,12 @@ RUN bun install --frozen-lockfile --production
 FROM oven/bun:1
 WORKDIR /app
 
-# System dependencies for Playwright Chromium
+# System dependencies for Playwright Chromium + real git/curl for the workspace
+# git/gh tools (Paw clones/branches/pushes/opens PRs in the exec workspace).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    git \
+    curl \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -28,6 +31,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libxshmfence1 \
     xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI (gh) from the official apt repo (stable channel). Used by Paw's
+# `gh` workspace tool for pr create/view/checks; merges are approval-gated.
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependencies from stage 1

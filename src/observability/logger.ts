@@ -21,19 +21,28 @@ const SECRET_KEY_PATTERN =
 const BEARER_PATTERN = /\b(Bearer\s+)[A-Za-z0-9\-._~+/]+=*/gi;
 const SK_PATTERN = /\b(sk-[a-zA-Z0-9_-]{10,})\b/g;
 const XO_PATTERN = /\b(xox[abprs]-[a-zA-Z0-9-]{10,})\b/g;
+// GitHub tokens: classic/fine-grained PAT (ghp_), OAuth (gho_), user-to-server
+// (ghu_), server-to-server / installation (ghs_), refresh (ghr_). Installation
+// tokens reaching `git push`/`gh` output must never land in logs/audit.
+const GH_TOKEN_PATTERN = /\bgh[opsru]_[A-Za-z0-9_]{20,}\b/g;
 
 const REDACTED = "[REDACTED]";
 const MAX_DEPTH = 6;
 
-function redactString(value: string): string {
+/** Mask secret-shaped substrings (bearer/sk-/xox-/GitHub tokens) in a string.
+ *  Exported so non-console sinks (tool-log, audit) can reuse the same masking. */
+export function redactString(value: string): string {
 	if (value.length === 0) return value;
 	return value
 		.replace(BEARER_PATTERN, `$1${REDACTED}`)
 		.replace(SK_PATTERN, REDACTED)
-		.replace(XO_PATTERN, REDACTED);
+		.replace(XO_PATTERN, REDACTED)
+		.replace(GH_TOKEN_PATTERN, REDACTED);
 }
 
-function redact(value: unknown, depth = 0): unknown {
+/** Deep-redact secret-keyed fields + secret-shaped strings in an object/array.
+ *  Exported for reuse by the audit logger. */
+export function redact(value: unknown, depth = 0): unknown {
 	if (depth > MAX_DEPTH) return REDACTED;
 	if (value == null) return value;
 	if (typeof value === "string") return redactString(value);

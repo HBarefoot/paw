@@ -303,6 +303,12 @@ export const configSchema = z.object({
 			baseUrl: z.string().default("https://api.github.com"),
 			// Allowlist of `owner/repo` the agent may touch. Empty = none allowed.
 			repoAllowlist: z.array(z.string()).default([]),
+			// Fallback fine-grained PAT for the git/gh workspace tools — overlaid
+			// from vault slot `github.token`. Prefer the auto-rotating App token.
+			token: z.string().default(""),
+			// Branches git/gh may never push to directly; merges to them are
+			// approval-gated. Defaults to ["main"] (Railway auto-deploys main).
+			protectedBranches: z.array(z.string()).default(["main"]),
 			// When CI fails on a PR, automatically run an agent turn that reads the
 			// logs and posts a diagnosis comment (never commits/merges).
 			autoInvestigateCi: z.boolean().default(true),

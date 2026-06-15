@@ -209,6 +209,10 @@ export interface PawConfig {
 		webhookSecret: string;
 		baseUrl: string;
 		repoAllowlist: string[];
+		/** Fallback PAT for git/gh tools — overlaid from vault `github.token`. */
+		token: string;
+		/** Branches git/gh may not push to directly; merges gated. Default ["main"]. */
+		protectedBranches: string[];
 		autoInvestigateCi: boolean;
 	};
 	supabase: {

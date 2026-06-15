@@ -882,6 +882,22 @@ export class Kernel {
 							htmlPublishTransform,
 						}),
 					);
+					// Real git + gh in the exec workspace (clone/branch/commit/push/PR),
+					// authed with the auto-rotating App installation token. Gated by the
+					// same repo allowlist + approval queue; pushes to protected branches
+					// refused, merges queued. Registered under the `github` manifest.
+					const { createGitTools } = await import("../tools/git-tools.js");
+					this.toolRegistry.register(
+						createGitTools({
+							client,
+							approvals,
+							workspacePath: this.config.workspace.path,
+							protectedBranches: gh.protectedBranches,
+							maxOutputLength: this.config.workspace.maxOutputLength,
+							execTimeout: this.config.workspace.execTimeout,
+							audit: ghAuditFn,
+						}),
+					);
 				}
 				// Reactor: webhook events → durable notifications (the agent
 				// "has something for you"). Phase B adds CI auto-investigation.
