@@ -151,6 +151,9 @@ export class Kernel {
 	private vercelClient:
 		| import("../integrations/vercel/client.js").VercelClient
 		| null = null;
+	private posthogClient:
+		| import("../integrations/posthog/client.js").PostHogClient
+		| null = null;
 	private notificationStoreInstance!: NotificationStore;
 	private githubReactorUnsub: (() => void) | null = null;
 	private skillManager: SkillManager;
@@ -921,6 +924,35 @@ export class Kernel {
 				this.logger.info("Vercel integration initialized");
 			} catch (err) {
 				this.logger.warn("Vercel init failed — degrading gracefully", {
+					error: String(err),
+				});
+			}
+		}
+
+		// Initialize PostHog read integration (agent-readable traffic metrics over
+		// the HogQL Query API). READ-ONLY — no approval gating. Disabled by default;
+		// needs the private personalApiKey (vault) + a projectId.
+		const phc = this.config.posthog;
+		if (phc?.enabled && phc.personalApiKey && phc.projectId) {
+			try {
+				const { PostHogClient } = await import(
+					"../integrations/posthog/client.js"
+				);
+				const { createPostHogTools } = await import(
+					"../integrations/posthog/tools.js"
+				);
+				const client = new PostHogClient(phc);
+				this.posthogClient = client;
+				this.sandbox.registerManifest({
+					name: "posthog",
+					version: "1.0.0",
+					description: "PostHog analytics read integration",
+					permissions: ["posthog:read"],
+				});
+				this.toolRegistry.register(createPostHogTools(client));
+				this.logger.info("PostHog integration initialized");
+			} catch (err) {
+				this.logger.warn("PostHog init failed — degrading gracefully", {
 					error: String(err),
 				});
 			}
@@ -2936,6 +2968,13 @@ export class Kernel {
 	/** Vercel deploy-target client (null if disabled or not configured). */
 	get vercel(): import("../integrations/vercel/client.js").VercelClient | null {
 		return this.vercelClient;
+	}
+
+	/** PostHog read client — agent-readable analytics (read-only). */
+	get posthog():
+		| import("../integrations/posthog/client.js").PostHogClient
+		| null {
+		return this.posthogClient;
 	}
 
 	/** Access control (pairing codes + approved users) — drives the /access page. */
