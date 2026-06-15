@@ -91,4 +91,58 @@ describe("access controller", () => {
 		ac2.approveUser("bad-user", "slack");
 		expect(ac2.isUserApproved("bad-user", "slack")).toBe(false);
 	});
+
+	// Defect 1: a still-valid pairing code must stay stable across repeated
+	// unrecognized messages (the old code minted a fresh code every call,
+	// invalidating the one the user was just shown).
+	test("generatePairingCode returns the same code within the TTL", () => {
+		const first = ac.generatePairingCode("user1");
+		const second = ac.generatePairingCode("user1");
+		expect(second).toBe(first);
+		// The stable code still approves.
+		expect(ac.verifyPairingCode("user1", first)).toBe(true);
+	});
+
+	test("generatePairingCode mints a new code after expiry", () => {
+		const first = ac.generatePairingCode("user1");
+		// Force the existing code to be expired.
+		db.run("UPDATE pairing_codes SET expires_at = ? WHERE user_id = ?", [
+			new Date(Date.now() - 60_000).toISOString(),
+			"user1",
+		]);
+		const second = ac.generatePairingCode("user1");
+		expect(second).not.toBe(first);
+		// The old (expired) code is gone; only the new one verifies.
+		expect(ac.verifyPairingCode("user1", first)).toBe(false);
+		const third = ac.generatePairingCode("user1");
+		expect(ac.verifyPairingCode("user1", third)).toBe(true);
+	});
+
+	// Defect 3: the owner's identity is recognized without an approved_users row
+	// and never triggers pairing (channel-agnostic, parallels web-admin exempt).
+	test("ownerUserIds are approved without an approved_users row", () => {
+		const ac2 = new AccessController(db, createLogger("test"), {
+			ownerUserIds: ["U_OWNER"],
+			pairingCodeTtlMinutes: 10,
+		});
+		expect(ac2.isUserApproved("U_OWNER", "slack")).toBe(true);
+		// No DB row was created for the owner.
+		const row = db
+			.prepare("SELECT user_id FROM approved_users WHERE user_id = ?")
+			.get("U_OWNER");
+		expect(row).toBeNull();
+	});
+
+	test("a non-owner still goes through pairing; empty allowlist = no regression", () => {
+		const ac2 = new AccessController(db, createLogger("test"), {
+			ownerUserIds: ["U_OWNER"],
+			pairingCodeTtlMinutes: 10,
+		});
+		expect(ac2.isUserApproved("U_STRANGER", "slack")).toBe(false);
+		const ac3 = new AccessController(db, createLogger("test"), {
+			ownerUserIds: [],
+			pairingCodeTtlMinutes: 10,
+		});
+		expect(ac3.isUserApproved("U_OWNER", "slack")).toBe(false);
+	});
 });

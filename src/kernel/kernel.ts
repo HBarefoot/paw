@@ -291,6 +291,7 @@ export class Kernel {
 				{
 					allowedUsers: config.security.allowedUsers,
 					blockedUsers: config.security.blockedUsers,
+					ownerUserIds: config.security.ownerUserIds,
 					pairingCodeTtlMinutes: config.security.pairingCodeTtlMinutes,
 				},
 			);

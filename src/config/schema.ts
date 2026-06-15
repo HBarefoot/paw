@@ -114,6 +114,11 @@ export const configSchema = z.object({
 		}),
 		allowedUsers: z.array(z.string()).default([]),
 		blockedUsers: z.array(z.string()).default([]),
+		// Operator/owner identities (e.g. the owner's Slack user id) that are
+		// always approved — never pairing-gated in their own workspace. Lives in
+		// `security` (not `slack`) because the exemption is channel-agnostic: the
+		// id itself is the qualifier, and any future channel inherits it.
+		ownerUserIds: z.array(z.string()).default([]),
 	}),
 	web: z.object({
 		enabled: z.boolean().default(false),

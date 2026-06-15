@@ -81,6 +81,7 @@ export interface PawConfig {
 		};
 		allowedUsers: string[];
 		blockedUsers: string[];
+		ownerUserIds: string[];
 	};
 	web: {
 		enabled: boolean;
