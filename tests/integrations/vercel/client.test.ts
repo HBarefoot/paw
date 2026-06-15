@@ -281,6 +281,75 @@ describe("VercelClient", () => {
 		]);
 	});
 
+	test("listDeployments hits /v7/deployments with projectId+target+limit and maps uid→id", async () => {
+		routeFetch([
+			{
+				method: "GET",
+				match: "/v7/deployments",
+				respond: () =>
+					json({
+						deployments: [
+							{
+								uid: "dpl_1",
+								url: "site-abc.vercel.app",
+								readyState: "READY",
+								target: "production",
+								createdAt: 1718000000000,
+							},
+						],
+					}),
+			},
+		]);
+		const res = await makeClient().listDeployments({
+			projectId: "prj_1",
+			target: "production",
+			limit: 1,
+		});
+		expect(res).toEqual([
+			{
+				id: "dpl_1",
+				url: "site-abc.vercel.app",
+				readyState: "READY",
+				target: "production",
+				createdAt: 1718000000000,
+			},
+		]);
+		expect(calls[0].path).toBe("/v7/deployments");
+		expect(calls[0].url).toContain("projectId=prj_1");
+		expect(calls[0].url).toContain("target=production");
+		expect(calls[0].url).toContain("limit=1");
+	});
+
+	test("listDeployments: empty result → [], and a null/incomplete url is preserved", async () => {
+		routeFetch([
+			{
+				method: "GET",
+				match: "/v7/deployments",
+				respond: () => json({ deployments: [] }),
+			},
+		]);
+		expect(await makeClient().listDeployments({ projectId: "p" })).toEqual([]);
+
+		routeFetch([
+			{
+				method: "GET",
+				match: "/v7/deployments",
+				respond: () =>
+					json({
+						deployments: [{ uid: "dpl_x", url: null, state: "BUILDING" }],
+					}),
+			},
+		]);
+		const res = await makeClient().listDeployments({ projectId: "p" });
+		expect(res[0]).toEqual({
+			id: "dpl_x",
+			url: null,
+			readyState: "BUILDING",
+			target: null,
+			createdAt: 0,
+		});
+	});
+
 	test("teamId is appended as a query param and Bearer auth is sent", async () => {
 		routeFetch([
 			{
