@@ -140,6 +140,52 @@ describe("recognizedIds — robust to a PARTIAL live security config", () => {
 	});
 });
 
+describe("access page — config-recognized ids (Owners visible without a DB row)", () => {
+	test("an owner with no approved_users row renders in the 'Recognized from config' section", () => {
+		// The prod symptom: env/config owner after a DB reset was invisible.
+		const html = render({
+			approved: [],
+			persistedIds: ["U_OWNER"],
+			ownerIds: ["U_OWNER"],
+		});
+		expect(html).toContain("Recognized from config");
+		expect(html).toContain("U_OWNER");
+		expect(html).toContain("★ owner");
+	});
+
+	test("an env-sourced owner is read-only ('from env'), no Remove-owner button", () => {
+		const html = render({
+			persistedIds: ["U_ENV"],
+			ownerIds: ["U_ENV"],
+			envIds: ["U_ENV"],
+		});
+		// the read-only badge (unique title) — not the bare words that also appear
+		// in the help text.
+		expect(html).toContain("Sourced from PAW_SECURITY_OWNER_USER_IDS");
+		expect(html).not.toContain("acOwner(this.dataset.id, false)");
+	});
+
+	test("a config (non-env) owner offers a Remove-owner toggle", () => {
+		const html = render({
+			persistedIds: ["U_OWNER"],
+			ownerIds: ["U_OWNER"],
+			envIds: [],
+		});
+		expect(html).toContain("acOwner(this.dataset.id, false)");
+		expect(html).not.toContain("Sourced from PAW_SECURITY_OWNER_USER_IDS");
+	});
+
+	test("ids that already have an approved row are NOT duplicated into the config section", () => {
+		const html = render({
+			approved: [approvedUser],
+			persistedIds: ["U07XYZ"],
+			ownerIds: ["U07XYZ"],
+		});
+		// U07XYZ shows in the Approved card; the config section is empty → not shown.
+		expect(html).not.toContain("Recognized from config");
+	});
+});
+
 describe("access page — inline script (template-trap guard)", () => {
 	const script = accessScript();
 
