@@ -49,6 +49,19 @@ export default class SlackPlugin implements ChannelPlugin {
 
 		// Listen for all messages
 		this.app.message(async ({ message }) => {
+			// Diagnostic: log the RAW shape before any guard so relayed messages
+			// (e.g. the Claude Slack app posting "on behalf of" a user) are visible
+			// even when later skipped — reveals the exact user/bot_id/app_id Paw
+			// keys on vs the apparent author in the channel UI.
+			const m = message as Record<string, unknown>;
+			ctx.logger.info("Slack inbound raw", {
+				user: m.user,
+				bot_id: m.bot_id,
+				app_id: m.app_id,
+				subtype: m.subtype,
+				channel_type: m.channel_type,
+				hasText: typeof m.text === "string",
+			});
 			// Skip bot messages and message subtypes (edits, deletes, etc.)
 			if (message.subtype) return;
 			if (!("text" in message) || !message.text) return;

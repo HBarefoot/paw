@@ -4,7 +4,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "../../src/observability/logger.js";
-import { AccessController } from "../../src/security/access-control.js";
+import {
+	AccessController,
+	unrecognizedUserMessage,
+} from "../../src/security/access-control.js";
 
 const APPROVED_DDL = `CREATE TABLE IF NOT EXISTS approved_users (
   user_id TEXT PRIMARY KEY, channel TEXT NOT NULL,
@@ -116,6 +119,45 @@ describe("access controller", () => {
 		);
 	});
 
+	test("clearPairing removes an outstanding code without approving in the DB", () => {
+		ac.generatePairingCode("U07EEE");
+		ac.clearPairing("U07EEE");
+		expect(ac.listPendingPairings().map((p) => p.userId)).not.toContain(
+			"U07EEE",
+		);
+		// clearPairing alone does not approve — no DB row written.
+		const row = db
+			.prepare("SELECT user_id FROM approved_users WHERE user_id = ?")
+			.get("U07EEE");
+		expect(row).toBeNull();
+	});
+
+	// listPendingPairings must hide ids that are ALREADY recognized — an owner
+	// with a leftover code row otherwise rendered as an "expired pending" row
+	// (the exact /access confusion this fixes). A genuinely unknown id stays.
+	test("listPendingPairings excludes already-recognized ids", () => {
+		ac.generatePairingCode("U_OWNER_PENDING");
+		ac.generatePairingCode("U_STILL_UNKNOWN");
+		// Pre-fix: both show. Post-fix: owner is filtered out.
+		ac.setAccessLists({ ownerUserIds: ["U_OWNER_PENDING"] });
+		const ids = ac.listPendingPairings().map((p) => p.userId);
+		expect(ids).not.toContain("U_OWNER_PENDING");
+		expect(ids).toContain("U_STILL_UNKNOWN");
+	});
+
+	test("listPendingPairings excludes a DB-approved id with a stale code row", () => {
+		ac.generatePairingCode("U_APPROVED");
+		// Write the approved_users row directly so the pairing_codes row survives
+		// (approveUser would itself clear it), simulating pre-fix leftover state.
+		db.run(
+			"INSERT OR REPLACE INTO approved_users (user_id, channel, approved_by) VALUES (?, 'all', 'web:1')",
+			["U_APPROVED"],
+		);
+		expect(ac.listPendingPairings().map((p) => p.userId)).not.toContain(
+			"U_APPROVED",
+		);
+	});
+
 	// setAccessLists applies an allowlist/owner change to the RUNNING controller
 	// without a restart. Previously these lists were seeded only in the
 	// constructor, so /api/access/persist (+ ownerUserIds) needed a reboot.
@@ -190,6 +232,16 @@ describe("access controller", () => {
 			pairingCodeTtlMinutes: 10,
 		});
 		expect(ac3.isUserApproved("U_OWNER", "slack")).toBe(false);
+	});
+});
+
+// The unrecognized-user reply must name the exact id the kernel keyed on, so the
+// operator can approve the RIGHT id (a relay can present a different sender).
+describe("unrecognizedUserMessage", () => {
+	test("includes both the pairing code and the exact user id", () => {
+		const msg = unrecognizedUserMessage("U0ABC123", "255274");
+		expect(msg).toContain("255274");
+		expect(msg).toContain("U0ABC123");
 	});
 });
 

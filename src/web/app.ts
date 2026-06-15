@@ -1261,6 +1261,9 @@ export function createWebApp(
 			: current.filter((id) => id !== userId);
 		replaceConfigOverride("security.ownerUserIds", next);
 		ac.setAccessLists({ ownerUserIds: next });
+		// An owner is recognized without a pairing handshake — drop any stale code
+		// so they stop showing as an "expired pending" row.
+		if (makeOwner) ac.clearPairing(userId);
 		authManager.audit.log(
 			"access.owner",
 			null,

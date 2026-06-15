@@ -8,6 +8,14 @@ export interface ApprovedUser {
 	approvedBy: string | null;
 }
 
+/** The "I don't recognize you" reply shown to an unrecognized user. Includes
+ *  the exact sender id the kernel keyed on so the operator can approve the RIGHT
+ *  id (a relay like the Claude Slack app can present a different id than the
+ *  channel UI implies). Pure + exported for unit testing. */
+export function unrecognizedUserMessage(userId: string, code: string): string {
+	return `Hi! I don't recognize you yet. Please ask an admin to approve your access, or enter this pairing code: *${code}*\n_(your id: ${userId})_`;
+}
+
 export class AccessController {
 	private db: Database;
 	private logger: Logger;
@@ -194,8 +202,15 @@ export class AccessController {
 		// Clear any outstanding pairing code so an approved user no longer lingers
 		// in the pending list (previously only verifyPairingCode deleted it, so a
 		// page-/code-approved user showed forever as an "expired pending" row).
-		this.db.run("DELETE FROM pairing_codes WHERE user_id = ?", [userId]);
+		this.clearPairing(userId);
 		this.logger.info("User approved", { userId, approvedBy });
+	}
+
+	/** Drop a user's outstanding pairing code. Used when a user becomes
+	 *  recognized by a path other than verifying the code (approve, persist,
+	 *  make-owner) so they stop showing as a stale "expired pending" row. */
+	clearPairing(userId: string): void {
+		this.db.run("DELETE FROM pairing_codes WHERE user_id = ?", [userId]);
 	}
 
 	revokeUser(userId: string): void {
@@ -204,7 +219,10 @@ export class AccessController {
 	}
 
 	/** Users who have an outstanding pairing code (asked the bot but not yet
-	 *  approved). Drives the `/access` pending-approvals list. */
+	 *  approved). Drives the `/access` pending-approvals list. Already-recognized
+	 *  ids (owner/allowlist/system/DB-approved) are filtered out — a recognized
+	 *  user can't meaningfully be "pending", and a leftover code row otherwise
+	 *  showed an owner as an "expired pending" row. */
 	listPendingPairings(): Array<{
 		userId: string;
 		expiresAt: string;
@@ -215,6 +233,7 @@ export class AccessController {
 				"SELECT user_id, expires_at, created_at FROM pairing_codes ORDER BY created_at DESC",
 			)
 			.all()
+			.filter((r) => !this.isUserApproved(r.user_id, ""))
 			.map((r) => ({
 				userId: r.user_id,
 				expiresAt: r.expires_at,
