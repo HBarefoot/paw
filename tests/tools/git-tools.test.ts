@@ -1,0 +1,226 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { GitHubClient } from "../../src/integrations/github/client.js";
+import {
+	type GitToolsDeps,
+	classifyGitCommand,
+	createGitTools,
+} from "../../src/tools/git-tools.js";
+import type { ToolDefinition } from "../../src/types/message.js";
+
+// ---- classifyGitCommand (the pure security boundary) ----
+describe("classifyGitCommand", () => {
+	const opts = { protectedBranches: ["main"] };
+
+	test("git push to a protected branch is refused", () => {
+		expect(
+			classifyGitCommand("git", ["push", "origin", "main"], opts).action,
+		).toBe("refuse");
+		// explicit src:dst form
+		expect(
+			classifyGitCommand("git", ["push", "origin", "HEAD:main"], opts).action,
+		).toBe("refuse");
+	});
+
+	test("git push to a feature branch is allowed", () => {
+		expect(
+			classifyGitCommand("git", ["push", "origin", "fix/x"], opts).action,
+		).toBe("allow");
+		expect(
+			classifyGitCommand("git", ["push", "-u", "origin", "fix/x"], opts).action,
+		).toBe("allow");
+	});
+
+	test("git push with no refspec uses the checked-out branch", () => {
+		expect(
+			classifyGitCommand("git", ["push"], {
+				protectedBranches: ["main"],
+				currentBranch: "main",
+			}).action,
+		).toBe("refuse");
+		expect(
+			classifyGitCommand("git", ["push"], {
+				protectedBranches: ["main"],
+				currentBranch: "fix/x",
+			}).action,
+		).toBe("allow");
+	});
+
+	test("force-push and --all are refused", () => {
+		expect(
+			classifyGitCommand("git", ["push", "--force", "origin", "fix/x"], opts)
+				.action,
+		).toBe("refuse");
+		expect(
+			classifyGitCommand(
+				"git",
+				["push", "--force-with-lease", "origin", "fix/x"],
+				opts,
+			).action,
+		).toBe("refuse");
+		expect(
+			classifyGitCommand("git", ["push", "--all", "origin"], opts).action,
+		).toBe("refuse");
+	});
+
+	test("ordinary git commands are allowed", () => {
+		for (const a of [
+			["status"],
+			["checkout", "-b", "fix/x", "origin/main"],
+			["merge", "-s", "ours", "origin/main"],
+			["rm", "f.txt"],
+		])
+			expect(classifyGitCommand("git", a, opts).action).toBe("allow");
+	});
+
+	test("gh pr merge is gated, with the PR number captured", () => {
+		const c = classifyGitCommand("gh", ["pr", "merge", "14", "--squash"], opts);
+		expect(c.action).toBe("gate-merge");
+		if (c.action === "gate-merge") expect(c.params).toEqual({ number: 14 });
+	});
+
+	test("gh pr create / repo delete", () => {
+		expect(
+			classifyGitCommand("gh", ["pr", "create", "--fill"], opts).action,
+		).toBe("allow");
+		expect(classifyGitCommand("gh", ["repo", "delete"], opts).action).toBe(
+			"refuse",
+		);
+	});
+});
+
+// ---- tool handlers (mocked Bun.spawn + fake deps) ----
+const TOKEN = "ghs_SECRETtoken1234567890ABCDEFabcdef";
+
+let spawnCalls: string[][] = [];
+// biome-ignore lint/suspicious/noExplicitAny: test shim for Bun.spawn
+let realSpawn: any;
+
+function mockSpawn(stdout: string, exitCode = 0) {
+	// biome-ignore lint/suspicious/noExplicitAny: minimal proc stub
+	(Bun as any).spawn = (argv: string[]) => {
+		spawnCalls.push(argv);
+		return {
+			stdout,
+			stderr: "",
+			exited: Promise.resolve(exitCode),
+			kill() {},
+		};
+	};
+}
+
+function fakeDeps(over: Partial<GitToolsDeps> = {}): {
+	deps: GitToolsDeps;
+	enqueued: Array<Record<string, unknown>>;
+} {
+	const enqueued: Array<Record<string, unknown>> = [];
+	const client = {
+		isRepoAllowed: (r: string) => r === "HBarefoot/portfolio-henry",
+		getInstallationToken: async () => TOKEN,
+	} as unknown as GitHubClient;
+	const approvals = {
+		enqueue: (
+			action: string,
+			repo: string,
+			summary: string,
+			params: Record<string, unknown>,
+		) => {
+			enqueued.push({ action, repo, summary, params });
+			return "pa_1";
+		},
+	} as unknown as GitToolsDeps["approvals"];
+	const deps: GitToolsDeps = {
+		client,
+		approvals,
+		workspacePath: "/tmp/paw-git-test-ws",
+		protectedBranches: ["main"],
+		...over,
+	};
+	return { deps, enqueued };
+}
+
+function tools(deps: GitToolsDeps): {
+	git: ToolDefinition;
+	gh: ToolDefinition;
+} {
+	const [git, gh] = createGitTools(deps);
+	return { git, gh };
+}
+
+beforeEach(() => {
+	spawnCalls = [];
+	// biome-ignore lint/suspicious/noExplicitAny: save original
+	realSpawn = (Bun as any).spawn;
+});
+afterEach(() => {
+	// biome-ignore lint/suspicious/noExplicitAny: restore original
+	(Bun as any).spawn = realSpawn;
+});
+
+describe("git/gh tool handlers", () => {
+	test("a non-allowlisted repo is refused without spawning", async () => {
+		mockSpawn("should not run");
+		const { deps } = fakeDeps();
+		const { git } = tools(deps);
+		const res = await git.handler({ repo: "evil/repo", args: ["status"] });
+		expect(res.is_error).toBe(true);
+		expect(String(res.content)).toContain("not in the GitHub allowlist");
+		expect(spawnCalls.length).toBe(0);
+	});
+
+	test("gh pr merge is queued for approval — never run inline", async () => {
+		mockSpawn("should not run");
+		const f = fakeDeps();
+		const { gh } = tools(f.deps);
+		const res = await gh.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["pr", "merge", "14", "--squash"],
+		});
+		expect(spawnCalls.length).toBe(0); // not executed
+		expect(f.enqueued).toHaveLength(1);
+		expect(f.enqueued[0]).toMatchObject({
+			action: "merge_pr",
+			params: { number: 14 },
+		});
+		expect(String(res.content)).toContain("queued");
+	});
+
+	test("the installation token is REDACTED from gh output", async () => {
+		// gh emits the token in its output; the tool must never surface it.
+		mockSpawn(`authenticated with ${TOKEN}\nok`);
+		const { deps } = fakeDeps();
+		const { gh } = tools(deps);
+		const res = await gh.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["pr", "view", "14"],
+		});
+		expect(String(res.content)).not.toContain(TOKEN);
+		expect(String(res.content)).toContain("***");
+	});
+
+	test("gh always pins the repo with -R owner/name", async () => {
+		mockSpawn("ok");
+		const { deps } = fakeDeps();
+		const { gh } = tools(deps);
+		await gh.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["pr", "list"],
+		});
+		const argv = spawnCalls[spawnCalls.length - 1] ?? [];
+		expect(argv[0]).toBe("gh");
+		expect(argv).toContain("-R");
+		expect(argv).toContain("HBarefoot/portfolio-henry");
+	});
+
+	test("git push to main is refused without spawning", async () => {
+		mockSpawn("should not run");
+		const { deps } = fakeDeps();
+		const { git } = tools(deps);
+		const res = await git.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["push", "origin", "main"],
+		});
+		expect(res.is_error).toBe(true);
+		expect(String(res.content)).toContain("Refused");
+		expect(spawnCalls.length).toBe(0);
+	});
+});

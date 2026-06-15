@@ -117,6 +117,31 @@ export class GitHubClient {
 		return this.installation;
 	}
 
+	/**
+	 * A fresh, short-lived installation access token string for use by real
+	 * `git`/`gh` in the exec workspace. The App auth strategy caches + auto-
+	 * rotates it (~1h TTL), so calling this per git invocation never hands a
+	 * stale token to `git push`. Prefers the App token; falls back to a vault
+	 * `github.token` PAT only if App auth is unavailable/fails. The returned
+	 * value is a SECRET — callers must inject it into an ephemeral child env and
+	 * redact it from any captured output/logs; never persist it to disk.
+	 */
+	async getInstallationToken(): Promise<string> {
+		try {
+			const auth = (await this.app.octokit.auth({
+				type: "installation",
+				installationId: this.installationId,
+			})) as { token?: string };
+			if (auth?.token) return auth.token;
+		} catch (err) {
+			if (!this.config.token) throw err;
+		}
+		if (this.config.token) return this.config.token;
+		throw new GitHubError(
+			"No git token available (App installation auth returned no token and no github.token PAT is set).",
+		);
+	}
+
 	/** True if `owner/repo` is permitted. Empty allowlist = nothing allowed. */
 	isRepoAllowed(fullName: string): boolean {
 		return this.allowlist.has(fullName.trim().toLowerCase());

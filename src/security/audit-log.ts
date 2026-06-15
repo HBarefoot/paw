@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { redact } from "../observability/logger.js";
 
 export class AuditLogger {
 	private db: Database;
@@ -13,14 +14,12 @@ export class AuditLogger {
 		details?: Record<string, unknown>,
 		ipAddress?: string,
 	): void {
+		// Defense in depth: deep-redact secret-keyed fields + token-shaped strings
+		// so a stray secret in `details` never lands in the audit_log.
+		const safeDetails = details ? JSON.stringify(redact(details)) : null;
 		this.db.run(
 			"INSERT INTO audit_log (action, user_id, details, ip_address) VALUES (?, ?, ?, ?)",
-			[
-				action,
-				userId,
-				details ? JSON.stringify(details) : null,
-				ipAddress ?? null,
-			],
+			[action, userId, safeDetails, ipAddress ?? null],
 		);
 	}
 

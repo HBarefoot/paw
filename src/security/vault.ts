@@ -90,6 +90,11 @@ export const KNOWN_SECRET_SLOTS: {
 		label: "GitHub webhook signing secret",
 	},
 	{
+		name: "github.token",
+		scope: "github",
+		label: "GitHub fallback PAT (git/gh tools; prefer the App token)",
+	},
+	{
 		name: "supabase.serviceKey",
 		scope: "supabase",
 		label: "Supabase service-role key",
@@ -327,6 +332,9 @@ export class VaultManager {
 		});
 		apply("github.webhookSecret", (v) => {
 			if (config.github) config.github.webhookSecret = v;
+		});
+		apply("github.token", (v) => {
+			if (config.github) config.github.token = v;
 		});
 		apply("supabase.serviceKey", (v) => {
 			if (config.supabase) config.supabase.serviceKey = v;

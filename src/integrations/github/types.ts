@@ -19,6 +19,13 @@ export interface GitHubConfig {
 	baseUrl: string;
 	/** Allowlist of `owner/repo` the agent may touch. Empty = none allowed. */
 	repoAllowlist: string[];
+	/** Optional fine-grained PAT — overlaid from vault slot `github.token`. Used
+	 *  by the `git`/`gh` workspace tools only as a fallback when App installation
+	 *  auth is unavailable. Prefer the auto-rotating App token. */
+	token?: string;
+	/** Branches that `git`/`gh` may never push to directly and whose merges are
+	 *  approval-gated. Defaults to `["main"]`. */
+	protectedBranches?: string[];
 }
 
 export const GITHUB_DEFAULT_BASE_URL = "https://api.github.com";

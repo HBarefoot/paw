@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { redactString } from "./logger.js";
 
 export interface ToolLogEntry {
 	id: number;
@@ -23,6 +24,10 @@ function preview(value: unknown): string {
 	} catch {
 		s = String(value);
 	}
+	// Defense in depth: never persist secret-shaped strings (tokens/keys) into
+	// the tool_log, even if a tool returns them in its output. The git/gh tool
+	// already redacts the exact token; this catches anything else.
+	s = redactString(s);
 	return s.length > MAX_PREVIEW_LEN ? `${s.slice(0, MAX_PREVIEW_LEN)}…` : s;
 }
 
