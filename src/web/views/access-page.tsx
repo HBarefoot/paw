@@ -19,6 +19,10 @@ export interface AccessPageProps {
 	/** Ids in security.ownerUserIds — always recognized, channel-agnostic, no DB
 	 *  row needed. Render an "Owner" badge; others get a "Make owner" button. */
 	ownerIds: string[];
+	/** Owner ids sourced from `PAW_SECURITY_OWNER_USER_IDS` (env). These can't be
+	 *  changed by a config write, so the UI marks them read-only ("from env")
+	 *  rather than offering a remove/toggle. */
+	envIds?: string[];
 	/** True when security.allowUnapprovedExternal is on — access control is NOT
 	 *  enforcing on external channels. Renders a prominent OFF banner. */
 	open: boolean;
@@ -57,6 +61,13 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 	const { enabled, pending, approved, persistedIds, ownerIds, open } = props;
 	const persisted = new Set(persistedIds);
 	const owners = new Set(ownerIds);
+	const envOwners = new Set(props.envIds ?? []);
+	// Config-recognized ids (security.allowedUsers ∪ ownerUserIds) that have NO
+	// approved_users row — an env/config owner after a DB reset would otherwise be
+	// invisible here (the prod "no Owners section, 0/0" symptom). Surface them so
+	// the operator can SEE who is durably recognized without a DB row.
+	const approvedIdSet = new Set(approved.map((u) => u.userId));
+	const configOnlyIds = persistedIds.filter((id) => !approvedIdSet.has(id));
 
 	return (
 		<Layout title="Access" currentPath="/access">
@@ -83,7 +94,11 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 					<strong>Persist</strong> on their row — it adds them to{" "}
 					<code>security.allowedUsers</code> so they survive every redeploy. Set
 					your own Slack id in <code>security.ownerUserIds</code> for the no-DB,
-					always-recognized owner path.
+					always-recognized owner path. To make an owner that even a wiped{" "}
+					<code>config.json</code> can't drop, set{" "}
+					<code>PAW_SECURITY_OWNER_USER_IDS</code> in the environment (comma-
+					separated) — it's unioned in on every boot and shown below as{" "}
+					<em>from env</em>.
 				</p>
 				{!enabled && (
 					<div class="alert alert-error" style="margin-top:10px">
@@ -207,6 +222,69 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 					</div>
 				)}
 			</div>
+
+			{/* Recognized from config — owner/persisted ids with NO approved_users
+			 *  row (they're recognized by config/env, not the DB). This is what makes
+			 *  an env-declared owner visible after a DB reset. */}
+			{configOnlyIds.length > 0 && (
+				<div class="card mb-md">
+					<h3 style="display:flex;align-items:center;gap:8px">
+						Recognized from config{" "}
+						<span class="badge">{configOnlyIds.length}</span>
+					</h3>
+					<p class="text-sm text-muted">
+						Always recognized regardless of database state — sourced from{" "}
+						<code>security.ownerUserIds</code> /{" "}
+						<code>security.allowedUsers</code> (or the{" "}
+						<code>PAW_SECURITY_*</code> env vars). No{" "}
+						<code>approved_users</code> row needed.
+					</p>
+					<div>
+						{configOnlyIds.map((id) => (
+							<div
+								key={id}
+								style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid var(--border-primary);border-radius:9px;margin-bottom:8px"
+							>
+								<div>
+									<code>{id}</code>
+									<div class="text-sm text-muted">
+										{owners.has(id) ? "owner" : "allowlisted"} · survives
+										redeploys
+									</div>
+								</div>
+								<div style="display:flex;align-items:center;gap:8px">
+									{owners.has(id) && (
+										<span
+											class="badge"
+											title="In security.ownerUserIds — always recognized, channel-agnostic, no DB row or pairing needed"
+										>
+											★ owner
+										</span>
+									)}
+									{envOwners.has(id) ? (
+										<span
+											class="badge"
+											title="Sourced from PAW_SECURITY_OWNER_USER_IDS — set in the environment, not editable from here"
+										>
+											from env
+										</span>
+									) : owners.has(id) ? (
+										<button
+											type="button"
+											class="btn btn-secondary"
+											data-id={id}
+											onclick="acOwner(this.dataset.id, false)"
+											title="Remove from security.ownerUserIds"
+										>
+											Remove owner
+										</button>
+									) : null}
+								</div>
+							</div>
+						))}
+					</div>
+				</div>
+			)}
 
 			{raw(`<script>${accessScript()}</script>`)}
 		</Layout>

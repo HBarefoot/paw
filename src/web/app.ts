@@ -24,6 +24,8 @@ import {
 	loadCredentials as loadStoredCredentials,
 	saveCredentials,
 } from "../auth/credential-store.js";
+import { mergeLiveConfig } from "../config/live-config.js";
+import { securityEnvIds } from "../config/loader.js";
 import {
 	readConfigOverrides,
 	replaceConfigOverride,
@@ -1183,6 +1185,10 @@ export function createWebApp(
 				persistedIds: ac ? recognizedIds(liveConfig().security) : [],
 				// Owner ids render an "Owner" badge and drive the Make-owner toggle.
 				ownerIds: ac ? (liveConfig().security?.ownerUserIds ?? []) : [],
+				// Ids sourced from PAW_SECURITY_* env — recognized regardless of config,
+				// so the UI marks them read-only ("from env") instead of offering to
+				// remove what a config write can't change.
+				envIds: ac ? securityEnvIds().ownerUserIds : [],
 				// OFF banner: access control isn't enforcing on external channels.
 				open: liveConfig().security?.allowUnapprovedExternal === true,
 			}),
@@ -1811,15 +1817,11 @@ export function createWebApp(
 	});
 
 	function liveConfig(): PawConfig {
-		const overrides = readConfigOverrides();
-		return {
-			...config,
-			...overrides,
-			agent: {
-				...config.agent,
-				...((overrides.agent as Record<string, unknown>) ?? {}),
-			},
-		} as PawConfig;
+		// Deep-merges `security` (and `agent`) one level + unions PAW_SECURITY_* env
+		// ids, so a partial config.json `security` write (Persist/make-owner persists
+		// only the touched key) can't wipe sibling ownerUserIds/blockedUsers/
+		// allowUnapprovedExternal at runtime. See mergeLiveConfig.
+		return mergeLiveConfig(config, readConfigOverrides());
 	}
 
 	function getIcpConfig(): {

@@ -75,7 +75,22 @@ SLACK_SIGNING_SECRET=...
 
 # Logging
 PAW_LOG_LEVEL=info
+
+# Access control — durable owner/allow/block ids (comma- or space-separated).
+# Unlike most PAW_* vars (which config.json overrides), these are UNIONED in
+# AFTER the file merge, so an env-declared owner is recognized on every boot
+# regardless of config.json or DB state — immune to the config writer. An owner
+# id needs no approved_users row or pairing code.
+PAW_SECURITY_OWNER_USER_IDS=U03H65TPZ1N
+PAW_SECURITY_ALLOWED_USERS=
+PAW_SECURITY_BLOCKED_USERS=
 ```
+
+> **Note on precedence:** environment variables normally sit *below* `config.json`
+> in the cascade, but the infra paths (`PAW_DB_PATH`, `PAW_CANVAS_ROOT`) and the
+> `PAW_SECURITY_*` id lists are applied *after* the file merge so a stale or wiped
+> `config.json` can't shadow them. The security lists **union** (never replace)
+> with whatever config/DB already recognize.
 
 ### Config File
 

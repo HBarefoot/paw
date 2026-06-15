@@ -1,16 +1,16 @@
-import { configSchema } from "./schema.js";
-import { defaults } from "./defaults.js";
-import { readConfigOverrides } from "./writer.js";
 import {
 	getAnthropicCredentials,
-	getSlackCredentials,
-	getStoredProvider,
+	getGeminiCredentials,
 	getOllamaConfig,
 	getOpenAICredentials,
-	getGeminiCredentials,
+	getSlackCredentials,
+	getStoredProvider,
 	getStrapiCredentials,
 } from "../auth/credential-store.js";
 import type { PawConfig } from "../types/config.js";
+import { defaults } from "./defaults.js";
+import { configSchema } from "./schema.js";
+import { readConfigOverrides } from "./writer.js";
 
 function deepMerge(
 	target: Record<string, unknown>,
@@ -226,6 +226,59 @@ function resolvedInfraOverrides(): Record<string, unknown> {
 	return out;
 }
 
+/** Split a comma/whitespace-separated env id list into trimmed, non-empty ids. */
+function parseIdList(raw: string | undefined): string[] {
+	if (!raw) return [];
+	return raw
+		.split(/[\s,]+/)
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
+
+/**
+ * Security id lists declared via env (`PAW_SECURITY_*`). Unlike the ordinary env
+ * defaults above (which a persisted `config.json` overrides), these behave like
+ * the infra-path overrides: they are UNIONED into the merged config AFTER the
+ * file merge, so an env-declared owner/allowlist/blocklist id is present on
+ * EVERY boot regardless of `config.json` or DB state — immune to the config
+ * writer's partial-`security` writes. Empty/unset env → empty lists.
+ */
+export function securityEnvIds(): {
+	ownerUserIds: string[];
+	allowedUsers: string[];
+	blockedUsers: string[];
+} {
+	const env = process.env;
+	return {
+		ownerUserIds: parseIdList(env.PAW_SECURITY_OWNER_USER_IDS),
+		allowedUsers: parseIdList(env.PAW_SECURITY_ALLOWED_USERS),
+		blockedUsers: parseIdList(env.PAW_SECURITY_BLOCKED_USERS),
+	};
+}
+
+/**
+ * Union the `PAW_SECURITY_*` env id lists into a `security` object, deduped,
+ * never REPLACING what's already there (an env-declared owner must always be
+ * present, not swap out config/DB ids). Applied at config load AND at the web
+ * `liveConfig()` read so an env owner survives a partial config write. Empty/
+ * unset env leaves an existing array untouched.
+ */
+export function applySecurityEnvIds(
+	security: Record<string, unknown>,
+): Record<string, unknown> {
+	const env = securityEnvIds();
+	const union = (existing: unknown, add: string[]): string[] => {
+		const base = Array.isArray(existing) ? (existing as string[]) : [];
+		return add.length === 0 ? base : [...new Set([...base, ...add])];
+	};
+	return {
+		...security,
+		ownerUserIds: union(security.ownerUserIds, env.ownerUserIds),
+		allowedUsers: union(security.allowedUsers, env.allowedUsers),
+		blockedUsers: union(security.blockedUsers, env.blockedUsers),
+	};
+}
+
 export function loadConfig(overrides?: Partial<PawConfig>): PawConfig {
 	let merged = deepMerge(
 		defaults as unknown as Record<string, unknown>,
@@ -245,5 +298,13 @@ export function loadConfig(overrides?: Partial<PawConfig>): PawConfig {
 	if (overrides) {
 		merged = deepMerge(merged, overrides as unknown as Record<string, unknown>);
 	}
+
+	// PAW_SECURITY_* owner/allow/block id lists UNION on top of everything (like
+	// the infra-path overrides win) so an env-declared owner is recognized on
+	// every boot regardless of config.json / DB state. Never replaces — env adds.
+	merged.security = applySecurityEnvIds(
+		(merged.security as Record<string, unknown>) ?? {},
+	);
+
 	return configSchema.parse(merged);
 }
