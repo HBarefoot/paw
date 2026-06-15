@@ -1,7 +1,7 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { AccessController } from "../../src/security/access-control.js";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createLogger } from "../../src/observability/logger.js";
+import { AccessController } from "../../src/security/access-control.js";
 
 describe("access controller", () => {
 	let db: Database;
@@ -41,6 +41,23 @@ describe("access controller", () => {
 		ac.approveUser("user1", "slack");
 		ac.revokeUser("user1");
 		expect(ac.isUserApproved("user1", "slack")).toBe(false);
+	});
+
+	test("listPendingPairings returns users with an outstanding code", () => {
+		expect(ac.listPendingPairings()).toHaveLength(0);
+		ac.generatePairingCode("U07AAA");
+		ac.generatePairingCode("U07BBB");
+		const pending = ac.listPendingPairings();
+		expect(pending.map((p) => p.userId).sort()).toEqual(["U07AAA", "U07BBB"]);
+		expect(pending[0].expiresAt).toBeTruthy();
+	});
+
+	test("listApprovedUsers reflects approvals with approver + channel", () => {
+		ac.approveUser("U07CCC", "web:1", "all");
+		const approved = ac.listApprovedUsers();
+		expect(approved).toHaveLength(1);
+		expect(approved[0].userId).toBe("U07CCC");
+		expect(approved[0].approvedBy).toBe("web:1");
 	});
 
 	test("pairing code flow works", () => {
