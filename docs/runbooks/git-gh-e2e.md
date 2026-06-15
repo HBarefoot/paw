@@ -11,6 +11,13 @@ finish).
 - Image deployed (or a local container) with `git` + `gh` present:
   `git --version` and `gh --version` both succeed in the container shell.
 
+> **Auth is the App installation token — NOT a `GH_TOKEN` env var.** Each `git`/`gh` call mints a fresh
+> installation token via the *same* path the `github_*` API tools use (`getInstallationOctokit().auth()`),
+> builds a fresh child env from it, and injects it via an ephemeral `GIT_CONFIG_*` extraheader. A
+> process-env `GH_TOKEN` is **never read** — setting one does nothing. Invariant: if the API tools can act
+> on a repo, `git`/`gh` can too. If the mint fails, the fault is App config (`appId`/`installationId`/
+> `appPrivateKey` in the vault) or the allowlist — not a missing `GH_TOKEN`.
+
 ## Steps (drive Paw via chat; it calls the `git`/`gh` tools)
 1. **Clone + branch from main** — Paw calls
    `git { repo:"<owner>/<repo>", args:["checkout","-b","paw/e2e","origin/main"] }`
@@ -39,3 +46,16 @@ finish).
 ## Fork note (construction-agent)
 `gh` must target `-R HBarefoot/construction-agent` explicitly (the tool already injects `-R`); never rely
 on remote inference, which resolves the wrong (upstream) remote on the fork.
+
+## Result (record each live run)
+The hermetic tests (`tests/integrations/github/client.test.ts`, `tests/tools/git-tools.test.ts`) prove the
+mint path and the security boundary in CI. This section records the **live** run, which needs the App
+private key from the **deployed instance's vault** + network — so it runs **post-deploy** on the deployed
+Paw (or a container with the vault key), not from a local checkout.
+
+| Date | Repo | Clone | Push branch | `gh pr create` | `.git/config` token-free | Notes |
+|------|------|-------|-------------|----------------|--------------------------|-------|
+| _pending post-deploy_ (fix/git-gh-installation-token) | `HBarefoot/portfolio-henry` | | | | | smoke: delete `src/app/.next/` → PR |
+
+Fill a row per run: clone → branch-from-main → edit/delete → push feature branch → `gh pr create` →
+confirm the PR exists, and `grep -ri 'x-access-token\|ghs_\|Authorization' .git/config` → **no matches**.
