@@ -13,6 +13,7 @@ export class AccessController {
 	private logger: Logger;
 	private allowedUsers: string[];
 	private blockedUsers: string[];
+	private ownerUserIds: string[];
 	private pairingTtlMinutes: number;
 	// M-NEW-2: per-user rate limit on pairing-code attempts. Without
 	// this, an attacker can brute-force 6 digits (10^6 possibilities)
@@ -30,6 +31,7 @@ export class AccessController {
 		opts: {
 			allowedUsers?: string[];
 			blockedUsers?: string[];
+			ownerUserIds?: string[];
 			pairingCodeTtlMinutes?: number;
 		} = {},
 	) {
@@ -37,12 +39,19 @@ export class AccessController {
 		this.logger = logger;
 		this.allowedUsers = opts.allowedUsers ?? [];
 		this.blockedUsers = opts.blockedUsers ?? [];
+		this.ownerUserIds = opts.ownerUserIds ?? [];
 		this.pairingTtlMinutes = opts.pairingCodeTtlMinutes ?? 10;
 	}
 
 	isUserApproved(userId: string, channel: string): boolean {
 		// Blocked users are always rejected
 		if (this.blockedUsers.includes(userId)) return false;
+
+		// Operator/owner identities are always recognized — never pairing-gated
+		// in their own workspace. This is the channel-agnostic equivalent of the
+		// web-admin exemption (#129): a configured owner (e.g. their Slack user
+		// id) is approved without an `approved_users` row or a pairing handshake.
+		if (this.ownerUserIds.includes(userId)) return true;
 
 		// Allowlist takes priority
 		if (this.allowedUsers.length > 0 && this.allowedUsers.includes(userId))
@@ -66,6 +75,19 @@ export class AccessController {
 	}
 
 	generatePairingCode(userId: string): string {
+		// Retrieve, don't regenerate: a still-valid code must stay stable across
+		// repeated unrecognized messages. Minting a fresh code each time (the old
+		// behavior) invalidated the one the user was just shown. Only mint when
+		// there is no row or the existing code has expired.
+		const existing = this.db
+			.prepare<{ code: string; expires_at: string }, [string]>(
+				"SELECT code, expires_at FROM pairing_codes WHERE user_id = ?",
+			)
+			.get(userId);
+		if (existing && new Date(existing.expires_at) > new Date()) {
+			return existing.code;
+		}
+
 		const buf = new Uint32Array(1);
 		crypto.getRandomValues(buf);
 		const code = String(100000 + (buf[0] % 900000));

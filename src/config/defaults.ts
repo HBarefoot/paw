@@ -71,6 +71,7 @@ export const defaults: PawConfig = {
 		},
 		allowedUsers: [],
 		blockedUsers: [],
+		ownerUserIds: [],
 	},
 	web: {
 		enabled: false,
