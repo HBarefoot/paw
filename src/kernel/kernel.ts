@@ -819,10 +819,34 @@ export class Kernel {
 				// kernel constructor) + register GitHub tools. The setApprovalSink +
 				// approval:decision wiring is done once there, independent of GitHub.
 				const approvals = this.githubApprovalsInstance;
+				// Publish-time analytics: when PostHog is enabled with a public
+				// project key, inject its snippet into committed HTML so the
+				// Vercel-published page is instrumented. The GitHub tools stay
+				// agnostic — they just get an opaque html transform.
+				const ph = this.config.posthog;
+				let htmlPublishTransform:
+					| ((path: string, content: string) => string)
+					| undefined;
+				if (ph?.enabled && ph.projectApiKey) {
+					const { injectPostHogSnippet } = await import(
+						"../integrations/posthog/snippet.js"
+					);
+					htmlPublishTransform = (path, content) =>
+						path.toLowerCase().endsWith(".html")
+							? injectPostHogSnippet(content, {
+									projectApiKey: ph.projectApiKey,
+									host: ph.host,
+								})
+							: content;
+				}
 				if (approvals) {
 					approvals.setClient(client);
 					this.toolRegistry.register(
-						createGitHubTools(client, { audit: ghAuditFn, approvals }),
+						createGitHubTools(client, {
+							audit: ghAuditFn,
+							approvals,
+							htmlPublishTransform,
+						}),
 					);
 				}
 				// Reactor: webhook events → durable notifications (the agent

@@ -179,4 +179,12 @@ export const defaults: PawConfig = {
 		baseUrl: "https://api.vercel.com",
 		timeout: 15_000,
 	},
+	posthog: {
+		enabled: false,
+		projectApiKey: "",
+		personalApiKey: "",
+		projectId: "",
+		host: "https://us.i.posthog.com",
+		timeout: 15_000,
+	},
 };

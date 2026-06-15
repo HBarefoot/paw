@@ -339,6 +339,21 @@ export const configSchema = z.object({
 			timeout: z.number().int().positive().default(15_000),
 		})
 		.default({}),
+	posthog: z
+		.object({
+			enabled: z.boolean().default(false),
+			// PUBLIC project key embedded in the page snippet — safe to expose.
+			projectApiKey: z.string().default(""),
+			// PRIVATE personal key for the read API — overlaid from vault slot
+			// `posthog.personalApiKey`. Server-side only; never reaches the model.
+			personalApiKey: z.string().default(""),
+			// Numeric project id for the Query API (PostHog project settings).
+			projectId: z.string().default(""),
+			// Ingestion/app host: https://us.i.posthog.com (or eu, or self-hosted).
+			host: z.string().default("https://us.i.posthog.com"),
+			timeout: z.number().int().positive().default(15_000),
+		})
+		.default({}),
 });
 
 export type ConfigSchema = z.infer<typeof configSchema>;

@@ -31,6 +31,7 @@ export type VaultScope =
 	| "supabase"
 	| "wordpress"
 	| "vercel"
+	| "posthog"
 	| "custom";
 
 export interface VaultSecretMeta {
@@ -107,6 +108,11 @@ export const KNOWN_SECRET_SLOTS: {
 		name: "vercel.token",
 		scope: "vercel",
 		label: "Vercel API token",
+	},
+	{
+		name: "posthog.personalApiKey",
+		scope: "posthog",
+		label: "PostHog Personal API key (read API)",
 	},
 ];
 
@@ -330,6 +336,9 @@ export class VaultManager {
 		});
 		apply("wordpress.appPassword", (v) => {
 			if (config.wordpress) config.wordpress.appPassword = v;
+		});
+		apply("posthog.personalApiKey", (v) => {
+			if (config.posthog) config.posthog.personalApiKey = v;
 		});
 		apply("vercel.token", (v) => {
 			if (config.vercel) config.vercel.token = v;

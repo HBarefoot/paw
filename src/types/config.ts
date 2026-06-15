@@ -228,4 +228,12 @@ export interface PawConfig {
 		baseUrl: string;
 		timeout: number;
 	};
+	posthog: {
+		enabled: boolean;
+		projectApiKey: string;
+		personalApiKey: string;
+		projectId: string;
+		host: string;
+		timeout: number;
+	};
 }
