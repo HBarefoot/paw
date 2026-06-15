@@ -54,7 +54,10 @@ import { createMemoryTools } from "../memory/tools.js";
 import { createLogger, setLogLevel } from "../observability/logger.js";
 import { ToolLog } from "../observability/tool-log.js";
 import { resolveProjectPath } from "../paths.js";
-import { AccessController } from "../security/access-control.js";
+import {
+	AccessController,
+	unrecognizedUserMessage,
+} from "../security/access-control.js";
 import { AuditLogger } from "../security/audit-log.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import { VaultManager } from "../security/vault.js";
@@ -298,6 +301,14 @@ export class Kernel {
 					pairingCodeTtlMinutes: config.security.pairingCodeTtlMinutes,
 				},
 			);
+			// Boot diagnostic: confirm which ids are recognized without a DB row /
+			// pairing handshake. If an expected owner is missing here, the config
+			// override didn't load into the running controller.
+			this.logger.info("Access control active", {
+				ownerUserIds: config.security.ownerUserIds,
+				allowedUsers: config.security.allowedUsers,
+				blockedUsers: config.security.blockedUsers,
+			});
 		}
 		if (config.security.rateLimiting.enabled) {
 			this.rateLimiter = new RateLimiter(
@@ -1583,10 +1594,16 @@ export class Kernel {
 			const pairingCode = this.accessController.generatePairingCode(
 				msg.user.id,
 			);
+			// Log the exact id we gated — pairs with the Slack plugin's raw-inbound
+			// log to reveal when a relay presents an unexpected sender id.
+			this.logger.warn("Access denied — pairing code issued", {
+				channel: msg.channel,
+				user: msg.user.id,
+			});
 			await this.bus.emit("message:outbound", {
 				sessionId: msg.sessionId,
 				channel: msg.channel,
-				content: `Hi! I don't recognize you yet. Please ask an admin to approve your access, or enter this pairing code: *${pairingCode}*`,
+				content: unrecognizedUserMessage(msg.user.id, pairingCode),
 				metadata: msg.metadata,
 			});
 			return;
