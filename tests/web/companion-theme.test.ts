@@ -19,6 +19,10 @@ const APP_SRC = readFileSync(
 	new URL("../../src/web/app.ts", import.meta.url),
 	"utf8",
 );
+const SHELL_SRC = readFileSync(
+	new URL("../../src/web/public/companion/shell.js", import.meta.url),
+	"utf8",
+);
 
 // ── tiny CSS readers (this is a real .ts file — regex is fine here) ──
 /** Body of the first `<selector> { … }` rule (no nested braces in this sheet). */
@@ -213,5 +217,33 @@ describe("/companion theme bootstrap (Part A)", () => {
 		b.setTheme("light");
 		b.fireStorage("paw-sidebar-collapsed");
 		expect(b.hasDark()).toBe(true);
+	});
+});
+
+// ── The brand must NOT freeze the theme ground (fix/companion-brand-bg) ──
+// Regression: app.ts passed the active brand's `bg` into the companion cfg and
+// shell.js applied it as an inline `--bg` on <html>. Inline styles beat the
+// stylesheet, so the brand's black bg (#000000) clobbered the theme-aware
+// :root/html.dark `--bg` in BOTH modes → light mode rendered dark text on a
+// black stage. The design system owns the neutrals; the brand contributes
+// accent only (same rule as src/store/brands.ts). These fail on pre-fix code.
+describe("companion does not let the brand freeze --bg (Part C)", () => {
+	test("shell.js never injects an inline --bg on the document element", () => {
+		expect(SHELL_SRC).not.toContain('setProperty("--bg"');
+	});
+
+	test("shell.js STILL injects the brand --accent (theme-independent)", () => {
+		expect(SHELL_SRC).toContain('setProperty("--accent", cfg.accent)');
+	});
+
+	test("the /companion config no longer passes the brand bg", () => {
+		expect(APP_SRC).not.toContain("bg: pal?.bg");
+	});
+
+	test("styles.css remains the source of --bg: light :root, dark html.dark", () => {
+		// With the inline override gone, the stylesheet wins: light ground in
+		// light mode (#ffffff, not #000000), dark ground under html.dark.
+		expect(tokenIn(ROOT, "--bg")).toBe("#ffffff");
+		expect(relLum(hexToRgb(tokenIn(DARK, "--bg") as string))).toBeLessThan(0.1);
 	});
 });

@@ -611,7 +611,10 @@
 		cfg = cfg || {};
 		const docEl = root.ownerDocument.documentElement;
 		if (cfg.accent) docEl.style.setProperty("--accent", cfg.accent);
-		if (cfg.bg) docEl.style.setProperty("--bg", cfg.bg);
+		// Intentionally do NOT inject the brand `--bg`: styles.css owns the
+		// per-theme ground (light :root / dark html.dark). An inline `--bg` here
+		// beats the stylesheet and froze the companion to the brand's black bg,
+		// breaking light mode. Accent is theme-independent, so it stays.
 
 		const engine = new window.CompanionEngine();
 		engine.start(cfg);

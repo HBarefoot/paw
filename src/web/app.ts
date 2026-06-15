@@ -2101,7 +2101,11 @@ export function createWebApp(
 		}
 		const cfg = JSON.stringify({
 			accent,
-			bg: pal?.bg,
+			// NB: do NOT pass the brand `bg` here. The design system owns the
+			// light/dark neutrals (companion styles.css: light `:root`, dark
+			// `html.dark`); injecting the brand bg as an inline `--bg` froze the
+			// theme to the brand's black ground and made light mode unreadable.
+			// Brand contributes accent + fonts only — same rule as brands.ts.
 			model: currentModel(),
 			brandName,
 			moodScalar,
