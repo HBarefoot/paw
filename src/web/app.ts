@@ -84,6 +84,7 @@ import { ChatPage, getChatScript } from "./views/chat.js";
 import { SettingsPage } from "./views/settings-page.js";
 import { VaultPage, type VaultSlotStatus } from "./views/vault-page.js";
 import { GitHubPage } from "./views/github-page.js";
+import { VercelPage } from "./views/vercel-page.js";
 import { NotificationsPage } from "./views/notifications-page.js";
 import { KNOWN_SECRET_SLOTS, type VaultScope } from "../security/vault.js";
 // canvas-page.tsx removed — canvas is now merged into chat
@@ -1242,6 +1243,57 @@ export function createWebApp(
 				enabled: gh.enabled,
 				repoCount: (gh.repoAllowlist as string[])?.length,
 			},
+			getClientIp(c),
+		);
+		return c.json({ saved: true, restartRequired: true });
+	});
+
+	// --- Vercel deploy-target integration ---
+	app.get("/vercel", async (c) => {
+		const vc = liveConfig().vercel;
+		const initialized = kernel.vercel !== null;
+		const status = kernel.vercel ? await kernel.vercel.getStatus() : null;
+		const projects =
+			status?.ok && kernel.vercel
+				? await kernel.vercel.listProjects().catch(() => [])
+				: [];
+		return c.html(
+			VercelPage({
+				enabled: vc.enabled,
+				teamId: vc.teamId,
+				tokenInVault: kernel.vault.enabled
+					? kernel.vault.has("vercel.token")
+					: false,
+				vaultEnabled: kernel.vault.enabled,
+				initialized,
+				status,
+				projects,
+			}),
+		);
+	});
+
+	app.get("/api/vercel/status", async (c) => {
+		if (!kernel.vercel) return c.json({ configured: false, ok: false });
+		return c.json(await kernel.vercel.getStatus());
+	});
+
+	app.post("/api/vercel/settings", async (c) => {
+		type VercelSettingsBody = { enabled?: boolean; teamId?: string };
+		const body = await c.req
+			.json<VercelSettingsBody>()
+			.catch(() => ({}) as VercelSettingsBody);
+		const overrides = readConfigOverrides();
+		const v = (overrides.vercel ?? {}) as Record<string, unknown>;
+		// Only enabled + teamId are settable here; the token is vault-only.
+		if (body.enabled !== undefined) v.enabled = Boolean(body.enabled);
+		if (body.teamId !== undefined) v.teamId = String(body.teamId).trim();
+		overrides.vercel = v;
+		saveConfigOverrides(overrides);
+		const session = c.get("session") as { user_id: number } | undefined;
+		authManager.audit.log(
+			"vercel.settings",
+			session?.user_id ?? null,
+			{ enabled: v.enabled, teamId: v.teamId },
 			getClientIp(c),
 		);
 		return c.json({ saved: true, restartRequired: true });
