@@ -1682,6 +1682,14 @@
     min-width: 320px;
     border-left: none;
     background: var(--bg-card);
+    /* Every sibling in the canvas column (.canvas-body/.canvas-main/
+     * .canvas-tab-content) carries min-height:0; the panel is the one gap.
+     * min-height:0 + overflow:hidden keep a tall descendant from visually
+     * stretching the inset:0 tab iframe past the viewport-bounded card (the
+     * same hazard the .no-topbar .content comment above guards against) — which
+     * would feed scaleToFit an oversized height and clip the companion's head. */
+    min-height: 0;
+    overflow: hidden;
   }
   .canvas-panel.open { display: flex; }
 

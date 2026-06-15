@@ -2207,6 +2207,7 @@ export function createWebApp(
 <script src="/companion/static/spring.js${v}"></script>
 <script src="/companion/static/engine.js${v}"></script>
 <script src="/companion/static/inbox.js${v}"></script>
+<script src="/companion/static/fit.js${v}"></script>
 <script src="/companion/static/shell.js${v}"></script>
 <script>window.__COMPANION_CONFIG=${cfg};
 window.Companion.mount(document.getElementById("companion-root"),window.__COMPANION_CONFIG);</script>

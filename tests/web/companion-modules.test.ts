@@ -14,6 +14,7 @@ const MODULES = [
 	"expression.js",
 	"spring.js",
 	"engine.js",
+	"fit.js",
 	"shell.js",
 ];
 

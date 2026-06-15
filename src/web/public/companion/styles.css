@@ -104,9 +104,13 @@ body {
 	align-items: center;
 	justify-content: center;
 }
-/* Scale-to-fit wrapper: JS sets transform so the home always fits, no scroll. */
+/* Scale-to-fit wrapper: JS sets transform so the home always fits, no scroll.
+ * Starts hidden and is revealed by scaleToFit() on the FIRST real fit (shell.js),
+ * so a 0-height first paint (e.g. the Home tab mounting while display:none) never
+ * flashes the dock at natural size, centered, with the orb's head clipped. */
 .fit {
 	transform-origin: center center;
+	visibility: hidden;
 }
 /* ── Fix B (fix/companion-lightbg-and-zoom): smooth the DISCRETE fit-scale
  * rescale that happens when the skill/sub-agent COUNT changes. scaleToFit()

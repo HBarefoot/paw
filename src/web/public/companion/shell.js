@@ -800,6 +800,9 @@
 		let captionFadeTimer = null;
 		let renderedTs = [];
 		let scale = 1;
+		// `.fit` starts visibility:hidden (styles.css) and is revealed on the first
+		// successful fit, so a 0-height first paint never flashes the orb clipped.
+		let fitted = false;
 		const tetherEls = new Map();
 		let raf = null;
 		// Micro-physics: one spring kicked on entry into a busy face / orchestrator
@@ -1230,18 +1233,29 @@
 		}
 
 		function scaleToFit() {
-			const rw = root.clientWidth;
-			const rh = root.clientHeight;
-			if (!rw || !rh) return;
-			// Measure at natural size.
+			// Measure at natural size, then ask the pure helper for the fit scale.
 			const prev = fit.style.transform;
 			fit.style.transform = "scale(1)";
-			const cw = home.offsetWidth;
-			const ch = home.offsetHeight;
-			let s = Math.min(1, rw / cw, rh / ch);
-			if (!Number.isFinite(s) || s <= 0) s = 1;
+			const s = window.CompanionFit.computeFitScale(
+				root.clientWidth,
+				root.clientHeight,
+				home.offsetWidth,
+				home.offsetHeight,
+			);
+			// Unmeasurable (0 / non-finite dimension — e.g. the tab was display:none
+			// so the iframe never laid out). KEEP the last good transform rather than
+			// snapping to natural size (scale(1)), which centered+clips the orb's head.
+			if (s == null) {
+				fit.style.transform = prev;
+				return;
+			}
 			scale = s;
-			fit.style.transform = s === 1 ? prev || "" : `scale(${s})`;
+			fit.style.transform = s === 1 ? "" : `scale(${s})`;
+			// Reveal once the first real fit lands (see `fitted` / styles.css .fit).
+			if (!fitted) {
+				fitted = true;
+				fit.style.visibility = "visible";
+			}
 		}
 
 		function activeKey(st) {
@@ -1282,9 +1296,16 @@
 		// so the companion snaps to size on mount instead of animating a zoom-in.
 		// (.fit only — the breathing orb is .cmp-sphere, still driven by the rAF
 		// loop and never transitioned.) Double rAF lets the first transform paint.
-		window.requestAnimationFrame(() =>
-			window.requestAnimationFrame(() => fit.classList.add("fit-anim")),
-		);
+		// Gated on `fitted` (not a plain double-rAF) so a delayed first layout
+		// (e.g. the Home tab mounting while display:none) can never animate the
+		// snap scale(1)->s once it becomes visible.
+		(function enableFitAnimAfterFirstFit() {
+			if (fitted) {
+				window.requestAnimationFrame(() => fit.classList.add("fit-anim"));
+				return;
+			}
+			window.requestAnimationFrame(enableFitAnimAfterFirstFit);
+		})();
 		if (typeof ResizeObserver === "function") {
 			new ResizeObserver(scaleToFit).observe(root);
 		}
