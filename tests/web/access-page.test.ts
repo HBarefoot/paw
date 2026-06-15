@@ -8,9 +8,21 @@ import {
 } from "../../src/web/views/access-page.js";
 
 function render(overrides: Partial<AccessPageProps> = {}): string {
-	const base: AccessPageProps = { enabled: true, pending: [], approved: [] };
+	const base: AccessPageProps = {
+		enabled: true,
+		pending: [],
+		approved: [],
+		persistedIds: [],
+	};
 	return String(AccessPage({ ...base, ...overrides }));
 }
+
+const approvedUser: ApprovedUser = {
+	userId: "U07XYZ",
+	channel: "all",
+	approvedAt: "2026-06-14",
+	approvedBy: "web:1",
+};
 
 const future = new Date(Date.now() + 5 * 60_000).toISOString();
 const past = new Date(Date.now() - 60_000).toISOString();
@@ -35,19 +47,33 @@ describe("access page", () => {
 	});
 
 	test("approved rows render approver and a Revoke button", () => {
-		const approved: ApprovedUser[] = [
-			{
-				userId: "U07XYZ",
-				channel: "all",
-				approvedAt: "2026-06-14",
-				approvedBy: "web:1",
-			},
-		];
-		const html = render({ approved });
+		const html = render({ approved: [approvedUser] });
 		expect(html).toContain("U07XYZ");
 		expect(html).toContain("web:1");
 		expect(html).toContain("acRevoke(this.dataset.id)");
 		expect(html).toContain("Revoke");
+	});
+
+	test("a non-persisted approved user gets a Persist button", () => {
+		const html = render({ approved: [approvedUser], persistedIds: [] });
+		expect(html).toContain("acPersist(this.dataset.id)");
+		expect(html).toContain("Persist");
+	});
+
+	test("a persisted user shows the 'survives redeploys' pill, not a Persist button", () => {
+		const html = render({
+			approved: [approvedUser],
+			persistedIds: ["U07XYZ"],
+		});
+		expect(html).toContain("survives redeploys");
+		expect(html).not.toContain("acPersist(this.dataset.id)");
+	});
+
+	test("the note no longer tells the operator to hand-edit config to survive a redeploy", () => {
+		const html = render();
+		// old misleading wording is gone; the durable path is now one-click Persist + ownerUserIds
+		expect(html).not.toContain("add the user to");
+		expect(html).toContain("security.ownerUserIds");
 	});
 
 	test("empty states when nothing is pending or approved", () => {
@@ -70,11 +96,13 @@ describe("access page — inline script (template-trap guard)", () => {
 		expect(() => new Function(script)).not.toThrow();
 	});
 
-	test("exposes acApprove + acRevoke, no backslash escapes / regex", () => {
+	test("exposes acApprove + acRevoke + acPersist, no backslash escapes / regex", () => {
 		expect(script).toContain("acApprove");
 		expect(script).toContain("acRevoke");
+		expect(script).toContain("acPersist");
 		expect(script).toContain("/api/access/approve");
 		expect(script).toContain("/api/access/revoke");
+		expect(script).toContain("/api/access/persist");
 		expect(script).not.toContain("\\");
 	});
 });

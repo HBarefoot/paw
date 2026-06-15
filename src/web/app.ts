@@ -1172,11 +1172,15 @@ export function createWebApp(
 	// --- Access control: pairing approvals + approved users ---
 	app.get("/access", (c) => {
 		const ac = kernel.access;
+		const sec = liveConfig().security;
 		return c.html(
 			AccessPage({
 				enabled: !!ac,
 				pending: ac ? ac.listPendingPairings() : [],
 				approved: ac ? ac.listApprovedUsers() : [],
+				persistedIds: ac
+					? [...new Set([...sec.allowedUsers, ...sec.ownerUserIds])]
+					: [],
 			}),
 		);
 	});
@@ -1207,6 +1211,28 @@ export function createWebApp(
 			content: "Access granted! You can now chat with me. ✅",
 			metadata: { slackChannel: userId },
 		} as never);
+		return c.json({ ok: true });
+	});
+
+	// Persist an approved user to config (security.allowedUsers) so they're
+	// recognized even if the DB is reset on a redeploy. Also writes the DB row
+	// (live now); config is the durable layer. isUserApproved checks allowedUsers
+	// before the DB, so this survives an ephemeral-DB deploy.
+	app.post("/api/access/persist", async (c) => {
+		const ac = kernel.access;
+		if (!ac) return c.json({ error: "Access control is not active" }, 400);
+		const body = await c.req
+			.json<{ userId?: string }>()
+			.catch(() => ({}) as { userId?: string });
+		const userId = (body.userId ?? "").trim();
+		if (!userId) return c.json({ error: "userId is required" }, 400);
+		ac.approveUser(userId, "web:persist", "all");
+		const current = liveConfig().security.allowedUsers ?? [];
+		const next = current.includes(userId) ? current : [...current, userId];
+		replaceConfigOverride("security.allowedUsers", next);
+		// Actor is null here (single-admin deployment) to avoid the file's known
+		// c.get("session") TS2769 overload class; the action + userId are audited.
+		authManager.audit.log("access.persist", null, { userId }, getClientIp(c));
 		return c.json({ ok: true });
 	});
 

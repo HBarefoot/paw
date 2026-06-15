@@ -1,7 +1,15 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createLogger } from "../../src/observability/logger.js";
 import { AccessController } from "../../src/security/access-control.js";
+
+const APPROVED_DDL = `CREATE TABLE IF NOT EXISTS approved_users (
+  user_id TEXT PRIMARY KEY, channel TEXT NOT NULL,
+  approved_at TEXT NOT NULL DEFAULT (datetime('now')), approved_by TEXT
+)`;
 
 describe("access controller", () => {
 	let db: Database;
@@ -144,5 +152,39 @@ describe("access controller", () => {
 			pairingCodeTtlMinutes: 10,
 		});
 		expect(ac3.isUserApproved("U_OWNER", "slack")).toBe(false);
+	});
+});
+
+// A DB approval must survive a process restart against the SAME db file. This
+// guards that nothing clears `approved_users` on open (no DROP/migration wipe)
+// — the on-disk approval is the durable record when the file is persistent.
+// (If approvals still vanish in prod, the db FILE is ephemeral — a deploy/volume
+// issue — not this code path.)
+describe("access controller — approvals survive a restart (same db file)", () => {
+	let dir: string;
+	let dbPath: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "paw-access-restart-"));
+		dbPath = join(dir, "paw.db");
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	test("approveUser persists across a fresh AccessController on the same file", () => {
+		// First "process": approve, then close the handle.
+		const db1 = new Database(dbPath);
+		db1.run(APPROVED_DDL);
+		const ac1 = new AccessController(db1, createLogger("test"));
+		ac1.approveUser("U03H65TPZ1N", "pairing_code", "all");
+		expect(ac1.isUserApproved("U03H65TPZ1N", "slack")).toBe(true);
+		db1.close();
+
+		// Second "process" (simulated restart): reopen the SAME file, no in-memory
+		// state carried over. The row must still be there.
+		const db2 = new Database(dbPath);
+		db2.run(APPROVED_DDL); // CREATE TABLE IF NOT EXISTS — must not wipe the row
+		const ac2 = new AccessController(db2, createLogger("test"));
+		expect(ac2.isUserApproved("U03H65TPZ1N", "slack")).toBe(true);
+		db2.close();
 	});
 });
