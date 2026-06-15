@@ -16,6 +16,9 @@ export interface AccessPageProps {
 	/** Ids recognized from config (security.allowedUsers ∪ ownerUserIds) — these
 	 *  survive a redeploy regardless of DB state, so they render as "persisted". */
 	persistedIds: string[];
+	/** Ids in security.ownerUserIds — always recognized, channel-agnostic, no DB
+	 *  row needed. Render an "Owner" badge; others get a "Make owner" button. */
+	ownerIds: string[];
 }
 
 /** Ids recognized purely from config — `security.allowedUsers ∪ ownerUserIds`,
@@ -48,8 +51,9 @@ function expiryLabel(expiresAt: string): { text: string; expired: boolean } {
 }
 
 export const AccessPage: FC<AccessPageProps> = (props) => {
-	const { enabled, pending, approved, persistedIds } = props;
+	const { enabled, pending, approved, persistedIds, ownerIds } = props;
 	const persisted = new Set(persistedIds);
+	const owners = new Set(ownerIds);
 
 	return (
 		<Layout title="Access" currentPath="/access">
@@ -140,6 +144,24 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 									</div>
 								</div>
 								<div style="display:flex;align-items:center;gap:8px">
+									{owners.has(u.userId) ? (
+										<span
+											class="badge"
+											title="In security.ownerUserIds — always recognized, channel-agnostic, no DB row or pairing needed"
+										>
+											★ owner
+										</span>
+									) : (
+										<button
+											type="button"
+											class="btn btn-secondary"
+											data-id={u.userId}
+											onclick="acOwner(this.dataset.id, true)"
+											title="Add to security.ownerUserIds — always recognized regardless of DB state"
+										>
+											Make owner
+										</button>
+									)}
 									{persisted.has(u.userId) ? (
 										<span
 											class="badge"
@@ -211,6 +233,21 @@ async function acPersist(userId) {
     pawToast("Persisted " + userId + " — survives redeploys");
     setTimeout(function(){ window.location.reload(); }, 500);
   } catch (e) { pawModal.alert("Persist failed", String(e)); }
+}
+async function acOwner(userId, owner) {
+  var ok = await pawModal.confirm("Make owner", "Add " + userId + " to security.ownerUserIds? Owners are always recognized in every channel with no DB row or pairing code.", { confirmLabel: "Make owner" });
+  if (!ok) return;
+  try {
+    var res = await fetch("/api/access/owner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: userId, owner: owner })
+    });
+    var data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) { pawModal.alert("Make owner failed", data.error || ("HTTP " + res.status)); return; }
+    pawToast(userId + " is now an owner — always recognized");
+    setTimeout(function(){ window.location.reload(); }, 500);
+  } catch (e) { pawModal.alert("Make owner failed", String(e)); }
 }
 async function acRevoke(userId) {
   var ok = await pawModal.confirm("Revoke access", "Revoke access for " + userId + "?", { danger: true, confirmLabel: "Revoke" });

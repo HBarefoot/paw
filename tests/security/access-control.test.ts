@@ -10,6 +10,10 @@ const APPROVED_DDL = `CREATE TABLE IF NOT EXISTS approved_users (
   user_id TEXT PRIMARY KEY, channel TEXT NOT NULL,
   approved_at TEXT NOT NULL DEFAULT (datetime('now')), approved_by TEXT
 )`;
+const PAIRING_DDL = `CREATE TABLE IF NOT EXISTS pairing_codes (
+  user_id TEXT PRIMARY KEY, code TEXT NOT NULL,
+  expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`;
 
 describe("access controller", () => {
 	let db: Database;
@@ -100,6 +104,40 @@ describe("access controller", () => {
 		expect(ac2.isUserApproved("bad-user", "slack")).toBe(false);
 	});
 
+	// Approving a user must clear any outstanding pairing code so they stop
+	// showing as a (stale/"expired") pending row. Previously only
+	// verifyPairingCode deleted it, so a page-approved user lingered forever.
+	test("approveUser clears the user's outstanding pairing code", () => {
+		ac.generatePairingCode("U07DDD");
+		expect(ac.listPendingPairings().map((p) => p.userId)).toContain("U07DDD");
+		ac.approveUser("U07DDD", "web:1", "all");
+		expect(ac.listPendingPairings().map((p) => p.userId)).not.toContain(
+			"U07DDD",
+		);
+	});
+
+	// setAccessLists applies an allowlist/owner change to the RUNNING controller
+	// without a restart. Previously these lists were seeded only in the
+	// constructor, so /api/access/persist (+ ownerUserIds) needed a reboot.
+	test("setAccessLists makes an owner id recognized live, with no DB row", () => {
+		expect(ac.isUserApproved("U_LIVE_OWNER", "slack")).toBe(false);
+		ac.setAccessLists({ ownerUserIds: ["U_LIVE_OWNER"] });
+		expect(ac.isUserApproved("U_LIVE_OWNER", "slack")).toBe(true);
+		const row = db
+			.prepare("SELECT user_id FROM approved_users WHERE user_id = ?")
+			.get("U_LIVE_OWNER");
+		expect(row).toBeNull();
+	});
+
+	test("setAccessLists updates allowedUsers live and only the provided list", () => {
+		ac.setAccessLists({ allowedUsers: ["U_ALLOWED"] });
+		expect(ac.isUserApproved("U_ALLOWED", "slack")).toBe(true);
+		// Omitting a list leaves it untouched (allowedUsers stays applied).
+		ac.setAccessLists({ blockedUsers: ["U_BAD"] });
+		expect(ac.isUserApproved("U_ALLOWED", "slack")).toBe(true);
+		expect(ac.isUserApproved("U_BAD", "slack")).toBe(false);
+	});
+
 	// Defect 1: a still-valid pairing code must stay stable across repeated
 	// unrecognized messages (the old code minted a fresh code every call,
 	// invalidating the one the user was just shown).
@@ -174,6 +212,7 @@ describe("access controller — approvals survive a restart (same db file)", () 
 		// First "process": approve, then close the handle.
 		const db1 = new Database(dbPath);
 		db1.run(APPROVED_DDL);
+		db1.run(PAIRING_DDL);
 		const ac1 = new AccessController(db1, createLogger("test"));
 		ac1.approveUser("U03H65TPZ1N", "pairing_code", "all");
 		expect(ac1.isUserApproved("U03H65TPZ1N", "slack")).toBe(true);
@@ -183,6 +222,7 @@ describe("access controller — approvals survive a restart (same db file)", () 
 		// state carried over. The row must still be there.
 		const db2 = new Database(dbPath);
 		db2.run(APPROVED_DDL); // CREATE TABLE IF NOT EXISTS — must not wipe the row
+		db2.run(PAIRING_DDL);
 		const ac2 = new AccessController(db2, createLogger("test"));
 		expect(ac2.isUserApproved("U03H65TPZ1N", "slack")).toBe(true);
 		db2.close();

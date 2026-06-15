@@ -14,6 +14,7 @@ function render(overrides: Partial<AccessPageProps> = {}): string {
 		pending: [],
 		approved: [],
 		persistedIds: [],
+		ownerIds: [],
 	};
 	return String(AccessPage({ ...base, ...overrides }));
 }
@@ -70,6 +71,18 @@ describe("access page", () => {
 		expect(html).not.toContain("acPersist(this.dataset.id)");
 	});
 
+	test("a non-owner approved user gets a 'Make owner' button", () => {
+		const html = render({ approved: [approvedUser], ownerIds: [] });
+		expect(html).toContain("acOwner(this.dataset.id, true)");
+		expect(html).toContain("Make owner");
+	});
+
+	test("an owner shows the 'owner' badge, not a 'Make owner' button", () => {
+		const html = render({ approved: [approvedUser], ownerIds: ["U07XYZ"] });
+		expect(html).toContain("★ owner");
+		expect(html).not.toContain("acOwner(this.dataset.id, true)");
+	});
+
 	test("the note no longer tells the operator to hand-edit config to survive a redeploy", () => {
 		const html = render();
 		// old misleading wording is gone; the durable path is now one-click Persist + ownerUserIds
@@ -123,13 +136,15 @@ describe("access page — inline script (template-trap guard)", () => {
 		expect(() => new Function(script)).not.toThrow();
 	});
 
-	test("exposes acApprove + acRevoke + acPersist, no backslash escapes / regex", () => {
+	test("exposes acApprove + acRevoke + acPersist + acOwner, no backslash escapes / regex", () => {
 		expect(script).toContain("acApprove");
 		expect(script).toContain("acRevoke");
 		expect(script).toContain("acPersist");
+		expect(script).toContain("acOwner");
 		expect(script).toContain("/api/access/approve");
 		expect(script).toContain("/api/access/revoke");
 		expect(script).toContain("/api/access/persist");
+		expect(script).toContain("/api/access/owner");
 		expect(script).not.toContain("\\");
 	});
 });
