@@ -90,6 +90,7 @@ import { startWebServer } from "../web/server.js";
 import { EventBus } from "./bus.js";
 import {
 	type GateReason,
+	accessControlOffWarning,
 	evaluateInboundGate,
 	gateDenialMessage,
 	isAccessExempt,
@@ -289,27 +290,29 @@ export class Kernel {
 			],
 		});
 
-		// Security
-		if (config.security.requireApproval) {
-			this.accessController = new AccessController(
-				this.db,
-				createLogger("security"),
-				{
-					allowedUsers: config.security.allowedUsers,
-					blockedUsers: config.security.blockedUsers,
-					ownerUserIds: config.security.ownerUserIds,
-					pairingCodeTtlMinutes: config.security.pairingCodeTtlMinutes,
-				},
-			);
-			// Boot diagnostic: confirm which ids are recognized without a DB row /
-			// pairing handshake. If an expected owner is missing here, the config
-			// override didn't load into the running controller.
-			this.logger.info("Access control active", {
-				ownerUserIds: config.security.ownerUserIds,
+		// Security. The AccessController is constructed UNCONDITIONALLY — external
+		// channels (Slack) always fail CLOSED for unrecognized users. Previously it
+		// was gated on `requireApproval`, so the default (false) left the agent
+		// answering everyone with no approval. Openness is now governed only by the
+		// explicit, default-off `allowUnapprovedExternal`.
+		this.accessController = new AccessController(
+			this.db,
+			createLogger("security"),
+			{
 				allowedUsers: config.security.allowedUsers,
 				blockedUsers: config.security.blockedUsers,
-			});
-		}
+				ownerUserIds: config.security.ownerUserIds,
+				pairingCodeTtlMinutes: config.security.pairingCodeTtlMinutes,
+			},
+		);
+		// Boot diagnostic: confirm which ids are recognized without a DB row /
+		// pairing handshake. If an expected owner is missing here, the config
+		// override didn't load into the running controller.
+		this.logger.info("Access control active", {
+			ownerUserIds: config.security.ownerUserIds,
+			allowedUsers: config.security.allowedUsers,
+			blockedUsers: config.security.blockedUsers,
+		});
 		if (config.security.rateLimiting.enabled) {
 			this.rateLimiter = new RateLimiter(
 				config.security.rateLimiting.maxRequestsPerMinute,
@@ -689,6 +692,23 @@ export class Kernel {
 				}
 			}),
 		);
+
+		// Access-control posture: warn LOUDLY if the gate isn't enforcing while an
+		// external channel (Slack) is live — otherwise the agent answers anyone.
+		// The external-channel set is only known after plugins load.
+		const externalChannelActive = this.plugins.some((p) => p.name === "slack");
+		const offWarning = accessControlOffWarning({
+			open: this.config.security.allowUnapprovedExternal === true,
+			externalChannelActive,
+		});
+		if (offWarning) {
+			this.logger.warn(offWarning);
+		} else if (externalChannelActive) {
+			this.logger.info("Access control enforcing on external channels", {
+				ownerUserIds: this.config.security.ownerUserIds.length,
+				allowedUsers: this.config.security.allowedUsers.length,
+			});
+		}
 
 		// One-time cleanup: collapse pre-existing case-variant MCP server keys
 		// (e.g. HubSpot/hubSpot/hubspot) into a single canonical lowercase key and
@@ -1567,46 +1587,67 @@ export class Kernel {
 			}
 		}
 
-		// Access control (pairing code system) — skip for internal channels and
-		// for authenticated web sessions (they already passed web auth).
+		// Access control (pairing code system) — FAIL CLOSED for external channels.
+		// Skipped for internal channels and authenticated web sessions, and for the
+		// explicit `allowUnapprovedExternal` opt-in. A missing controller denies
+		// (never silently opens) — but it's always constructed now, so the pairing
+		// flow below runs normally.
 		if (
 			!isAccessExempt(msg, isInternal) &&
-			this.accessController &&
-			!this.accessController.isUserApproved(msg.user.id, msg.channel)
+			!this.config.security.allowUnapprovedExternal
 		) {
-			// Check if this message IS a pairing code
-			const code = msg.content.trim();
-			if (
-				/^\d{6}$/.test(code) &&
-				this.accessController.verifyPairingCode(msg.user.id, code)
-			) {
-				await this.bus.emit("security:user-approved", { userId: msg.user.id });
-				await this.bus.emit("message:outbound", {
-					sessionId: msg.sessionId,
-					channel: msg.channel,
-					content: "Access granted! You can now chat with me.",
-					metadata: msg.metadata,
-				});
+			const ac = this.accessController;
+			if (!ac?.isUserApproved(msg.user.id, msg.channel)) {
+				// Check if this message IS a pairing code (verify → grant).
+				const code = msg.content.trim();
+				if (
+					ac &&
+					/^\d{6}$/.test(code) &&
+					ac.verifyPairingCode(msg.user.id, code)
+				) {
+					await this.bus.emit("security:user-approved", {
+						userId: msg.user.id,
+					});
+					await this.bus.emit("message:outbound", {
+						sessionId: msg.sessionId,
+						channel: msg.channel,
+						content: "Access granted! You can now chat with me.",
+						metadata: msg.metadata,
+					});
+					return;
+				}
+
+				if (ac) {
+					// Generate or retrieve a pairing code and prompt for approval.
+					const pairingCode = ac.generatePairingCode(msg.user.id);
+					// Log the exact id we gated — pairs with the Slack plugin's
+					// raw-inbound log to reveal when a relay presents an unexpected id.
+					this.logger.warn("Access denied — pairing code issued", {
+						channel: msg.channel,
+						user: msg.user.id,
+					});
+					await this.bus.emit("message:outbound", {
+						sessionId: msg.sessionId,
+						channel: msg.channel,
+						content: unrecognizedUserMessage(msg.user.id, pairingCode),
+						metadata: msg.metadata,
+					});
+				} else {
+					// Defensive: no controller (should not happen — always constructed).
+					// Fail closed with a generic denial rather than answering.
+					this.logger.warn("Access denied — no access controller", {
+						channel: msg.channel,
+						user: msg.user.id,
+					});
+					await this.bus.emit("message:outbound", {
+						sessionId: msg.sessionId,
+						channel: msg.channel,
+						content: gateDenialMessage("access_denied"),
+						metadata: msg.metadata,
+					});
+				}
 				return;
 			}
-
-			// Generate or retrieve pairing code
-			const pairingCode = this.accessController.generatePairingCode(
-				msg.user.id,
-			);
-			// Log the exact id we gated — pairs with the Slack plugin's raw-inbound
-			// log to reveal when a relay presents an unexpected sender id.
-			this.logger.warn("Access denied — pairing code issued", {
-				channel: msg.channel,
-				user: msg.user.id,
-			});
-			await this.bus.emit("message:outbound", {
-				sessionId: msg.sessionId,
-				channel: msg.channel,
-				content: unrecognizedUserMessage(msg.user.id, pairingCode),
-				metadata: msg.metadata,
-			});
-			return;
 		}
 
 		const session = getOrCreateSession(
@@ -1966,6 +2007,7 @@ export class Kernel {
 			isInternal,
 			rateLimiter: this.rateLimiter,
 			accessController: this.accessController,
+			allowUnapprovedExternal: this.config.security.allowUnapprovedExternal,
 		});
 		if (!gate.ok) {
 			return gate.reason === "rate_limited"

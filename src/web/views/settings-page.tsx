@@ -803,10 +803,13 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 										value={config.security.enforcePermissions}
 									/>
 								</Row>
-								<Row label="Require approval" desc="Gate irreversible actions.">
+								<Row
+									label="⚠ Allow unapproved external users"
+									desc="DANGER — when ON, unrecognized Slack users command the agent with no approval. Leave OFF to require approval."
+								>
 									<Bool
-										name="security.requireApproval"
-										value={config.security.requireApproval}
+										name="security.allowUnapprovedExternal"
+										value={config.security.allowUnapprovedExternal}
 									/>
 								</Row>
 								<Row label="Rate limiting">

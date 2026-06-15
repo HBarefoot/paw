@@ -106,7 +106,14 @@ export const configSchema = z.object({
 	}),
 	security: z.object({
 		enforcePermissions: z.boolean().default(true),
+		// DEPRECATED: no longer gates anything. External channels (e.g. Slack) are
+		// always access-controlled now; openness is governed solely by the explicit
+		// default-OFF `allowUnapprovedExternal` below. Kept for config back-compat.
 		requireApproval: z.boolean().default(false),
+		// DANGER, default OFF. When true, unrecognized users on EXTERNAL channels
+		// (Slack) can command the agent with no approval. This is the ONLY way to
+		// run open — the absence of config fails CLOSED, never open.
+		allowUnapprovedExternal: z.boolean().default(false),
 		pairingCodeTtlMinutes: z.number().int().positive().default(10),
 		rateLimiting: z.object({
 			enabled: z.boolean().default(true),

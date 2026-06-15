@@ -64,6 +64,7 @@ export const defaults: PawConfig = {
 	security: {
 		enforcePermissions: true,
 		requireApproval: false,
+		allowUnapprovedExternal: false,
 		pairingCodeTtlMinutes: 10,
 		rateLimiting: {
 			enabled: true,

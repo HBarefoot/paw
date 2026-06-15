@@ -73,7 +73,11 @@ export interface PawConfig {
 	};
 	security: {
 		enforcePermissions: boolean;
+		/** DEPRECATED — no longer gates access; see `allowUnapprovedExternal`. */
 		requireApproval: boolean;
+		/** DANGER, default false: allow unrecognized EXTERNAL-channel users (Slack)
+		 *  to command the agent with no approval. Absence fails CLOSED. */
+		allowUnapprovedExternal: boolean;
 		pairingCodeTtlMinutes: number;
 		rateLimiting: {
 			enabled: boolean;

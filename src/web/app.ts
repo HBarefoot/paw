@@ -1183,6 +1183,8 @@ export function createWebApp(
 				persistedIds: ac ? recognizedIds(liveConfig().security) : [],
 				// Owner ids render an "Owner" badge and drive the Make-owner toggle.
 				ownerIds: ac ? (liveConfig().security?.ownerUserIds ?? []) : [],
+				// OFF banner: access control isn't enforcing on external channels.
+				open: liveConfig().security?.allowUnapprovedExternal === true,
 			}),
 		);
 	});
