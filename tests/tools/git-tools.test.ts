@@ -197,6 +197,21 @@ describe("git/gh tool handlers", () => {
 		expect(String(res.content)).toContain("***");
 	});
 
+	test("a minted token reaches Bun.spawn — the mint no longer short-circuits", async () => {
+		// fix/git-gh-installation-token: when getInstallationToken resolves (App token
+		// minted), the handler must SPAWN gh, not error before it. (The real mint is
+		// covered in client.test.ts; here the token is stubbed to assert the path.)
+		mockSpawn("ok");
+		const { deps } = fakeDeps();
+		const { gh } = tools(deps);
+		const res = await gh.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["pr", "create", "--fill", "--base", "main"],
+		});
+		expect(spawnCalls.length).toBeGreaterThan(0);
+		expect(res.is_error).toBeFalsy();
+	});
+
 	test("gh always pins the repo with -R owner/name", async () => {
 		mockSpawn("ok");
 		const { deps } = fakeDeps();

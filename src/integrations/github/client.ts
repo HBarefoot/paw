@@ -128,17 +128,23 @@ export class GitHubClient {
 	 */
 	async getInstallationToken(): Promise<string> {
 		try {
-			const auth = (await this.app.octokit.auth({
-				type: "installation",
-				installationId: this.installationId,
-			})) as { token?: string };
-			if (auth?.token) return auth.token;
+			// Mint from the SAME installation-Octokit the API tools use (getInstallationOctokit),
+			// not a second app.octokit.auth({type:"installation"}) call — that returned an
+			// undefined `.token` in the deployed Octokit and made git/gh fail on repos the
+			// github_* API tools succeed on. An installation-authenticated Octokit's auth()
+			// returns the current (auto-rotating) installation token. Invariant: if the API
+			// tools can act on a repo, git/gh can too — one auth path, no drift.
+			const o = await this.octokit();
+			const a = (await o.auth()) as { token?: string };
+			if (a?.token) return a.token;
 		} catch (err) {
 			if (!this.config.token) throw err;
 		}
 		if (this.config.token) return this.config.token;
 		throw new GitHubError(
-			"No git token available (App installation auth returned no token and no github.token PAT is set).",
+			"Could not mint a GitHub App installation token. Check the App config " +
+				"(appId / installationId / appPrivateKey in the vault) and that the repo is " +
+				"allowlisted. git/gh authenticate via the App installation token — NOT a GH_TOKEN env var.",
 		);
 	}
 

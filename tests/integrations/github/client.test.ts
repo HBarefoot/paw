@@ -12,6 +12,10 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 // Mutable rest tree the mocked App hands back; reset to a happy default per test.
 let octokitRest: Record<string, unknown>;
+// The installation token the mocked installation-Octokit's auth() returns. This is
+// the SAME getInstallationOctokit stub the API-tool tests use — getInstallationToken
+// now reads the token off it (not the divergent app.octokit.auth path). Set per test.
+let installAuthToken: string | undefined;
 
 mock.module("octokit", () => ({
 	App: class {
@@ -25,7 +29,14 @@ mock.module("octokit", () => ({
 		// biome-ignore lint/complexity/noUselessConstructor: mirror real signature
 		constructor(_opts: unknown) {}
 		async getInstallationOctokit() {
-			return { rest: octokitRest };
+			// An installation-authenticated Octokit exposes auth() → the current
+			// (auto-rotating) installation token. Note: app.octokit (above) has NO
+			// auth(), which is exactly why the old app.octokit.auth({type:"installation"})
+			// path returned undefined and broke git/gh.
+			return {
+				rest: octokitRest,
+				auth: async () => ({ token: installAuthToken }),
+			};
 		}
 	},
 	Octokit: Object.assign(class {}, { defaults: () => class {} }),
@@ -101,7 +112,7 @@ const fail403: AnyFn = async () => {
 	throw e;
 };
 
-function makeClient(repoAllowlist: string[] = ["owner/repo"]) {
+function makeClient(repoAllowlist: string[] = ["owner/repo"], token?: string) {
 	return new GitHubClient({
 		enabled: true,
 		appId: "1",
@@ -110,11 +121,34 @@ function makeClient(repoAllowlist: string[] = ["owner/repo"]) {
 		webhookSecret: "",
 		baseUrl: "https://api.github.com",
 		repoAllowlist,
+		token,
 	});
 }
 
 beforeEach(() => {
 	octokitRest = happyRest();
+	installAuthToken = "ghs_test_installtoken";
+});
+
+describe("getInstallationToken mints via the same installation-Octokit as the API tools", () => {
+	// Regression (fix/git-gh-installation-token): git/gh failed on repos the github_*
+	// API tools succeed on because getInstallationToken used a DIVERGENT auth call
+	// (app.octokit.auth({type:"installation"})) whose .token came back undefined. It
+	// now reuses this.octokit() (getInstallationOctokit) + auth(). Pre-change this
+	// test throws — the mocked app.octokit has no auth() — so it FAILS on old code.
+	test("returns the installation token from the API-tool auth path (no throw)", async () => {
+		const token = await makeClient().getInstallationToken();
+		expect(token).toBe("ghs_test_installtoken");
+	});
+
+	test("falls back to the github.token PAT when the App path yields no token", async () => {
+		installAuthToken = undefined; // App auth available but returns no token
+		const token = await makeClient(
+			["owner/repo"],
+			"ghp_pat_fallback",
+		).getInstallationToken();
+		expect(token).toBe("ghp_pat_fallback");
+	});
 });
 
 describe("GitHub 403 scope errors are self-explanatory", () => {

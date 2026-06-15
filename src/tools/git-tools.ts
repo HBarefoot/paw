@@ -142,6 +142,10 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 	const cloneDirFor = (owner: string, name: string): string =>
 		join(gitRoot, owner, name);
 
+	// Build a FRESH child env per call from the just-minted App installation token.
+	// A process-env GH_TOKEN is NEVER consulted — the GH_TOKEN/GITHUB_TOKEN set here
+	// come from `token` (minted by client.getInstallationToken()), so setting a
+	// GH_TOKEN on the host does nothing. Auth is the App installation token, period.
 	function buildEnv(token: string): {
 		env: Record<string, string>;
 		b64: string;
@@ -266,7 +270,7 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 				token = await deps.client.getInstallationToken();
 			} catch (err) {
 				return {
-					content: `Error: could not obtain a git token (${err instanceof Error ? err.message : String(err)}).`,
+					content: `Error: could not mint the GitHub App installation token (${err instanceof Error ? err.message : String(err)}). Check the App config (appId / installationId / appPrivateKey in the vault) and that "${r.repo}" is allowlisted. git/gh authenticate via the App token — do NOT set a GH_TOKEN env var.`,
 					is_error: true,
 				};
 			}
@@ -372,7 +376,7 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 				token = await deps.client.getInstallationToken();
 			} catch (err) {
 				return {
-					content: `Error: could not obtain a git token (${err instanceof Error ? err.message : String(err)}).`,
+					content: `Error: could not mint the GitHub App installation token (${err instanceof Error ? err.message : String(err)}). Check the App config (appId / installationId / appPrivateKey in the vault) and that "${r.repo}" is allowlisted. git/gh authenticate via the App token — do NOT set a GH_TOKEN env var.`,
 					is_error: true,
 				};
 			}
