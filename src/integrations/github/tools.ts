@@ -8,6 +8,14 @@ export interface GitHubToolDeps {
 	audit?: (action: string, details: Record<string, unknown>) => void;
 	/** Approval queue for gated (irreversible) actions. */
 	approvals?: GitHubApprovals;
+	/**
+	 * Optional publish-time transform applied to each UTF-8 file's content right
+	 * before it is committed (e.g. the kernel wires this to inject the PostHog
+	 * analytics snippet into published HTML when posthog.enabled). Keeps the
+	 * GitHub client/tools agnostic of any specific integration. Receives the
+	 * file path + content, returns the (possibly unchanged) content.
+	 */
+	htmlPublishTransform?: (path: string, content: string) => string;
 }
 
 /** Best-effort requester id from the injected session, for the audit trail. */
@@ -287,7 +295,17 @@ export function createGitHubTools(
 		handler: async (input): Promise<ToolResult> => {
 			const repo = input.repo as string;
 			const branch = input.branch as string;
-			const files = (input.files as CommitFileInput[]) ?? [];
+			let files = (input.files as CommitFileInput[]) ?? [];
+			// Publish-time transform (e.g. inject the PostHog snippet into HTML).
+			// UTF-8 files only — never touch base64/binary content.
+			const transform = deps.htmlPublishTransform;
+			if (transform) {
+				files = files.map((f) =>
+					(f.encoding ?? "utf-8") === "utf-8"
+						? { ...f, content: transform(f.path, f.content) }
+						: f,
+				);
+			}
 			try {
 				const res = await audited(
 					"github.commit",
