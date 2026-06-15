@@ -1181,6 +1181,8 @@ export function createWebApp(
 				// object (shallow override merge), so allowedUsers/ownerUserIds may be
 				// undefined — spreading them directly previously 500'd this page.
 				persistedIds: ac ? recognizedIds(liveConfig().security) : [],
+				// Owner ids render an "Owner" badge and drive the Make-owner toggle.
+				ownerIds: ac ? (liveConfig().security?.ownerUserIds ?? []) : [],
 			}),
 		);
 	});
@@ -1230,9 +1232,41 @@ export function createWebApp(
 		const current = liveConfig().security.allowedUsers ?? [];
 		const next = current.includes(userId) ? current : [...current, userId];
 		replaceConfigOverride("security.allowedUsers", next);
+		// Apply to the running AccessController immediately — config alone only
+		// took effect after a restart (lists are seeded once at boot).
+		ac.setAccessLists({ allowedUsers: next });
 		// Actor is null here (single-admin deployment) to avoid the file's known
 		// c.get("session") TS2769 overload class; the action + userId are audited.
 		authManager.audit.log("access.persist", null, { userId }, getClientIp(c));
+		return c.json({ ok: true });
+	});
+
+	// Mark/unmark a Slack id as an OWNER (security.ownerUserIds). Owners are
+	// recognized channel-agnostically with no approved_users row and no pairing
+	// handshake — the durable, DB-independent "always me" path. Live + persisted.
+	app.post("/api/access/owner", async (c) => {
+		const ac = kernel.access;
+		if (!ac) return c.json({ error: "Access control is not active" }, 400);
+		const body = await c.req
+			.json<{ userId?: string; owner?: boolean }>()
+			.catch(() => ({}) as { userId?: string; owner?: boolean });
+		const userId = (body.userId ?? "").trim();
+		if (!userId) return c.json({ error: "userId is required" }, 400);
+		const makeOwner = body.owner !== false; // default true
+		const current = liveConfig().security.ownerUserIds ?? [];
+		const next = makeOwner
+			? current.includes(userId)
+				? current
+				: [...current, userId]
+			: current.filter((id) => id !== userId);
+		replaceConfigOverride("security.ownerUserIds", next);
+		ac.setAccessLists({ ownerUserIds: next });
+		authManager.audit.log(
+			"access.owner",
+			null,
+			{ userId, owner: makeOwner },
+			getClientIp(c),
+		);
 		return c.json({ ok: true });
 	});
 

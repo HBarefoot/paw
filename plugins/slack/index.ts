@@ -12,6 +12,7 @@ import {
 	parseSlackRef,
 	resolvedText,
 } from "./approvals.js";
+import { evaluateSlackMessage } from "./filter.js";
 import { createSlackTools } from "./tools.js";
 
 interface SavedApprovalMsg {
@@ -24,6 +25,9 @@ export default class SlackPlugin implements ChannelPlugin {
 	readonly name = "slack";
 	private app: App | null = null;
 	private ctx: PluginContext | null = null;
+	/** This bot's own Slack user id, resolved at start() via auth.test. Used to
+	 *  detect @mentions in shared channels and to ignore self-authored posts. */
+	private botUserId: string | null = null;
 	private unsubOutbound: (() => void) | null = null;
 	private unsubNotify: (() => void) | null = null;
 	private unsubApprovalPending: (() => void) | null = null;
@@ -44,11 +48,28 @@ export default class SlackPlugin implements ChannelPlugin {
 		ctx.registerTools(createSlackTools(this.app));
 
 		// Listen for all messages
-		this.app.message(async ({ message, say }) => {
+		this.app.message(async ({ message }) => {
 			// Skip bot messages and message subtypes (edits, deletes, etc.)
 			if (message.subtype) return;
 			if (!("text" in message) || !message.text) return;
 			if ("bot_id" in message && message.bot_id) return;
+			// Never react to our own posts (belt-and-suspenders against loops in
+			// channels shared with other agents).
+			if ("user" in message && message.user === this.botUserId) return;
+
+			// In shared/multi-agent channels only respond when explicitly
+			// @mentioned; DMs (channel_type "im") are handled unchanged. The
+			// returned text has the mention token stripped.
+			const channelType =
+				"channel_type" in message
+					? (message.channel_type as string | undefined)
+					: undefined;
+			const decision = evaluateSlackMessage({
+				channelType,
+				text: message.text,
+				botUserId: this.botUserId,
+			});
+			if (!decision.handle) return;
 
 			const threadTs =
 				("thread_ts" in message ? message.thread_ts : message.ts) ?? message.ts;
@@ -57,7 +78,7 @@ export default class SlackPlugin implements ChannelPlugin {
 				id: randomUUID(),
 				sessionId: `slack-${message.channel}-${threadTs}`,
 				channel: "slack",
-				content: message.text,
+				content: decision.text,
 				user: { id: message.user ?? "unknown" },
 				timestamp: message.ts,
 				metadata: {
@@ -223,7 +244,20 @@ export default class SlackPlugin implements ChannelPlugin {
 	async start(): Promise<void> {
 		if (!this.app) throw new Error("SlackPlugin not registered");
 		await this.app.start();
-		this.ctx?.logger.info("Slack Socket Mode connected");
+		// Resolve our own user id so we can detect @mentions in shared channels
+		// and ignore self-authored posts. Non-fatal: on failure botUserId stays
+		// null and evaluateSlackMessage fails open (handles the message).
+		try {
+			const auth = await this.app.client.auth.test();
+			this.botUserId = (auth.user_id as string | undefined) ?? null;
+			this.ctx?.logger.info("Slack Socket Mode connected", {
+				botUserId: this.botUserId,
+			});
+		} catch (err) {
+			this.ctx?.logger.warn("Slack auth.test failed; @mention gating off", {
+				error: String(err),
+			});
+		}
 	}
 
 	async stop(): Promise<void> {

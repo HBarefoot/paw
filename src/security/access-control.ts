@@ -43,6 +43,23 @@ export class AccessController {
 		this.pairingTtlMinutes = opts.pairingCodeTtlMinutes ?? 10;
 	}
 
+	/**
+	 * Replace the in-memory access lists at runtime. The constructor seeds these
+	 * from config once at boot; without this, persisting an allowlist/owner id
+	 * via the web UI only took effect after a restart. Only the provided lists
+	 * are replaced. Callers (e.g. /api/access/persist, /api/access/owner) pair
+	 * this with a config write so the change is both live and durable.
+	 */
+	setAccessLists(opts: {
+		allowedUsers?: string[];
+		blockedUsers?: string[];
+		ownerUserIds?: string[];
+	}): void {
+		if (opts.allowedUsers) this.allowedUsers = [...opts.allowedUsers];
+		if (opts.blockedUsers) this.blockedUsers = [...opts.blockedUsers];
+		if (opts.ownerUserIds) this.ownerUserIds = [...opts.ownerUserIds];
+	}
+
 	isUserApproved(userId: string, channel: string): boolean {
 		// Blocked users are always rejected
 		if (this.blockedUsers.includes(userId)) return false;
@@ -174,6 +191,10 @@ export class AccessController {
 			"INSERT OR REPLACE INTO approved_users (user_id, channel, approved_by) VALUES (?, ?, ?)",
 			[userId, channel, approvedBy],
 		);
+		// Clear any outstanding pairing code so an approved user no longer lingers
+		// in the pending list (previously only verifyPairingCode deleted it, so a
+		// page-/code-approved user showed forever as an "expired pending" row).
+		this.db.run("DELETE FROM pairing_codes WHERE user_id = ?", [userId]);
 		this.logger.info("User approved", { userId, approvedBy });
 	}
 
