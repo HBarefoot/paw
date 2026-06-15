@@ -813,103 +813,103 @@
     padding: 10px 14px;
   }
 
-  /* Markdown rendering inside assistant messages */
-  .msg.assistant .md-content h1,
-  .msg.assistant .md-content h2,
-  .msg.assistant .md-content h3 {
+  /* Markdown rendering inside chat messages (user + assistant) */
+  .msg .md-content h1,
+  .msg .md-content h2,
+  .msg .md-content h3 {
     margin-top: 16px; margin-bottom: 8px; font-weight: 600; line-height: 1.3;
   }
-  .msg.assistant .md-content h1 { font-size: 1.25em; }
-  .msg.assistant .md-content h2 { font-size: 1.15em; }
-  .msg.assistant .md-content h3 { font-size: 1.05em; }
-  .msg.assistant .md-content h1:first-child,
-  .msg.assistant .md-content h2:first-child,
-  .msg.assistant .md-content h3:first-child { margin-top: 0; }
-  .msg.assistant .md-content p { margin: 8px 0; }
-  .msg.assistant .md-content p:first-child { margin-top: 0; }
-  .msg.assistant .md-content p:last-child { margin-bottom: 0; }
-  .msg.assistant .md-content ul, .msg.assistant .md-content ol {
+  .msg .md-content h1 { font-size: 1.25em; }
+  .msg .md-content h2 { font-size: 1.15em; }
+  .msg .md-content h3 { font-size: 1.05em; }
+  .msg .md-content h1:first-child,
+  .msg .md-content h2:first-child,
+  .msg .md-content h3:first-child { margin-top: 0; }
+  .msg .md-content p { margin: 8px 0; }
+  .msg .md-content p:first-child { margin-top: 0; }
+  .msg .md-content p:last-child { margin-bottom: 0; }
+  .msg .md-content ul, .msg .md-content ol {
     margin: 8px 0; padding-left: 24px;
   }
-  .msg.assistant .md-content li { margin: 4px 0; }
-  .msg.assistant .md-content li > ul, .msg.assistant .md-content li > ol { margin: 2px 0; }
-  .msg.assistant .md-content code {
+  .msg .md-content li { margin: 4px 0; }
+  .msg .md-content li > ul, .msg .md-content li > ol { margin: 2px 0; }
+  .msg .md-content code {
     font-family: var(--font-mono); font-size: 0.9em;
     background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;
   }
-  .msg.assistant .md-content pre {
+  .msg .md-content pre {
     margin: 0; padding: 12px 14px;
     background: var(--bg-primary);
     overflow-x: auto;
   }
-  .msg.assistant .md-content pre code {
+  .msg .md-content pre code {
     background: none; padding: 0; font-size: 13px; line-height: 1.5;
   }
-  .msg.assistant .md-content .code-block {
+  .msg .md-content .code-block {
     margin: 10px 0; border-radius: var(--radius-md);
     border: 1px solid var(--border-primary); overflow: hidden;
     background: var(--bg-primary);
   }
-  .msg.assistant .md-content .code-block pre {
+  .msg .md-content .code-block pre {
     border: none; border-radius: 0;
   }
   /* Collapse large code blocks: cap height + fade the cut-off bottom. */
-  .msg.assistant .md-content .code-block.collapsed pre {
+  .msg .md-content .code-block.collapsed pre {
     max-height: 240px; overflow: hidden;
     -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent);
     mask-image: linear-gradient(to bottom, #000 80%, transparent);
   }
-  .msg.assistant .md-content .code-expand {
+  .msg .md-content .code-expand {
     background: transparent; border: none; cursor: pointer;
     color: var(--accent-bright); font-size: 11px; padding: 2px 6px;
     margin-left: 8px; border-radius: 4px;
     font-family: var(--font-mono); transition: background 0.15s;
   }
-  .msg.assistant .md-content .code-expand:hover { background: var(--accent-subtle); }
-  .msg.assistant .md-content .code-streaming {
+  .msg .md-content .code-expand:hover { background: var(--accent-subtle); }
+  .msg .md-content .code-streaming {
     margin-left: 8px; font-family: var(--font-mono); font-size: 11px;
     color: var(--accent-bright); opacity: .85;
   }
   /* In-progress code while streaming is capped shorter so it never dominates. */
-  .msg.assistant .md-content .code-block.streaming pre { max-height: 200px; }
-  .msg.assistant .md-content .code-header {
+  .msg .md-content .code-block.streaming pre { max-height: 200px; }
+  .msg .md-content .code-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 4px 10px; font-size: 11px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-primary);
     color: var(--text-tertiary);
   }
-  .msg.assistant .md-content .code-lang {
+  .msg .md-content .code-lang {
     font-family: var(--font-mono); text-transform: lowercase;
     letter-spacing: 0.02em;
   }
-  .msg.assistant .md-content .code-copy {
+  .msg .md-content .code-copy {
     background: transparent; border: 1px solid transparent;
     color: var(--text-tertiary); cursor: pointer;
     font-size: 11px; padding: 2px 8px; border-radius: 4px;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
-  .msg.assistant .md-content .code-copy:hover {
+  .msg .md-content .code-copy:hover {
     background: var(--bg-tertiary, var(--bg-primary));
     color: var(--text-primary);
     border-color: var(--border-primary);
   }
-  .msg.assistant .md-content blockquote {
+  .msg .md-content blockquote {
     margin: 8px 0; padding: 4px 12px;
     border-left: 3px solid var(--accent); color: var(--text-secondary);
   }
-  .msg.assistant .md-content hr {
+  .msg .md-content hr {
     margin: 12px 0; border: none; border-top: 1px solid var(--border-primary);
   }
-  .msg.assistant .md-content table {
+  .msg .md-content table {
     margin: 8px 0; border-collapse: collapse; width: 100%;
   }
-  .msg.assistant .md-content th, .msg.assistant .md-content td {
+  .msg .md-content th, .msg .md-content td {
     padding: 6px 10px; border: 1px solid var(--border-primary); text-align: left; font-size: 13px;
   }
-  .msg.assistant .md-content th { background: var(--bg-secondary); font-weight: 600; }
-  .msg.assistant .md-content strong { font-weight: 600; }
-  .msg.assistant .md-content a { color: var(--accent); text-decoration: underline; }
+  .msg .md-content th { background: var(--bg-secondary); font-weight: 600; }
+  .msg .md-content strong { font-weight: 600; }
+  .msg .md-content a { color: var(--accent); text-decoration: underline; }
 
   .chat-welcome {
     display: flex;
