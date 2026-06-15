@@ -108,6 +108,16 @@ body {
 .fit {
 	transform-origin: center center;
 }
+/* ── Fix B (fix/companion-lightbg-and-zoom): smooth the DISCRETE fit-scale
+ * rescale that happens when the skill/sub-agent COUNT changes. scaleToFit()
+ * sets THIS element's transform; the per-frame breathing/pop/tremor transform
+ * is on .cmp-sphere (a descendant) and MUST stay un-transitioned or it would
+ * fight the rAF loop. Gated by .fit-anim (added one frame after the first fit
+ * in shell.js) so the initial mount snaps instead of animating a zoom-in.
+ * prefers-reduced-motion snaps via the global reset at the bottom of this file. */
+.fit.fit-anim {
+	transition: transform 240ms ease;
+}
 
 .home {
 	position: relative;
