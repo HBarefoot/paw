@@ -19,6 +19,9 @@ export interface AccessPageProps {
 	/** Ids in security.ownerUserIds — always recognized, channel-agnostic, no DB
 	 *  row needed. Render an "Owner" badge; others get a "Make owner" button. */
 	ownerIds: string[];
+	/** True when security.allowUnapprovedExternal is on — access control is NOT
+	 *  enforcing on external channels. Renders a prominent OFF banner. */
+	open: boolean;
 }
 
 /** Ids recognized purely from config — `security.allowedUsers ∪ ownerUserIds`,
@@ -51,12 +54,23 @@ function expiryLabel(expiresAt: string): { text: string; expired: boolean } {
 }
 
 export const AccessPage: FC<AccessPageProps> = (props) => {
-	const { enabled, pending, approved, persistedIds, ownerIds } = props;
+	const { enabled, pending, approved, persistedIds, ownerIds, open } = props;
 	const persisted = new Set(persistedIds);
 	const owners = new Set(ownerIds);
 
 	return (
 		<Layout title="Access" currentPath="/access">
+			{open && (
+				<div
+					class="alert alert-error mb-md"
+					style="border-width:2px;font-weight:600"
+				>
+					⚠ Access control is OFF — anyone can talk to the agent. Unrecognized
+					external (Slack) users are answered with no approval. Remove{" "}
+					<code>security.allowUnapprovedExternal</code> (or set it false) to
+					require approval.
+				</div>
+			)}
 			<div class="card mb-md">
 				<h3>Access</h3>
 				<p class="text-sm text-muted">

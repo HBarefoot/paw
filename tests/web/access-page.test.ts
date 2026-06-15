@@ -15,6 +15,7 @@ function render(overrides: Partial<AccessPageProps> = {}): string {
 		approved: [],
 		persistedIds: [],
 		ownerIds: [],
+		open: false,
 	};
 	return String(AccessPage({ ...base, ...overrides }));
 }
@@ -81,6 +82,16 @@ describe("access page", () => {
 		const html = render({ approved: [approvedUser], ownerIds: ["U07XYZ"] });
 		expect(html).toContain("★ owner");
 		expect(html).not.toContain("acOwner(this.dataset.id, true)");
+	});
+
+	test("renders a prominent OFF banner when access control is open", () => {
+		const html = render({ open: true });
+		expect(html).toContain("Access control is OFF");
+		expect(html).toContain("security.allowUnapprovedExternal");
+	});
+
+	test("no OFF banner when access control is enforcing", () => {
+		expect(render({ open: false })).not.toContain("Access control is OFF");
 	});
 
 	test("the note no longer tells the operator to hand-edit config to survive a redeploy", () => {

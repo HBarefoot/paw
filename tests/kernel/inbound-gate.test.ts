@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+	accessControlOffWarning,
 	evaluateInboundGate,
 	gateDenialMessage,
 	isAccessExempt,
+	isExternalTurnDenied,
 } from "../../src/kernel/inbound-gate.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { AccessController } from "../../src/security/access-control.js";
@@ -142,6 +144,99 @@ describe("evaluateInboundGate", () => {
 		});
 		expect(result).toMatchObject({ ok: false, reason: "rate_limited" });
 		tight.destroy();
+	});
+});
+
+// SECURITY REGRESSION: access control must FAIL CLOSED. With no controller
+// (the old default when requireApproval was false, or config-loss on redeploy)
+// an external Slack user used to get answered with no approval. Now denied.
+describe("fail-closed access control", () => {
+	const slack = msg({ channel: "slack", user: { id: "U123" } });
+
+	test("external Slack turn with NO controller is access-denied (core regression)", () => {
+		const result = evaluateInboundGate(slack, {
+			isInternal: false,
+			rateLimiter: null,
+			accessController: null, // misconfigured / config lost
+		});
+		expect(result).toEqual({ ok: false, reason: "access_denied" });
+	});
+
+	test("authenticated web is exempt even with NO controller", () => {
+		expect(
+			evaluateInboundGate(msg({ authenticated: true }), {
+				isInternal: false,
+				rateLimiter: null,
+				accessController: null,
+			}),
+		).toEqual({ ok: true });
+	});
+
+	test("internal channels are exempt even with NO controller", () => {
+		for (const channel of ["cron", "heartbeat", "github", "api"]) {
+			expect(
+				evaluateInboundGate(msg({ channel, user: { id: "system" } }), {
+					isInternal: true,
+					rateLimiter: null,
+					accessController: null,
+				}),
+			).toEqual({ ok: true });
+		}
+	});
+
+	test("allowUnapprovedExternal:true opens external access (explicit opt-in)", () => {
+		expect(
+			evaluateInboundGate(slack, {
+				isInternal: false,
+				rateLimiter: null,
+				accessController: null,
+				allowUnapprovedExternal: true,
+			}),
+		).toEqual({ ok: true });
+	});
+
+	test("an owner (controller, no DB row) passes the external gate", () => {
+		const odb = new Database(":memory:");
+		odb.run(`CREATE TABLE IF NOT EXISTS approved_users (
+      user_id TEXT PRIMARY KEY, channel TEXT NOT NULL,
+      approved_at TEXT NOT NULL DEFAULT (datetime('now')), approved_by TEXT)`);
+		const owned = new AccessController(odb, createLogger("test"), {
+			ownerUserIds: ["U123"],
+		});
+		expect(
+			evaluateInboundGate(slack, {
+				isInternal: false,
+				rateLimiter: null,
+				accessController: owned,
+			}),
+		).toEqual({ ok: true });
+		odb.close();
+	});
+
+	// The pure predicate both gates share.
+	test("isExternalTurnDenied: denies external, allows exempt/opt-in", () => {
+		const noCtrl = { isInternal: false, accessController: null };
+		expect(isExternalTurnDenied(slack, noCtrl)).toBe(true);
+		expect(isExternalTurnDenied(msg({ authenticated: true }), noCtrl)).toBe(
+			false,
+		);
+		expect(
+			isExternalTurnDenied(slack, { ...noCtrl, allowUnapprovedExternal: true }),
+		).toBe(false);
+	});
+});
+
+describe("accessControlOffWarning", () => {
+	test("warns only when open AND an external channel is active", () => {
+		expect(
+			accessControlOffWarning({ open: true, externalChannelActive: true }),
+		).toContain("Access control is OFF");
+		expect(
+			accessControlOffWarning({ open: false, externalChannelActive: true }),
+		).toBeNull();
+		expect(
+			accessControlOffWarning({ open: true, externalChannelActive: false }),
+		).toBeNull();
 	});
 });
 

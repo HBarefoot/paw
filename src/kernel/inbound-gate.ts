@@ -17,6 +17,10 @@ export interface GateDeps {
 	isInternal: boolean;
 	rateLimiter?: RateLimiter | null;
 	accessController?: AccessController | null;
+	/** DANGER opt-in (default false): allow unrecognized external-channel users
+	 *  with no approval. The ONLY way to open external access — the absence of a
+	 *  controller (e.g. misconfig / config-loss) otherwise fails CLOSED. */
+	allowUnapprovedExternal?: boolean;
 }
 
 /**
@@ -34,6 +38,46 @@ export function isAccessExempt(
 }
 
 /**
+ * FAIL-CLOSED access decision for a single inbound turn, shared by the streaming
+ * (`evaluateInboundGate`) and non-streaming (`handleInbound`) paths so they can
+ * never drift. A non-exempt (external) turn is DENIED when there is no
+ * controller OR the user isn't approved. Critically, a **missing** controller
+ * (the old default when `requireApproval` was false, or config-loss on redeploy)
+ * denies — it never silently opens the agent to everyone. The only way to allow
+ * unapproved external users is the explicit, default-off `allowUnapprovedExternal`.
+ */
+export function isExternalTurnDenied(
+	msg: InboundMessage,
+	deps: Pick<
+		GateDeps,
+		"isInternal" | "accessController" | "allowUnapprovedExternal"
+	>,
+): boolean {
+	const { isInternal, accessController, allowUnapprovedExternal } = deps;
+	if (isAccessExempt(msg, isInternal)) return false; // internal / authed web
+	if (allowUnapprovedExternal) return false; // explicit opt-in to open
+	return (
+		!accessController ||
+		!accessController.isUserApproved(msg.user.id, msg.channel)
+	);
+}
+
+/**
+ * Boot-time warning string when access control is NOT enforcing on a live
+ * external channel — i.e. `allowUnapprovedExternal` is on and Slack (or another
+ * external plugin) is active. Returns null when enforcing. Pure for testability.
+ */
+export function accessControlOffWarning(opts: {
+	open: boolean;
+	externalChannelActive: boolean;
+}): string | null {
+	if (opts.open && opts.externalChannelActive) {
+		return "⚠ Access control is OFF (security.allowUnapprovedExternal=true) and an external channel (Slack) is enabled — the agent will respond to ANY user with no approval.";
+	}
+	return null;
+}
+
+/**
  * Pure inbound-turn gate: rate limiting first, then access control. Returns a
  * discriminated result so callers can yield/emit a distinct message per gate.
  * Note `rateLimiter.check()` consumes a token, so call this exactly once per
@@ -43,7 +87,8 @@ export function evaluateInboundGate(
 	msg: InboundMessage,
 	deps: GateDeps,
 ): GateResult {
-	const { isInternal, rateLimiter, accessController } = deps;
+	const { isInternal, rateLimiter, accessController, allowUnapprovedExternal } =
+		deps;
 
 	// Rate limiting (skip for internal channels). Authenticated web sessions are
 	// still rate-limited — only the access gate exempts them.
@@ -58,12 +103,14 @@ export function evaluateInboundGate(
 		}
 	}
 
-	// Access control (pairing-code system). Skipped for internal channels and for
-	// authenticated web sessions.
+	// Access control — FAIL CLOSED for external turns (see isExternalTurnDenied).
+	// Internal channels and authenticated web sessions stay exempt.
 	if (
-		!isAccessExempt(msg, isInternal) &&
-		accessController &&
-		!accessController.isUserApproved(msg.user.id, msg.channel)
+		isExternalTurnDenied(msg, {
+			isInternal,
+			accessController,
+			allowUnapprovedExternal,
+		})
 	) {
 		return { ok: false, reason: "access_denied" };
 	}

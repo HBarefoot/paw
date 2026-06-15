@@ -61,6 +61,29 @@ describe("persist-to-config makes an approval survive a DB reset", () => {
 		).toBeNull();
 		db.close();
 	});
+
+	// The Persist write must not clobber other security.* keys it shares the
+	// subtree with — requireApproval / ownerUserIds / allowUnapprovedExternal must
+	// survive a later allowedUsers write (setAtPath sets only the leaf).
+	test("persisting allowedUsers preserves sibling security.* keys", () => {
+		writeFileSync(
+			join(dir, "config.json"),
+			JSON.stringify({
+				security: {
+					requireApproval: true,
+					ownerUserIds: ["U_OWNER"],
+					allowUnapprovedExternal: false,
+				},
+			}),
+			"utf-8",
+		);
+		replaceConfigOverride("security.allowedUsers", ["U_NEW"]);
+		const cfg = loadConfig();
+		expect(cfg.security.allowedUsers).toContain("U_NEW");
+		expect(cfg.security.ownerUserIds).toContain("U_OWNER");
+		expect(cfg.security.requireApproval).toBe(true);
+		expect(cfg.security.allowUnapprovedExternal).toBe(false);
+	});
 });
 
 // Infra-path guard: PAW_DB_PATH must WIN over a config.json store.dbPath so the
