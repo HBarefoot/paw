@@ -30,4 +30,11 @@ describe("posthog config block", () => {
 	test("timeout must be a positive int", () => {
 		expect(() => phSchema.parse({ timeout: -1 })).toThrow();
 	});
+
+	test("a numeric projectId is coerced to a string (the /settings form sends a number)", () => {
+		// POST /settings coerces all-digit strings to numbers; projectId must
+		// survive that round-trip as a string rather than failing the schema.
+		const ph = phSchema.parse({ projectId: 12345 });
+		expect(ph.projectId).toBe("12345");
+	});
 });

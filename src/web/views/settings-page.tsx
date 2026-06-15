@@ -469,6 +469,19 @@ function settingsScript(defaultAvatar: string): string {
           })
           .catch(function (e) { pawModal.alert("Error", String(e)); btn.disabled = false; btn.textContent = orig; });
       };
+      window.checkPosthog = function (btn) {
+        var out = document.getElementById("posthog-status");
+        btn.disabled = true; var orig = btn.textContent; btn.textContent = "Checking…";
+        fetch("/api/posthog/status")
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.configured) out.textContent = "Not initialized — enable it, set the project id, store the personal key in the vault, then restart.";
+            else if (d.ok) out.textContent = "Connected — the read API is reachable.";
+            else out.textContent = "Configured but the check failed: " + (d.error || "unknown error");
+            btn.disabled = false; btn.textContent = orig;
+          })
+          .catch(function (e) { out.textContent = "Error: " + String(e); btn.disabled = false; btn.textContent = orig; });
+      };
     })();
 
     // --- Brand CRUD ---
@@ -1167,6 +1180,78 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 								<a href="/vercel">Vercel page</a>. Changes take effect after a
 								restart.
 							</p>
+
+							<h4 class="bright" style="margin:18px 0 8px">
+								PostHog (analytics)
+							</h4>
+							<table style="width:100%">
+								<tbody>
+									<tr>
+										<td style="width:120px">Enabled</td>
+										<td>
+											<Bool
+												name="posthog.enabled"
+												value={!!config.posthog?.enabled}
+											/>
+										</td>
+									</tr>
+									<tr>
+										<td>Project API key</td>
+										<td>
+											<input
+												type="text"
+												name="posthog.projectApiKey"
+												value={config.posthog?.projectApiKey ?? ""}
+												class="w-full"
+												placeholder="phc_… (public — embedded in published pages)"
+											/>
+										</td>
+									</tr>
+									<tr>
+										<td>Project ID</td>
+										<td>
+											<input
+												type="text"
+												name="posthog.projectId"
+												value={config.posthog?.projectId ?? ""}
+												class="w-full"
+												placeholder="e.g. 12345 (from PostHog project settings)"
+											/>
+										</td>
+									</tr>
+									<tr>
+										<td>Host</td>
+										<td>
+											<input
+												type="text"
+												name="posthog.host"
+												value={
+													config.posthog?.host ?? "https://us.i.posthog.com"
+												}
+												class="w-full"
+												placeholder="https://us.i.posthog.com (or eu, or self-hosted)"
+											/>
+										</td>
+									</tr>
+								</tbody>
+							</table>
+							<p class="text-muted text-sm" style="margin-top:8px">
+								The <strong>personal</strong> API key (for the read tools) is
+								stored in the <a href="/vault">Vault</a> (slot{" "}
+								<code>posthog.personalApiKey</code>), never here — give it the{" "}
+								<em>Query Read</em> scope. The project API key above is public
+								and safe to embed. Changes take effect after a restart.
+							</p>
+							<div style="margin-top:8px">
+								<button
+									type="button"
+									class="btn-secondary"
+									onclick="checkPosthog(this)"
+								>
+									Check connection
+								</button>{" "}
+								<span id="posthog-status" class="text-muted text-sm" />
+							</div>
 						</Section>
 
 						<div class="settings-save" id="settings-save">
