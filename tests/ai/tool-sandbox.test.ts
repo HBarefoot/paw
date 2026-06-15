@@ -80,6 +80,64 @@ describe("ToolRegistry sandbox enforcement (H-NEW-4)", () => {
 		expect(subs.content).toBe("ok");
 	});
 
+	test("git/gh exec tools are reachable under the github plugin's github:write grant", async () => {
+		// REGRESSION (#159 fallout): the literal `git`/`gh` tools miss the `github_*`
+		// prefix in inferPermission and fell through to the bare plugin name "github"
+		// (not a granted permission) → "Permission denied: github cannot use gh", even
+		// though the plugin holds github:write. They now map to github:write, which the
+		// plugin already grants (the same grant that makes github_commit_files work).
+		const sandbox = new Sandbox(logger);
+		sandbox.registerManifest({
+			name: "github",
+			version: "0.1.0",
+			description: "",
+			permissions: ["github:read", "github:write", "github:admin"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		const mk = (name: string) => ({
+			name,
+			description: name,
+			input_schema: { type: "object" as const },
+			plugin: "github",
+			handler: async () => ({ content: "ok" }),
+		});
+		registry.register([mk("git"), mk("gh")]);
+
+		for (const name of ["git", "gh"]) {
+			const res = await registry.execute(name, {});
+			expect(res.is_error).toBeFalsy();
+			expect(res.content).toBe("ok");
+		}
+	});
+
+	test("git/gh require github:write specifically — a read-only grant is denied", async () => {
+		// Pin the tier: with only github:read granted, the write-tier git/gh tools are
+		// denied (checkPermission is exact-match — read does not satisfy write).
+		const sandbox = new Sandbox(logger);
+		sandbox.registerManifest({
+			name: "github",
+			version: "0.1.0",
+			description: "",
+			permissions: ["github:read"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		registry.register([
+			{
+				name: "gh",
+				description: "gh",
+				input_schema: { type: "object" },
+				plugin: "github",
+				handler: async () => ({ content: "ok" }),
+			},
+		]);
+
+		const res = await registry.execute("gh", {});
+		expect(res.is_error).toBe(true);
+		expect(res.content).toContain("Permission denied");
+	});
+
 	test("denies unknown plugin", async () => {
 		const sandbox = new Sandbox(logger);
 		const registry = new ToolRegistry();
