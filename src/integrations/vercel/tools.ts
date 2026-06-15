@@ -30,7 +30,8 @@ function originOf(input: Record<string, unknown>) {
 /**
  * Vercel tools.
  *
- * Reads (immediate): vercel_list_projects, vercel_deploy_status.
+ * Reads (immediate): vercel_list_projects, vercel_deploy_status,
+ *   vercel_latest_deployment, vercel_list_deployments.
  * Irreversible (gated → enqueued for human approval, do NOT execute):
  *   vercel_create_project, vercel_add_domain. On approve, the kernel-registered
  *   executor runs the matching VercelClient method (see kernel wiring).
@@ -88,6 +89,95 @@ export function createVercelTools(
 					input.deployment as string,
 				);
 				return { content: JSON.stringify(status) };
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const latestDeployment: ToolDefinition = {
+		name: "vercel_latest_deployment",
+		description:
+			"Find the latest deployment for a project so you can capture its live URL. Defaults to the PRODUCTION deployment. Returns { found, id, url, state, target }: feed `id` into vercel_deploy_status and poll until state is READY, then the live URL is https://<url>. If found is false there is no production deployment yet — a page committed to a feature branch only produces a PREVIEW; production requires the content on the repo's default branch.",
+		plugin: "vercel",
+		input_schema: {
+			type: "object",
+			properties: {
+				project: {
+					type: "string",
+					description: "Project id or name.",
+				},
+				target: {
+					type: "string",
+					description:
+						"Environment to look in. Defaults to 'production'. Omit/empty to get the latest of ANY environment (preview deploys have a null target, so they are not matched by 'production').",
+				},
+			},
+			required: ["project"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			try {
+				const target =
+					input.target === undefined ? "production" : (input.target as string);
+				const deployments = await client.listDeployments({
+					projectId: input.project as string,
+					target: target || undefined,
+					limit: 1,
+				});
+				const d = deployments[0];
+				if (!d) {
+					return {
+						content: JSON.stringify({
+							found: false,
+							target: target || null,
+							message:
+								"No matching deployment found. If you only committed to a feature branch, Vercel produced a PREVIEW deployment, not production — the production URL needs the content on the repo's default branch (seed main, or promote via a gated merge).",
+						}),
+					};
+				}
+				return {
+					content: JSON.stringify({
+						found: true,
+						id: d.id,
+						url: d.url,
+						state: d.readyState,
+						target: d.target,
+					}),
+				};
+			} catch (err) {
+				return errResult(err);
+			}
+		},
+	};
+
+	const listDeployments: ToolDefinition = {
+		name: "vercel_list_deployments",
+		description:
+			"List a project's recent deployments (newest first), each { id, url, readyState, target, createdAt }. Use vercel_latest_deployment for the common 'get the live production URL' case; use this to inspect multiple deploys or preview vs production.",
+		plugin: "vercel",
+		input_schema: {
+			type: "object",
+			properties: {
+				project: { type: "string", description: "Project id or name." },
+				target: {
+					type: "string",
+					description: "Optional environment filter, e.g. 'production'.",
+				},
+				limit: {
+					type: "number",
+					description: "Max deployments to return (default 10).",
+				},
+			},
+			required: ["project"],
+		},
+		handler: async (input): Promise<ToolResult> => {
+			try {
+				const deployments = await client.listDeployments({
+					projectId: input.project as string,
+					target: (input.target as string) || undefined,
+					limit: typeof input.limit === "number" ? input.limit : 10,
+				});
+				return { content: JSON.stringify({ deployments }) };
 			} catch (err) {
 				return errResult(err);
 			}
@@ -201,5 +291,12 @@ export function createVercelTools(
 		},
 	};
 
-	return [listProjects, deployStatus, createProject, addDomain];
+	return [
+		listProjects,
+		deployStatus,
+		latestDeployment,
+		listDeployments,
+		createProject,
+		addDomain,
+	];
 }

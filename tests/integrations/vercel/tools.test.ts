@@ -45,6 +45,15 @@ function freshDb(): Database {
 function fakeTarget(overrides: Partial<DeployTarget> = {}): DeployTarget {
 	return {
 		listProjects: async () => [{ id: "prj_1", name: "site", framework: null }],
+		listDeployments: async () => [
+			{
+				id: "dpl_1",
+				url: "site-abc.vercel.app",
+				readyState: "READY",
+				target: "production",
+				createdAt: 1,
+			},
+		],
 		getDeploymentStatus: async (id) => ({
 			id,
 			readyState: "READY",
@@ -73,15 +82,78 @@ beforeAll(() => {
 afterAll(() => restorePawEnv());
 
 describe("createVercelTools", () => {
-	test("exposes exactly the four PoC tools under plugin 'vercel'", () => {
+	test("exposes the expected tools under plugin 'vercel'", () => {
 		const tools = createVercelTools(fakeTarget());
 		expect(tools.map((t) => t.name).sort()).toEqual([
 			"vercel_add_domain",
 			"vercel_create_project",
 			"vercel_deploy_status",
+			"vercel_latest_deployment",
+			"vercel_list_deployments",
 			"vercel_list_projects",
 		]);
 		expect(tools.every((t) => t.plugin === "vercel")).toBe(true);
+	});
+
+	test("vercel_latest_deployment returns {id,url,state,target} and feeds deploy_status", async () => {
+		const tools = createVercelTools(fakeTarget());
+		const res = (await byName(tools, "vercel_latest_deployment").handler({
+			project: "prj_1",
+		})) as ToolResult;
+		expect(res.is_error).toBeFalsy();
+		const d = JSON.parse(res.content);
+		expect(d).toEqual({
+			found: true,
+			id: "dpl_1",
+			url: "site-abc.vercel.app",
+			state: "READY",
+			target: "production",
+		});
+		// the returned id is accepted by vercel_deploy_status (chain is closed)
+		const status = (await byName(tools, "vercel_deploy_status").handler({
+			deployment: d.id,
+		})) as ToolResult;
+		expect(JSON.parse(status.content).readyState).toBe("READY");
+	});
+
+	test("vercel_latest_deployment defaults to the production target", async () => {
+		let seenTarget: string | undefined = "UNSET";
+		const tools = createVercelTools(
+			fakeTarget({
+				listDeployments: async (opts) => {
+					seenTarget = opts.target;
+					return [];
+				},
+			}),
+		);
+		await byName(tools, "vercel_latest_deployment").handler({ project: "p" });
+		expect(seenTarget).toBe("production");
+	});
+
+	test("vercel_latest_deployment with no deployment yet → found:false + production note", async () => {
+		const tools = createVercelTools(
+			fakeTarget({ listDeployments: async () => [] }),
+		);
+		const res = (await byName(tools, "vercel_latest_deployment").handler({
+			project: "p",
+		})) as ToolResult;
+		const d = JSON.parse(res.content);
+		expect(d.found).toBe(false);
+		expect(d.message).toMatch(/preview|default branch/i);
+	});
+
+	test("vercel_list_deployments returns the mapped array", async () => {
+		const tools = createVercelTools(fakeTarget());
+		const res = (await byName(tools, "vercel_list_deployments").handler({
+			project: "prj_1",
+		})) as ToolResult;
+		expect(JSON.parse(res.content).deployments[0]).toEqual({
+			id: "dpl_1",
+			url: "site-abc.vercel.app",
+			readyState: "READY",
+			target: "production",
+			createdAt: 1,
+		});
 	});
 
 	test("read tools execute immediately and return non-error JSON", async () => {

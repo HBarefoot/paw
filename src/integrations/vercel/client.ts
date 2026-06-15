@@ -1,8 +1,11 @@
 import {
 	type CreateProjectOptions,
+	type DeployReadyState,
 	type DeployTarget,
 	type DeploymentStatus,
+	type DeploymentSummary,
 	type DomainResult,
+	type ListDeploymentsOptions,
 	type ProjectResult,
 	type ProjectSummary,
 	VERCEL_DEFAULT_BASE_URL,
@@ -32,6 +35,18 @@ interface VercelProjectJson {
 	link?: { type?: string; org?: string; repo?: string };
 }
 
+/** Raw `GET /v7/deployments` item (subset). The id is `uid`; `url` may be null. */
+interface VercelDeploymentJson {
+	uid?: string;
+	id?: string;
+	url?: string | null;
+	readyState?: string;
+	state?: string;
+	target?: string | null;
+	createdAt?: number;
+	created?: number;
+}
+
 function toProjectResult(
 	p: VercelProjectJson,
 	createdNew: boolean,
@@ -59,6 +74,7 @@ function toProjectResult(
  *   create project  POST /v11/projects
  *   get project     GET  /v9/projects/{idOrName}
  *   list projects   GET  /v9/projects
+ *   list deploys    GET  /v7/deployments?projectId=…&target=…&limit=…
  *   deploy status   GET  /v13/deployments/{idOrUrl}
  *   add domain      POST /v10/projects/{idOrName}/domains
  */
@@ -185,6 +201,33 @@ export class VercelClient implements DeployTarget {
 			id: String(p.id ?? ""),
 			name: String(p.name ?? ""),
 			framework: p.framework ?? null,
+		}));
+	}
+
+	/**
+	 * List a project's deployments, newest first. `GET /v7/deployments`. Filter
+	 * `target: "production"` for the prod deploy; `limit: 1` for "the latest".
+	 * Note: the id field in the API is `uid`, and `url` is null while a deploy is
+	 * still uploading.
+	 */
+	async listDeployments(
+		opts: ListDeploymentsOptions,
+	): Promise<DeploymentSummary[]> {
+		const r = await this.request<{ deployments?: VercelDeploymentJson[] }>(
+			"GET",
+			"/v7/deployments",
+			{
+				projectId: opts.projectId,
+				target: opts.target,
+				limit: opts.limit !== undefined ? String(opts.limit) : undefined,
+			},
+		);
+		return (r.deployments ?? []).map((d) => ({
+			id: String(d.uid ?? d.id ?? ""),
+			url: d.url ?? null,
+			readyState: (d.readyState ?? d.state ?? "QUEUED") as DeployReadyState,
+			target: d.target ?? null,
+			createdAt: Number(d.createdAt ?? d.created ?? 0),
 		}));
 	}
 

@@ -66,6 +66,28 @@ export interface DomainResult {
 	verification: DomainVerification[];
 }
 
+/** A deployment as surfaced by the discovery tools. `url` is the hostname (no
+ *  scheme), and is `null` while a deployment is still uploading. `target` is
+ *  `production`/`staging`, or `null` for preview (feature-branch/PR) deploys. */
+export interface DeploymentSummary {
+	id: string;
+	url: string | null;
+	readyState: DeployReadyState;
+	target: string | null;
+	/** Creation timestamp (ms epoch) as returned by Vercel. */
+	createdAt: number;
+}
+
+export interface ListDeploymentsOptions {
+	/** Project id or name to scope the listing to. */
+	projectId: string;
+	/** Filter by environment, e.g. `production`. Preview deploys have a null
+	 *  target and are NOT returned by a `production` filter. */
+	target?: string;
+	/** Max deployments to return (newest first). Use 1 for "the latest". */
+	limit?: number;
+}
+
 export interface CreateProjectOptions {
 	/** Desired project name. Implementations may slugify it. */
 	name: string;
@@ -84,6 +106,7 @@ export interface DeployTarget {
 	getDeploymentStatus(idOrUrl: string): Promise<DeploymentStatus>;
 	addDomain(projectIdOrName: string, name: string): Promise<DomainResult>;
 	listProjects(): Promise<ProjectSummary[]>;
+	listDeployments(opts: ListDeploymentsOptions): Promise<DeploymentSummary[]>;
 }
 
 /** Live connection summary for the console page. Never carries the token. */
