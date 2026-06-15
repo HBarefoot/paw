@@ -1279,15 +1279,14 @@ export function getChatScript(): string {
     var bubble = document.createElement("div");
     bubble.className = "msg " + role;
 
-    if (role === "assistant") {
-      var mdDiv = document.createElement("div");
-      mdDiv.className = "md-content";
-      mdDiv.innerHTML = renderMarkdown(text);
-      bubble.innerHTML = '<div class="role">' + role + '</div>';
-      bubble.appendChild(mdDiv);
-    } else {
-      bubble.innerHTML = '<div class="role">' + role + '</div>' + escapeHtml(text);
-    }
+    // Both roles render markdown so a quoted message (> ...) shows a styled
+    // blockquote instead of literal ">" lines. renderMarkdown escapes HTML
+    // internally, so this is XSS-safe for user content too.
+    var mdDiv = document.createElement("div");
+    mdDiv.className = "md-content";
+    mdDiv.innerHTML = renderMarkdown(text);
+    bubble.innerHTML = '<div class="role">' + role + '</div>';
+    bubble.appendChild(mdDiv);
 
     // Render any attached images (works for both user and assistant)
     if (images && images.length > 0) {
