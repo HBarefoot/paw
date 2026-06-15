@@ -18,6 +18,25 @@ export interface AccessPageProps {
 	persistedIds: string[];
 }
 
+/** Ids recognized purely from config — `security.allowedUsers ∪ ownerUserIds`,
+ *  deduped. Defensive about missing fields: `liveConfig().security` can be a
+ *  PARTIAL object (the config writer's shallow merge), so allowedUsers/
+ *  ownerUserIds may be undefined at runtime even though the type says otherwise.
+ *  Spreading those directly threw and 500'd /access. */
+export function recognizedIds(
+	security:
+		| { allowedUsers?: string[]; ownerUserIds?: string[] }
+		| null
+		| undefined,
+): string[] {
+	return [
+		...new Set([
+			...(security?.allowedUsers ?? []),
+			...(security?.ownerUserIds ?? []),
+		]),
+	];
+}
+
 /** Human "expires in N min" / "expired" from an ISO timestamp, computed at
  *  render time. */
 function expiryLabel(expiresAt: string): { text: string; expired: boolean } {

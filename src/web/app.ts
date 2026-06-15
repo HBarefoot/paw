@@ -111,7 +111,7 @@ import { createCanvasEditRoutes } from "./routes/canvas-edit.js";
 import { createFormReceiver } from "./routes/forms.js";
 import { createOpenAiApi } from "./routes/openai-api.js";
 import { buildOpsFeed } from "./routes/ops-feed.js";
-import { AccessPage } from "./views/access-page.js";
+import { AccessPage, recognizedIds } from "./views/access-page.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
 // canvas-page.tsx removed — canvas is now merged into chat
@@ -1172,15 +1172,15 @@ export function createWebApp(
 	// --- Access control: pairing approvals + approved users ---
 	app.get("/access", (c) => {
 		const ac = kernel.access;
-		const sec = liveConfig().security;
 		return c.html(
 			AccessPage({
 				enabled: !!ac,
 				pending: ac ? ac.listPendingPairings() : [],
 				approved: ac ? ac.listApprovedUsers() : [],
-				persistedIds: ac
-					? [...new Set([...sec.allowedUsers, ...sec.ownerUserIds])]
-					: [],
+				// recognizedIds is defensive: liveConfig().security can be a partial
+				// object (shallow override merge), so allowedUsers/ownerUserIds may be
+				// undefined — spreading them directly previously 500'd this page.
+				persistedIds: ac ? recognizedIds(liveConfig().security) : [],
 			}),
 		);
 	});

@@ -5,6 +5,7 @@ import {
 	type AccessPageProps,
 	type PendingPairing,
 	accessScript,
+	recognizedIds,
 } from "../../src/web/views/access-page.js";
 
 function render(overrides: Partial<AccessPageProps> = {}): string {
@@ -86,6 +87,32 @@ describe("access page", () => {
 		expect(render({ enabled: false })).toContain(
 			"Access control is not active",
 		);
+	});
+});
+
+describe("recognizedIds — robust to a PARTIAL live security config", () => {
+	// Regression: liveConfig().security is a shallow override merge, so on prod
+	// (config.json has `security: { requireApproval: true }`) allowedUsers/
+	// ownerUserIds are undefined. Spreading them directly 500'd GET /access.
+	test("partial security (only requireApproval) → [] instead of throwing", () => {
+		expect(() =>
+			recognizedIds({ requireApproval: true } as never),
+		).not.toThrow();
+		expect(recognizedIds({ requireApproval: true } as never)).toEqual([]);
+	});
+
+	test("undefined / null security → []", () => {
+		expect(recognizedIds(undefined)).toEqual([]);
+		expect(recognizedIds(null)).toEqual([]);
+	});
+
+	test("merges + dedupes allowedUsers and ownerUserIds", () => {
+		expect(
+			recognizedIds({
+				allowedUsers: ["U_A", "U_B"],
+				ownerUserIds: ["U_B", "U_OWNER"],
+			}).sort(),
+		).toEqual(["U_A", "U_B", "U_OWNER"]);
 	});
 });
 
