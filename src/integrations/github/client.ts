@@ -128,15 +128,20 @@ export class GitHubClient {
 	 */
 	async getInstallationToken(): Promise<string> {
 		try {
-			// Mint from the SAME installation-Octokit the API tools use (getInstallationOctokit),
-			// not a second app.octokit.auth({type:"installation"}) call — that returned an
-			// undefined `.token` in the deployed Octokit and made git/gh fail on repos the
-			// github_* API tools succeed on. An installation-authenticated Octokit's auth()
-			// returns the current (auto-rotating) installation token. Invariant: if the API
-			// tools can act on a repo, git/gh can too — one auth path, no drift.
-			const o = await this.octokit();
-			const a = (await o.auth()) as { token?: string };
-			if (a?.token) return a.token;
+			// Mint a fresh installation ACCESS token (ghs_…, ~1h) explicitly via the
+			// canonical endpoint. The app-JWT-authed `this.app.octokit` is exactly what
+			// it requires. We do NOT extract via a bare installation-Octokit `.auth()`:
+			// that returns the App JWT (ey…), which git/gh then send as a repo bearer →
+			// `401 Bad credentials`. (The github_* API tools never hit this because they
+			// use the installation Octokit's request methods, which auth per-request.)
+			// `request` is a standard method — unlike `.auth`, which #159 found wasn't
+			// even a function on the deployed app.octokit.
+			const res = await this.app.octokit.request(
+				"POST /app/installations/{installation_id}/access_tokens",
+				{ installation_id: this.installationId },
+			);
+			const token = res.data?.token;
+			if (token) return token;
 		} catch (err) {
 			if (!this.config.token) throw err;
 		}

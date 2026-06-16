@@ -12,9 +12,15 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 // Mutable rest tree the mocked App hands back; reset to a happy default per test.
 let octokitRest: Record<string, unknown>;
-// The installation token the mocked installation-Octokit's auth() returns. This is
-// the SAME getInstallationOctokit stub the API-tool tests use — getInstallationToken
-// now reads the token off it (not the divergent app.octokit.auth path). Set per test.
+// The `ghs_…` installation access token the mocked `app.octokit.request(POST
+// …/access_tokens)` returns — the canonical mint getInstallationToken now uses.
+let installRequestToken: string | undefined;
+let requestedRoute: string | undefined;
+let requestParams: Record<string, unknown> | undefined;
+let requestThrows: boolean;
+// A DISTINCT JWT sentinel returned by the installation-Octokit's bare `.auth()`.
+// The fix must NEVER return this — a bare `.auth()` yields the App JWT (ey…), which
+// git/gh send as a repo bearer → 401. Used to prove the JWT path is gone.
 let installAuthToken: string | undefined;
 
 mock.module("octokit", () => ({
@@ -25,14 +31,21 @@ mock.module("octokit", () => ({
 					getAuthenticated: async () => ({ data: { slug: "test-app" } }),
 				},
 			},
+			// The app-JWT-authed octokit. `request` is the canonical way to mint a
+			// fresh installation ACCESS token (ghs_…).
+			request: async (route: string, params: Record<string, unknown>) => {
+				requestedRoute = route;
+				requestParams = params;
+				if (requestThrows) throw new Error("app installation mint failed");
+				return { data: { token: installRequestToken } };
+			},
 		};
 		// biome-ignore lint/complexity/noUselessConstructor: mirror real signature
 		constructor(_opts: unknown) {}
 		async getInstallationOctokit() {
-			// An installation-authenticated Octokit exposes auth() → the current
-			// (auto-rotating) installation token. Note: app.octokit (above) has NO
-			// auth(), which is exactly why the old app.octokit.auth({type:"installation"})
-			// path returned undefined and broke git/gh.
+			// The API tools call this Octokit's `rest` methods (auth per-request).
+			// `.auth()` here returns the App JWT sentinel — getInstallationToken must
+			// NOT use it (that was the 401 bug).
 			return {
 				rest: octokitRest,
 				auth: async () => ({ token: installAuthToken }),
@@ -127,22 +140,32 @@ function makeClient(repoAllowlist: string[] = ["owner/repo"], token?: string) {
 
 beforeEach(() => {
 	octokitRest = happyRest();
-	installAuthToken = "ghs_test_installtoken";
+	installRequestToken = "ghs_minted_xyz";
+	requestedRoute = undefined;
+	requestParams = undefined;
+	requestThrows = false;
+	// If the old bare-.auth() path were still used, THIS JWT would be returned.
+	installAuthToken = "ey_jwt_should_NOT_be_used";
 });
 
-describe("getInstallationToken mints via the same installation-Octokit as the API tools", () => {
-	// Regression (fix/git-gh-installation-token): git/gh failed on repos the github_*
-	// API tools succeed on because getInstallationToken used a DIVERGENT auth call
-	// (app.octokit.auth({type:"installation"})) whose .token came back undefined. It
-	// now reuses this.octokit() (getInstallationOctokit) + auth(). Pre-change this
-	// test throws — the mocked app.octokit has no auth() — so it FAILS on old code.
-	test("returns the installation token from the API-tool auth path (no throw)", async () => {
+describe("getInstallationToken mints a real installation ACCESS token (ghs_…), not a JWT", () => {
+	// Regression (fix/installation-token-401): the #162 version returned a bare
+	// installation-Octokit `.auth()` token, which is the App JWT (ey…) — git/gh sent
+	// it as a repo bearer → `HTTP 401: Bad credentials`. The mint now goes through
+	// the canonical POST /app/installations/{id}/access_tokens endpoint (ghs_…).
+	test("returns data.token from POST …/access_tokens, NOT the bare .auth() JWT", async () => {
 		const token = await makeClient().getInstallationToken();
-		expect(token).toBe("ghs_test_installtoken");
+		expect(token).toBe("ghs_minted_xyz");
+		expect(requestedRoute).toBe(
+			"POST /app/installations/{installation_id}/access_tokens",
+		);
+		expect(requestParams).toMatchObject({ installation_id: 2 });
+		// the JWT path is gone — its sentinel must never be returned
+		expect(token).not.toBe("ey_jwt_should_NOT_be_used");
 	});
 
-	test("falls back to the github.token PAT when the App path yields no token", async () => {
-		installAuthToken = undefined; // App auth available but returns no token
+	test("falls back to the github.token PAT when the App mint fails", async () => {
+		requestThrows = true; // App installation mint unavailable
 		const token = await makeClient(
 			["owner/repo"],
 			"ghp_pat_fallback",
