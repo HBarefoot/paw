@@ -56,7 +56,11 @@ Paw (or a container with the vault key), not from a local checkout.
 Capability chain to get here: binaries ✓ · auth-path ✓ (#162) · sandbox permission ✓ (#164) · token mint ✓
 (`fix/installation-token-401` — `getInstallationToken` now mints a real `ghs_…` installation access token
 via `POST /app/installations/{id}/access_tokens` instead of returning the App JWT, which caused
-`HTTP 401: Bad credentials`). The first green live run below is the end-to-end proof.
+`HTTP 401: Bad credentials`) · spawn-PATH + gh-flags ✓ (`fix/git-gh-spawn-and-flags` — binaries are
+resolved to ABSOLUTE paths via `Bun.which` so `Bun.spawn` no longer fails with `posix_spawn 'git' ENOENT`
+on a stripped child PATH; and `-R owner/repo` is injected only for subcommands that accept it, never for
+`gh api`, which takes the repo in the request path). The first green live run below is the end-to-end
+proof — also smoke `gh api repos/<owner>/<repo>/pulls` (no `-R` error) and `git rm` a file (native delete).
 
 | Date | Repo | Clone | Push branch | `gh pr create` | `.git/config` token-free | Notes |
 |------|------|-------|-------------|----------------|--------------------------|-------|
