@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { basename, isAbsolute } from "node:path";
 import type { GitHubClient } from "../../src/integrations/github/client.js";
 import {
 	type GitToolsDeps,
@@ -133,6 +134,10 @@ function fakeDeps(over: Partial<GitToolsDeps> = {}): {
 		approvals,
 		workspacePath: "/tmp/paw-git-test-ws",
 		protectedBranches: ["main"],
+		// Pin the binaries so the spawned argv[0] is a known absolute path —
+		// deterministic and independent of whether the CI runner has git/gh.
+		gitBin: "/usr/bin/git",
+		ghBin: "/usr/bin/gh",
 		...over,
 	};
 	return { deps, enqueued };
@@ -221,9 +226,80 @@ describe("git/gh tool handlers", () => {
 			args: ["pr", "list"],
 		});
 		const argv = spawnCalls[spawnCalls.length - 1] ?? [];
-		expect(argv[0]).toBe("gh");
+		expect(basename(argv[0])).toBe("gh");
 		expect(argv).toContain("-R");
 		expect(argv).toContain("HBarefoot/portfolio-henry");
+	});
+
+	// fix/git-gh-spawn-and-flags — Fix 1: spawn an ABSOLUTE binary path so the
+	// child env's (possibly stripped) PATH can't cause `posix_spawn ENOENT`.
+	test("spawns the resolved absolute binary, not the bare name", async () => {
+		mockSpawn("ok");
+		const { deps } = fakeDeps();
+		const { gh } = tools(deps);
+		await gh.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["pr", "list"],
+		});
+		const argv = spawnCalls[spawnCalls.length - 1] ?? [];
+		expect(isAbsolute(argv[0])).toBe(true); // pre-change: argv[0] === "gh"
+		expect(basename(argv[0])).toBe("gh");
+	});
+
+	test("git spawns the resolved absolute binary too", async () => {
+		mockSpawn("ok");
+		const { deps } = fakeDeps();
+		const { git } = tools(deps);
+		await git.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["status"],
+		});
+		// first spawn is the auto-clone, last is the actual command — both git
+		for (const argv of spawnCalls) {
+			expect(isAbsolute(argv[0])).toBe(true);
+			expect(basename(argv[0])).toBe("git");
+		}
+	});
+
+	// fix/git-gh-spawn-and-flags — Fix 2: `gh api` must NOT get -R (its repo is in
+	// the request path; -R errors with "unknown shorthand flag: 'R'").
+	test("gh api gets NO -R (repo is in the path)", async () => {
+		mockSpawn("{}");
+		const { deps } = fakeDeps();
+		const { gh } = tools(deps);
+		await gh.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["api", "repos/HBarefoot/portfolio-henry/pulls"],
+		});
+		const argv = spawnCalls[spawnCalls.length - 1] ?? [];
+		expect(argv).not.toContain("-R"); // pre-change: -R was appended
+		expect(basename(argv[0])).toBe("gh");
+	});
+
+	test("a repo-flag subcommand (pr) still gets -R owner/name", async () => {
+		mockSpawn("ok");
+		const { deps } = fakeDeps();
+		const { gh } = tools(deps);
+		await gh.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["pr", "view", "14"],
+		});
+		const argv = spawnCalls[spawnCalls.length - 1] ?? [];
+		expect(argv).toContain("-R");
+		expect(argv).toContain("HBarefoot/portfolio-henry");
+	});
+
+	test("missing binary → clear error, no spawn", async () => {
+		mockSpawn("should not run");
+		const { deps } = fakeDeps({ ghBin: null });
+		const { gh } = tools(deps);
+		const res = await gh.handler({
+			repo: "HBarefoot/portfolio-henry",
+			args: ["pr", "list"],
+		});
+		expect(res.is_error).toBe(true);
+		expect(String(res.content)).toContain("gh is not installed");
+		expect(spawnCalls.length).toBe(0);
 	});
 
 	test("git push to main is refused without spawning", async () => {

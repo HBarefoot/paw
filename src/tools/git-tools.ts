@@ -39,6 +39,15 @@ export interface GitToolsDeps {
 	/** Per-invocation timeout (ms). Clones can be slow — default 180s. */
 	execTimeout?: number;
 	audit?: (action: string, details: Record<string, unknown>) => void;
+	/**
+	 * Absolute path to the `git` binary. Omit (`undefined`) to resolve once at
+	 * registration via `Bun.which`; pass a string to pin it; pass `null` to force
+	 * the "not installed" path. A testability seam so the spawned argv is
+	 * deterministic and the not-found branch is exercisable.
+	 */
+	gitBin?: string | null;
+	/** Absolute path to the `gh` binary — same resolution rules as `gitBin`. */
+	ghBin?: string | null;
 }
 
 export type GitClassification =
@@ -51,6 +60,29 @@ export type GitClassification =
 	  };
 
 const FORCE_FLAGS = new Set(["--force", "-f", "--mirror"]);
+
+/** `gh` subcommands that accept `-R owner/repo`. NOT `api` (repo is in the path). */
+const GH_REPO_FLAG_SUBCMDS = new Set([
+	"pr",
+	"issue",
+	"repo",
+	"run",
+	"release",
+	"workflow",
+	"browse",
+	"label",
+]);
+
+/**
+ * A PATH that resolves `git`/`gh` even when the inherited `process.env.PATH` is
+ * stripped/empty at spawn time (the Railway-container ENOENT). Standard bin dirs
+ * first, then whatever the process inherited.
+ */
+function resolvePath(): string {
+	return ["/usr/local/bin", "/usr/bin", "/bin", process.env.PATH]
+		.filter(Boolean)
+		.join(":");
+}
 
 function normalizeBranch(ref: string): string {
 	const parts = ref.split(":");
@@ -139,6 +171,24 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 	// persisted ~/.config/gh/hosts.yml — auth comes only from the per-call env.
 	const homeDir = join(tmpdir(), "paw-git-home");
 
+	// Resolve the binaries to ABSOLUTE paths ONCE so the spawn never depends on
+	// the child env's PATH (the `posix_spawn 'git' ENOENT` on Railway: a bare
+	// name + a stripped PATH won't resolve even though git is at /usr/bin/git).
+	// `undefined` deps → resolve via Bun.which; a string pins it; `null` = absent.
+	const gitBin =
+		deps.gitBin !== undefined
+			? deps.gitBin
+			: (Bun.which("git", { PATH: resolvePath() }) ?? null);
+	const ghBin =
+		deps.ghBin !== undefined
+			? deps.ghBin
+			: (Bun.which("gh", { PATH: resolvePath() }) ?? null);
+	// Verify-first diagnostic (one-time, at boot): shows whether PATH was stripped
+	// and where the binaries resolved. No secrets in this line.
+	console.log(
+		`[git-tools] resolved git=${gitBin ?? "NOT FOUND"} gh=${ghBin ?? "NOT FOUND"} PATH=${process.env.PATH ? "set" : "EMPTY"}`,
+	);
+
 	const cloneDirFor = (owner: string, name: string): string =>
 		join(gitRoot, owner, name);
 
@@ -154,7 +204,7 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 		return {
 			b64,
 			env: {
-				PATH: process.env.PATH ?? "",
+				PATH: resolvePath(),
 				HOME: homeDir,
 				LANG: process.env.LANG ?? "C.UTF-8",
 				GIT_TERMINAL_PROMPT: "0",
@@ -179,7 +229,7 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 	}
 
 	async function run(
-		bin: "git" | "gh",
+		bin: string,
 		args: string[],
 		cwd: string,
 		token: string,
@@ -251,6 +301,12 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 			required: ["repo", "args"],
 		},
 		handler: async (input): Promise<ToolResult> => {
+			if (!gitBin)
+				return {
+					content:
+						"git is not installed (no `git` binary found on PATH). Cannot run git commands.",
+					is_error: true,
+				};
 			const r = parseRepo(input);
 			if ("error" in r) return { content: r.error, is_error: true };
 			const args = parseArgs(input);
@@ -283,7 +339,7 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 				if (!isClone && !existsSync(join(cloneDir, ".git"))) {
 					mkdirSync(join(gitRoot, r.owner), { recursive: true });
 					const cl = await run(
-						"git",
+						gitBin,
 						["clone", `https://github.com/${r.repo}.git`, cloneDir],
 						gitRoot,
 						token,
@@ -297,7 +353,7 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 						};
 				}
 				const cwd = isClone ? gitRoot : cloneDir;
-				const res = await run("git", args, cwd, token, b64, env);
+				const res = await run(gitBin, args, cwd, token, b64, env);
 				deps.audit?.("git.exec", {
 					repo: r.repo,
 					argv0: args[0],
@@ -316,7 +372,7 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 	const gh: ToolDefinition = {
 		name: "gh",
 		description:
-			'Run the GitHub CLI against an allowlisted repo (always -R owner/name). Use for `pr create`, `pr view`, `pr checks`, `run view`, etc. `gh pr merge` is NOT run inline — it is queued for human approval (merges can target main). Pass args as an array, e.g. {"repo":"owner/name","args":["pr","create","--fill","--base","main"]}.',
+			'Run the GitHub CLI against an allowlisted repo. `-R owner/name` is added automatically for `pr`/`issue`/`repo`/`run`/`release`/`workflow`/`browse`/`label`; `gh api` is NOT given `-R` (put the repo in the path, e.g. ["api","repos/owner/name/pulls"]). Use for `pr create`, `pr view`, `pr checks`, `run view`, `api`, etc. `gh pr merge` is NOT run inline — it is queued for human approval (merges can target main). Pass args as an array, e.g. {"repo":"owner/name","args":["pr","create","--fill","--base","main"]}.',
 		plugin: "github",
 		input_schema: {
 			type: "object",
@@ -334,6 +390,12 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 			required: ["repo", "args"],
 		},
 		handler: async (input): Promise<ToolResult> => {
+			if (!ghBin)
+				return {
+					content:
+						"gh is not installed (no `gh` binary found on PATH). Cannot run GitHub CLI commands.",
+					is_error: true,
+				};
 			const r = parseRepo(input);
 			if ("error" in r) return { content: r.error, is_error: true };
 			const args = parseArgs(input);
@@ -384,10 +446,16 @@ export function createGitTools(deps: GitToolsDeps): ToolDefinition[] {
 			mkdirSync(homeDir, { recursive: true });
 			const cloneDir = cloneDirFor(r.owner, r.name);
 			const cwd = existsSync(cloneDir) ? cloneDir : deps.workspacePath;
-			// Always pin the repo explicitly — never rely on remote inference.
-			const ghArgs = args.includes("-R") ? args : [...args, "-R", r.repo];
+			// Pin the repo with -R, but ONLY for subcommands that accept it — never
+			// `gh api` (its repo goes in the request path; -R errors). Pass through
+			// calls that already pin a repo. The allowlist check ran in parseRepo.
+			const alreadyPinned = args.includes("-R") || args.includes("--repo");
+			const ghArgs =
+				!alreadyPinned && GH_REPO_FLAG_SUBCMDS.has(args[0])
+					? [...args, "-R", r.repo]
+					: args;
 			try {
-				const res = await run("gh", ghArgs, cwd, token, b64, env);
+				const res = await run(ghBin, ghArgs, cwd, token, b64, env);
 				deps.audit?.("gh.exec", {
 					repo: r.repo,
 					argv0: args[0],
