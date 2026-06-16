@@ -53,9 +53,15 @@ mint path and the security boundary in CI. This section records the **live** run
 private key from the **deployed instance's vault** + network — so it runs **post-deploy** on the deployed
 Paw (or a container with the vault key), not from a local checkout.
 
+Capability chain to get here: binaries ✓ · auth-path ✓ (#162) · sandbox permission ✓ (#164) · token mint ✓
+(`fix/installation-token-401` — `getInstallationToken` now mints a real `ghs_…` installation access token
+via `POST /app/installations/{id}/access_tokens` instead of returning the App JWT, which caused
+`HTTP 401: Bad credentials`). The first green live run below is the end-to-end proof.
+
 | Date | Repo | Clone | Push branch | `gh pr create` | `.git/config` token-free | Notes |
 |------|------|-------|-------------|----------------|--------------------------|-------|
-| _pending post-deploy_ (fix/git-gh-installation-token) | `HBarefoot/portfolio-henry` | | | | | smoke: delete `src/app/.next/` → PR |
+| _pending post-deploy_ (fix/installation-token-401) | `HBarefoot/portfolio-henry` | | | | | first confirm `gh pr list` → no 401; then smoke: delete `src/app/.next/` → PR |
 
-Fill a row per run: clone → branch-from-main → edit/delete → push feature branch → `gh pr create` →
-confirm the PR exists, and `grep -ri 'x-access-token\|ghs_\|Authorization' .git/config` → **no matches**.
+Fill a row per run: confirm `gh pr list` returns with no 401, then clone → branch-from-main → edit/delete →
+push feature branch → `gh pr create` → confirm the PR exists, and
+`grep -ri 'x-access-token\|ghs_\|Authorization' .git/config` → **no matches**.
