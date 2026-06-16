@@ -10,10 +10,23 @@ export interface VaultSlotStatus {
 	inVault: boolean;
 }
 
+/** Status of a provider/integration credential (Anthropic, OpenAI, Slack, …).
+ *  Read-only Set/Missing + source; rotated via POST /api/credentials/:id. This
+ *  is the provider-key surface (formerly the /settings "Secrets" tab), distinct
+ *  from the vault's own encrypted secrets above. */
+export interface SecretStatus {
+	id: string;
+	label: string;
+	set: boolean;
+	fromEnv?: boolean;
+}
+
 interface VaultPageProps {
 	enabled: boolean;
 	secrets: VaultSecretMeta[];
 	slots: VaultSlotStatus[];
+	/** Provider/integration credential statuses (Anthropic/OpenAI/Slack/…). */
+	providerCredentials: SecretStatus[];
 }
 
 const SCOPES: VaultScope[] = [
@@ -27,7 +40,12 @@ const SCOPES: VaultScope[] = [
 	"github",
 ];
 
-export const VaultPage: FC<VaultPageProps> = ({ enabled, secrets, slots }) => {
+export const VaultPage: FC<VaultPageProps> = ({
+	enabled,
+	secrets,
+	slots,
+	providerCredentials,
+}) => {
 	return (
 		<Layout title="Vault" currentPath="/vault">
 			<div class="card mb-md">
@@ -40,6 +58,58 @@ export const VaultPage: FC<VaultPageProps> = ({ enabled, secrets, slots }) => {
 					<code>vault://&lt;name&gt;</code>. Vault values win over environment
 					variables.
 				</p>
+			</div>
+
+			{/* Provider credentials — read-only status + rotate (formerly the
+			    /settings "Secrets" tab). Uses /api/credentials, independent of vault
+			    enablement, so it renders regardless of the master-key state. */}
+			<div class="card mb-md">
+				<h3>Provider credentials</h3>
+				<p class="text-sm text-muted mb-md">
+					API keys for AI providers and Slack. Values are never displayed — use{" "}
+					<strong>Rotate</strong> to replace a stored value. Restart the process
+					for a running provider to pick up the new value.
+				</p>
+				{providerCredentials.length > 0 ? (
+					<table class="audit-table">
+						<thead>
+							<tr>
+								<th>Service</th>
+								<th>Status</th>
+								<th>Source</th>
+								<th style="text-align:right">Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							{providerCredentials.map((s) => (
+								<tr key={s.id}>
+									<td>{s.label}</td>
+									<td>
+										<span class={`badge ${s.set ? "success" : "neutral"}`}>
+											{s.set ? "Set" : "Missing"}
+										</span>
+									</td>
+									<td class="text-sm text-muted">
+										{s.fromEnv ? "env var" : "credentials file"}
+									</td>
+									<td style="text-align:right">
+										<button
+											type="button"
+											class="btn-secondary btn-sm"
+											data-secret-id={s.id}
+											data-secret-label={s.label}
+											onclick="rotateSecret(this.dataset.secretId, this.dataset.secretLabel)"
+										>
+											Rotate
+										</button>
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				) : (
+					<p class="text-sm text-muted">No provider credentials configured.</p>
+				)}
 			</div>
 
 			{!enabled && (
@@ -233,6 +303,19 @@ async function vaultImport() {
     pawModal.alert("Imported", (data.imported || 0) + " secret(s) copied into the vault.");
     setTimeout(function(){ window.location.reload(); }, 400);
   } catch (e) { pawModal.alert("Import failed", String(e)); }
+}
+async function rotateSecret(id, label) {
+  var value = await pawModal.prompt("Rotate " + label, "Paste the new secret value. It will be written to the vault / credentials file and never displayed again.", "");
+  if (!value) return;
+  try {
+    var res = await fetch("/api/credentials/" + encodeURIComponent(id), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: value })
+    });
+    if (!res.ok) { var err = await res.json().catch(function () { return {}; }); pawModal.alert("Rotate failed", err.error || ("HTTP " + res.status)); return; }
+    pawModal.alert("Rotated", label + " was updated. Restart the process for the running provider to pick up the new value.");
+    setTimeout(function () { window.location.reload(); }, 400);
+  } catch (e) { pawModal.alert("Rotate failed", String(e)); }
 }
 </script>`)}
 		</Layout>

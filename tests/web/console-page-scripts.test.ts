@@ -58,10 +58,10 @@ describe("console page client scripts cook + parse (template-trap guard)", () =>
 		const s = scripts.settings;
 		expect(s).toContain("function settingsSelect(");
 		expect(s).toContain("function pawToggle(");
-		// brand + n8n + secrets functionality folded in
+		// brand + n8n functionality folded in (secret rotation moved to /vault)
 		expect(s).toContain("window.brandSave");
 		expect(s).toContain("window.reconnectN8n");
-		expect(s).toContain("window.rotateSecret");
+		expect(s).not.toContain("window.rotateSecret");
 		expect(s).toContain('getElementById("settings-form")');
 	});
 });

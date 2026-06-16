@@ -14,17 +14,49 @@ interface MemoryItem {
 	last_accessed_at?: string | null;
 }
 
+interface MemoryConfig {
+	enabled: boolean;
+	autoExtract: boolean;
+	vectorWeight: number;
+	ftsWeight: number;
+}
+
 interface MemoryPageProps {
 	memories: MemoryItem[];
 	stats: { totalMemories: number; byCategory: Record<string, number> } | null;
+	memoryConfig: MemoryConfig;
 	query?: string;
 	category?: string;
 	error?: string;
 	success?: string;
 }
 
+/** Hidden-input + toggle button (mirrors the settings-page `Bool` control) so a
+ *  plain form POST always submits "true"/"false" — no unchecked-checkbox gap.
+ *  Driven by `pawToggle` in memoryScript(). */
+function Bool({ name, value }: { name: string; value: boolean }) {
+	return (
+		<span style="display:inline-flex">
+			{raw(
+				`<input type="hidden" name="${name}" value="${value ? "true" : "false"}">`,
+			)}
+			<button
+				type="button"
+				class={`toggle${value ? " on" : ""}`}
+				onclick="pawToggle(this)"
+			/>
+		</span>
+	);
+}
+
 function memoryScript(): string {
 	return `
+    function pawToggle(btn) {
+      var on = btn.classList.toggle("on");
+      var inp = btn.previousElementSibling;
+      if (inp) inp.value = on ? "true" : "false";
+    }
+
     async function deleteMemory(id) {
       var ok = await pawModal.confirm("Delete Memory", "Are you sure you want to delete this memory?", { confirmLabel: "Delete", danger: true });
       if (!ok) return;
@@ -70,6 +102,7 @@ function memoryScript(): string {
 export const MemoryPage: FC<MemoryPageProps> = ({
 	memories,
 	stats,
+	memoryConfig,
 	query,
 	category,
 	error,
@@ -94,6 +127,69 @@ export const MemoryPage: FC<MemoryPageProps> = ({
 					))}
 				</div>
 			)}
+
+			<div class="card mb-md">
+				<h3>Memory settings</h3>
+				<p class="text-sm text-muted mb-md">
+					How memory is persisted and recalled. Changes save immediately; some
+					take effect on the next conversation.
+				</p>
+				<form
+					method="post"
+					action="/api/memory/config"
+					class="flex-col gap-sm max-w-form"
+				>
+					<div class="flex items-center justify-between gap-sm">
+						<div>
+							<div>Memory enabled</div>
+							<div class="text-sm text-muted">Persist facts across sessions.</div>
+						</div>
+						<Bool name="memory.enabled" value={memoryConfig.enabled} />
+					</div>
+					<div class="flex items-center justify-between gap-sm">
+						<div>
+							<div>Auto-extract facts</div>
+							<div class="text-sm text-muted">
+								Pull durable facts from conversations.
+							</div>
+						</div>
+						<Bool name="memory.autoExtract" value={memoryConfig.autoExtract} />
+					</div>
+					<div class="flex items-center justify-between gap-sm">
+						<div>
+							<div>Vector weight</div>
+							<div class="text-sm text-muted">Hybrid recall weighting.</div>
+						</div>
+						<input
+							type="number"
+							name="memory.vectorWeight"
+							value={String(memoryConfig.vectorWeight)}
+							step="0.1"
+							min="0"
+							max="1"
+							style="width:90px"
+						/>
+					</div>
+					<div class="flex items-center justify-between gap-sm">
+						<div>
+							<div>FTS weight</div>
+							<div class="text-sm text-muted">Full-text search weighting.</div>
+						</div>
+						<input
+							type="number"
+							name="memory.ftsWeight"
+							value={String(memoryConfig.ftsWeight)}
+							step="0.1"
+							min="0"
+							max="1"
+							style="width:90px"
+						/>
+					</div>
+					<button type="submit" class="btn-primary self-start">
+						Save settings
+					</button>
+				</form>
+			</div>
 
 			<div class="card mb-md">
 				<h3>Search</h3>

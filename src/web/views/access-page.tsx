@@ -3,6 +3,32 @@ import type { FC } from "hono/jsx";
 import type { ApprovedUser } from "../../security/access-control.js";
 import { Layout } from "./layout.js";
 
+/** Security config shown on this page (relocated from the /settings "Security"
+ *  tab). Saved via POST /api/security. */
+export interface SecurityConfig {
+	enforcePermissions: boolean;
+	allowUnapprovedExternal: boolean;
+	rateLimiting: { enabled: boolean; maxRequestsPerMinute: number };
+}
+
+/** Hidden-input + toggle button (mirrors the settings-page `Bool` control) so a
+ *  plain form POST always submits "true"/"false". Driven by `pawToggle` in
+ *  accessScript(). */
+function Bool({ name, value }: { name: string; value: boolean }) {
+	return (
+		<span style="display:inline-flex">
+			{raw(
+				`<input type="hidden" name="${name}" value="${value ? "true" : "false"}">`,
+			)}
+			<button
+				type="button"
+				class={`toggle${value ? " on" : ""}`}
+				onclick="pawToggle(this)"
+			/>
+		</span>
+	);
+}
+
 export interface PendingPairing {
 	userId: string;
 	expiresAt: string;
@@ -26,6 +52,8 @@ export interface AccessPageProps {
 	/** True when security.allowUnapprovedExternal is on — access control is NOT
 	 *  enforcing on external channels. Renders a prominent OFF banner. */
 	open: boolean;
+	/** Security config (relocated from the /settings "Security" tab). */
+	security: SecurityConfig;
 }
 
 /** Ids recognized purely from config — `security.allowedUsers ∪ ownerUserIds`,
@@ -66,7 +94,8 @@ function expiryLabel(expiresAt: string): { text: string; expired: boolean } {
 }
 
 export const AccessPage: FC<AccessPageProps> = (props) => {
-	const { enabled, pending, approved, persistedIds, ownerIds, open } = props;
+	const { enabled, pending, approved, persistedIds, ownerIds, open, security } =
+		props;
 	const persisted = new Set(persistedIds);
 	const owners = new Set(ownerIds);
 	const envOwners = new Set(props.envIds ?? []);
@@ -78,7 +107,7 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 	const configOnlyIds = persistedIds.filter((id) => !approvedIdSet.has(id));
 
 	return (
-		<Layout title="Access" currentPath="/access">
+		<Layout title="Security & Access" currentPath="/access">
 			{open && (
 				<div
 					class="alert alert-error mb-md"
@@ -303,6 +332,69 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
 				</div>
 			)}
 
+			{/* Security settings — relocated from the /settings "Security" tab. */}
+			<div class="card mb-md">
+				<h3>Security settings</h3>
+				<p class="text-sm text-muted mb-md">
+					Global enforcement and rate-limiting. Some changes require a restart.
+				</p>
+				<form
+					method="post"
+					action="/api/security"
+					class="flex-col gap-sm max-w-form"
+				>
+					<div class="flex items-center justify-between gap-sm">
+						<div>
+							<div>Enforce permissions</div>
+							<div class="text-sm text-muted">
+								Sandbox tool execution against manifests.
+							</div>
+						</div>
+						<Bool
+							name="security.enforcePermissions"
+							value={security.enforcePermissions}
+						/>
+					</div>
+					<div class="flex items-center justify-between gap-sm">
+						<div>
+							<div>⚠ Allow unapproved external users</div>
+							<div class="text-sm text-muted">
+								DANGER — when ON, unrecognized Slack users command the agent
+								with no approval. Leave OFF to require approval.
+							</div>
+						</div>
+						<Bool
+							name="security.allowUnapprovedExternal"
+							value={security.allowUnapprovedExternal}
+						/>
+					</div>
+					<div class="flex items-center justify-between gap-sm">
+						<div>
+							<div>Rate limiting</div>
+						</div>
+						<Bool
+							name="security.rateLimiting.enabled"
+							value={security.rateLimiting.enabled}
+						/>
+					</div>
+					<div class="flex items-center justify-between gap-sm">
+						<div>
+							<div>Max requests / min</div>
+						</div>
+						<input
+							type="number"
+							name="security.rateLimiting.maxRequestsPerMinute"
+							value={String(security.rateLimiting.maxRequestsPerMinute)}
+							min="1"
+							style="width:90px"
+						/>
+					</div>
+					<button type="submit" class="btn-primary self-start">
+						Save settings
+					</button>
+				</form>
+			</div>
+
 			{raw(`<script>${accessScript()}</script>`)}
 		</Layout>
 	);
@@ -313,6 +405,11 @@ export const AccessPage: FC<AccessPageProps> = (props) => {
  *  or backslash escapes. */
 export function accessScript(): string {
 	return `
+function pawToggle(btn) {
+  var on = btn.classList.toggle("on");
+  var inp = btn.previousElementSibling;
+  if (inp) inp.value = on ? "true" : "false";
+}
 async function acApprove(userId) {
   var ok = await pawModal.confirm("Approve access", "Approve " + userId + " and DM them that access is granted?", { confirmLabel: "Approve" });
   if (!ok) return;
