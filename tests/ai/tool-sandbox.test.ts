@@ -138,6 +138,74 @@ describe("ToolRegistry sandbox enforcement (H-NEW-4)", () => {
 		expect(res.content).toContain("Permission denied");
 	});
 
+	test("posthog_* tools are reachable under the posthog plugin's posthog:read grant", async () => {
+		// REGRESSION (#168): posthog_* tools had no inferPermission case and fell through
+		// to the bare plugin name "posthog" (not a granted permission) → "Permission
+		// denied", even though the posthog manifest grants posthog:read. They now map to
+		// posthog:read, matching the manifest grant.
+		const sandbox = new Sandbox(logger);
+		sandbox.registerManifest({
+			name: "posthog",
+			version: "0.1.0",
+			description: "",
+			permissions: ["posthog:read"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		const mk = (name: string) => ({
+			name,
+			description: name,
+			input_schema: { type: "object" as const },
+			plugin: "posthog",
+			handler: async () => ({ content: "ok" }),
+		});
+		const posthogTools = [
+			"posthog_top_pages",
+			"posthog_pageviews",
+			"posthog_top_referrers",
+			"posthog_event_counts",
+			"posthog_funnel",
+			"posthog_query",
+		];
+		registry.register(posthogTools.map(mk));
+
+		for (const name of posthogTools) {
+			const res = await registry.execute(name, {});
+			expect(res.is_error).toBeFalsy();
+			expect(res.content).toBe("ok");
+		}
+	});
+
+	test("posthog_* tools are denied when only bare 'posthog' is granted (pre-fix behaviour)", async () => {
+		// Confirms that the bare "posthog" string does NOT satisfy posthog:read, which is
+		// what the fallthrough returned before the fix — and why they were denied.
+		const sandbox = new Sandbox(logger);
+		// Deliberately register the bare "posthog" permission (not "posthog:read").
+		sandbox.registerManifest({
+			name: "posthog",
+			version: "0.1.0",
+			description: "",
+			permissions: ["posthog"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		registry.register([
+			{
+				name: "posthog_top_pages",
+				description: "posthog_top_pages",
+				input_schema: { type: "object" as const },
+				plugin: "posthog",
+				handler: async () => ({ content: "ok" }),
+			},
+		]);
+
+		// Post-fix, inferPermission returns "posthog:read" — but the manifest only
+		// grants "posthog", so the check fails (exact match required).
+		const res = await registry.execute("posthog_top_pages", {});
+		expect(res.is_error).toBe(true);
+		expect(res.content).toContain("Permission denied");
+	});
+
 	test("denies unknown plugin", async () => {
 		const sandbox = new Sandbox(logger);
 		const registry = new ToolRegistry();
