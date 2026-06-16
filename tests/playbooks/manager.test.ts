@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -191,6 +198,95 @@ describe("PlaybookManager.validateDraft (quality bar)", () => {
 			"create",
 		);
 		expect(v.ok).toBe(false);
+	});
+});
+
+describe("PlaybookManager two-root read-merge (bundled + writable)", () => {
+	let bundled: string;
+	let writable: string;
+
+	beforeEach(() => {
+		bundled = mkdtempSync(join(tmpdir(), "paw-pb-bundled-"));
+		writable = mkdtempSync(join(tmpdir(), "paw-pb-writable-"));
+	});
+	afterEach(() => {
+		rmSync(bundled, { recursive: true, force: true });
+		rmSync(writable, { recursive: true, force: true });
+	});
+
+	const writeIn = (root: string, rel: string, content: string): void => {
+		const full = join(root, rel);
+		mkdirSync(join(full, ".."), { recursive: true });
+		writeFileSync(full, content);
+	};
+
+	test("merges both roots into the one catalog", () => {
+		writeIn(
+			bundled,
+			"a.md",
+			"---\nname: a\ndescription: Use when you need an a.\n---\n\n1. Do a1.\n2. Do a2.\n",
+		);
+		writeIn(
+			writable,
+			"b.md",
+			"---\nname: b\ndescription: Use when you need a b.\n---\n\n1. Do b1.\n2. Do b2.\n",
+		);
+		const mgr = new PlaybookManager({
+			bundledDir: bundled,
+			writableDir: writable,
+		});
+		mgr.scan();
+		expect(mgr.has("a")).toBe(true);
+		expect(mgr.has("b")).toBe(true);
+		expect(mgr.names.sort()).toEqual(["a", "b"]);
+	});
+
+	test("on a name collision the WRITABLE version wins", () => {
+		writeIn(
+			bundled,
+			"dup.md",
+			"---\nname: dup\ndescription: Use when you need the BUNDLED one.\n---\n\n1. bundled step one.\n2. bundled step two.\n",
+		);
+		writeIn(
+			writable,
+			"dup.md",
+			"---\nname: dup\ndescription: Use when you need the WRITABLE one.\n---\n\n1. writable step one.\n2. writable step two.\n",
+		);
+		const mgr = new PlaybookManager({
+			bundledDir: bundled,
+			writableDir: writable,
+		});
+		mgr.scan();
+		const entry = mgr.get("dup");
+		expect(entry?.description).toContain("WRITABLE");
+		expect(entry?.body).toContain("writable step one");
+		expect(entry?.body).not.toContain("bundled step");
+		expect(entry?.origin).toBe("writable");
+	});
+
+	test("upsert writes to the WRITABLE root, NOT the bundled root", async () => {
+		writeIn(
+			bundled,
+			"onboarding.md",
+			"---\nname: onboarding\ndescription: Use when onboarding — keep me.\n---\n\n1. a\n2. b\n",
+		);
+		const mgr = new PlaybookManager({
+			bundledDir: bundled,
+			writableDir: writable,
+		});
+		mgr.scan();
+
+		await mgr.upsert({
+			name: "x",
+			description: "Use when you need an x to do y.",
+			body: "1. Do x.\n2. Then y.",
+		});
+
+		// The new file lands in the writable root...
+		expect(existsSync(join(writable, "x.md"))).toBe(true);
+		// ...and NOT in the bundled root, which is left untouched.
+		expect(existsSync(join(bundled, "x.md"))).toBe(false);
+		expect(readdirSync(bundled).sort()).toEqual(["onboarding.md"]);
 	});
 });
 

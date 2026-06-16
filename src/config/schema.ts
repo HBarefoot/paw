@@ -171,6 +171,12 @@ export const configSchema = z.object({
 		maxOutputLength: z.number().int().positive().default(10_000),
 		execTimeout: z.number().int().positive().default(30_000),
 		allowedCommands: z.array(z.string()).optional(),
+		// Persistent root for runtime-authored playbooks. Unset = co-locate with
+		// the bundled `<workspace.path>/playbooks` dir (dev/local). On Railway set
+		// PAW_PLAYBOOKS_ROOT=/data/playbooks so authored playbooks survive
+		// redeploys. Infra-path concern: applied AFTER file config and NEVER
+		// persisted by the writer (mirrors store.dbPath).
+		playbooksRoot: z.string().optional(),
 	}),
 	slack: z.object({
 		botToken: z.string().default(""),

@@ -110,3 +110,32 @@ describe("store.dbPath resolution (PAW_DB_PATH wins)", () => {
 		expect(loadConfig().store.dbPath).toBe("/custom/paw.db");
 	});
 });
+
+// Infra-path guard: PAW_PLAYBOOKS_ROOT must WIN over a config.json
+// workspace.playbooksRoot so runtime-authored playbooks land on the persistent
+// volume and aren't wiped each redeploy (mirrors the PAW_DB_PATH guard).
+describe("workspace.playbooksRoot resolution (PAW_PLAYBOOKS_ROOT wins)", () => {
+	beforeEach(() => {
+		delete process.env.PAW_PLAYBOOKS_ROOT;
+	});
+
+	test("PAW_PLAYBOOKS_ROOT overrides a config.json workspace.playbooksRoot", () => {
+		writeFileSync(
+			join(dir, "config.json"),
+			JSON.stringify({ workspace: { playbooksRoot: "./playbooks" } }),
+			"utf-8",
+		);
+		process.env.PAW_PLAYBOOKS_ROOT = "/data/playbooks";
+		expect(loadConfig().workspace.playbooksRoot).toBe("/data/playbooks");
+		delete process.env.PAW_PLAYBOOKS_ROOT;
+	});
+
+	test("without PAW_PLAYBOOKS_ROOT the config.json value stands", () => {
+		writeFileSync(
+			join(dir, "config.json"),
+			JSON.stringify({ workspace: { playbooksRoot: "/custom/playbooks" } }),
+			"utf-8",
+		);
+		expect(loadConfig().workspace.playbooksRoot).toBe("/custom/playbooks");
+	});
+});

@@ -120,6 +120,8 @@ export interface PawConfig {
 		maxOutputLength: number;
 		execTimeout: number;
 		allowedCommands?: string[];
+		/** Persistent root for runtime-authored playbooks (PAW_PLAYBOOKS_ROOT). */
+		playbooksRoot?: string;
 	};
 	slack: {
 		botToken: string;
