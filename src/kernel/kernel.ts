@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { AgentRegistry } from "../agents/registry.js";
 import { createSpawnAgentTool } from "../agents/spawn-agent-tool.js";
 import type { AgentDefinition, AgentRunResult } from "../agents/types.js";
@@ -34,6 +34,9 @@ import {
 	withVisionFallback,
 } from "../ai/router.js";
 import { SkillManager } from "../ai/skills.js";
+import type { DraftPlaybook } from "../playbooks/manager.js";
+import { PlaybookManager } from "../playbooks/manager.js";
+import { createPlaybookTools } from "../tools/playbook-tools.js";
 import { buildSystemPrompt } from "../ai/system-prompt.js";
 import { ToolRegistry } from "../ai/tools.js";
 import { readConfigOverrides } from "../config/writer.js";
@@ -162,6 +165,7 @@ export class Kernel {
 	private notificationStoreInstance!: NotificationStore;
 	private githubReactorUnsub: (() => void) | null = null;
 	private skillManager: SkillManager;
+	private playbookManager: PlaybookManager;
 	private agentRegistry: AgentRegistry;
 	private agentDepths = new Map<string, number>();
 	/** In-flight (and just-finished) spawned agents, keyed by agentSessionId —
@@ -288,6 +292,8 @@ export class Kernel {
 				"skill:activate",
 				"canvas:read",
 				"canvas:write",
+				"playbook:read",
+				"playbook:write",
 			],
 		});
 
@@ -483,6 +489,38 @@ export class Kernel {
 					error: String(err),
 				});
 			}
+		});
+
+		// Playbooks — self-authored, reusable markdown procedures (progressive
+		// disclosure, one layer up from skills). The catalog (name+description) is
+		// appended to the system prompt; bodies load on demand via load_playbook.
+		// create/update are approval-gated through the SAME queue as canvas edits and
+		// written + hot-added to the live catalog on approve via the executor below,
+		// so a playbook authored mid-session is loadable later in that same session.
+		// The dir lives under the workspace root (same root file_read/file_list use).
+		this.playbookManager = new PlaybookManager({
+			dir: resolve(config.workspace.path || ".", "playbooks"),
+			logger: createLogger("playbooks"),
+		});
+		this.playbookManager.scan();
+		this.toolRegistry.register(
+			createPlaybookTools({ manager: this.playbookManager, approvals }),
+		);
+		approvals.registerExecutor("playbook_save", async (row) => {
+			const p = row.params as Partial<DraftPlaybook> & { mode?: string };
+			const entry = await this.playbookManager.upsert({
+				name: String(p.name ?? ""),
+				description: String(p.description ?? ""),
+				body: String(p.body ?? ""),
+			});
+			approvalsAudit.log(`playbook.${p.mode ?? "save"}`, null, {
+				name: entry.name,
+			});
+			return { saved: entry.name, mode: p.mode ?? "save" };
+		});
+		this.logger.info("Playbooks initialized", {
+			dir: this.playbookManager.directory,
+			count: this.playbookManager.names.length,
 		});
 
 		// Initialize memory system
@@ -1310,6 +1348,7 @@ export class Kernel {
 			customPrompt: agent.systemPrompt,
 			memoryContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
+			playbookCatalog: this.playbookManager.getCatalogPrompt(),
 			agentDepth,
 			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
@@ -1456,6 +1495,7 @@ export class Kernel {
 			customPrompt: agent.systemPrompt,
 			memoryContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
+			playbookCatalog: this.playbookManager.getCatalogPrompt(),
 			agentDepth,
 			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
@@ -1812,6 +1852,7 @@ export class Kernel {
 			memoryContext,
 			feedbackContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
+			playbookCatalog: this.playbookManager.getCatalogPrompt(),
 			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
 
@@ -2173,6 +2214,7 @@ export class Kernel {
 			memoryContext,
 			feedbackContext,
 			skillCatalog: this.skillManager.getCatalogPrompt(),
+			playbookCatalog: this.playbookManager.getCatalogPrompt(),
 			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
 
@@ -2961,6 +3003,10 @@ export class Kernel {
 
 	get skills(): SkillManager {
 		return this.skillManager;
+	}
+
+	get playbooks(): PlaybookManager {
+		return this.playbookManager;
 	}
 
 	get eventBus(): EventBus {

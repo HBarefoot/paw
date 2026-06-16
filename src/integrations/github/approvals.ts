@@ -19,7 +19,10 @@ export type GitHubGatedAction =
 	// audit labels carry the `github.` prefix (see audit() calls); acceptable
 	// for the shared queue.
 	| "vercel_create_project"
-	| "vercel_add_domain";
+	| "vercel_add_domain"
+	// Self-authored playbook save (create/update) — written to the playbooks dir
+	// and hot-added to the live catalog on approve via a registered executor.
+	| "playbook_save";
 
 /** Where an approval originated, so it can be delivered back to that surface. */
 export interface ApprovalOrigin {

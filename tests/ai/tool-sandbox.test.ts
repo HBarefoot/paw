@@ -206,6 +206,68 @@ describe("ToolRegistry sandbox enforcement (H-NEW-4)", () => {
 		expect(res.content).toContain("Permission denied");
 	});
 
+	test("playbook tools split read vs write and are reachable under the kernel grants", async () => {
+		// REGRESSION (#88/#164/#168 class): a new kernel tool with no inferPermission
+		// case falls through to the bare plugin name "kernel" (not a granted
+		// permission) → silently denied. load_playbook is a read; create/update are
+		// writes. The kernel manifest grants playbook:read + playbook:write.
+		const sandbox = new Sandbox(logger);
+		sandbox.registerManifest({
+			name: "kernel",
+			version: "0.1.0",
+			description: "",
+			permissions: ["playbook:read", "playbook:write"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		const mk = (name: string) => ({
+			name,
+			description: name,
+			input_schema: { type: "object" as const },
+			plugin: "kernel",
+			handler: async () => ({ content: "ok" }),
+		});
+		registry.register([
+			mk("load_playbook"),
+			mk("create_playbook"),
+			mk("update_playbook"),
+		]);
+
+		for (const name of ["load_playbook", "create_playbook", "update_playbook"]) {
+			const res = await registry.execute(name, {});
+			expect(res.is_error).toBeFalsy();
+			expect(res.content).toBe("ok");
+		}
+	});
+
+	test("playbook writes require playbook:write — a read-only grant is denied", async () => {
+		// Pin the tier: with only playbook:read granted, the write-tier create/update
+		// tools are denied (checkPermission is exact-match), while load_playbook works.
+		const sandbox = new Sandbox(logger);
+		sandbox.registerManifest({
+			name: "kernel",
+			version: "0.1.0",
+			description: "",
+			permissions: ["playbook:read"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		const mk = (name: string) => ({
+			name,
+			description: name,
+			input_schema: { type: "object" as const },
+			plugin: "kernel",
+			handler: async () => ({ content: "ok" }),
+		});
+		registry.register([mk("load_playbook"), mk("create_playbook")]);
+
+		const read = await registry.execute("load_playbook", {});
+		expect(read.is_error).toBeFalsy();
+		const write = await registry.execute("create_playbook", {});
+		expect(write.is_error).toBe(true);
+		expect(write.content).toContain("Permission denied");
+	});
+
 	test("denies unknown plugin", async () => {
 		const sandbox = new Sandbox(logger);
 		const registry = new ToolRegistry();
@@ -241,6 +303,8 @@ describe("ToolRegistry sandbox enforcement (H-NEW-4)", () => {
 			"skill:activate",
 			"canvas:read",
 			"canvas:write",
+			"playbook:read",
+			"playbook:write",
 		];
 		const sandbox = new Sandbox(logger);
 		sandbox.registerManifest({
