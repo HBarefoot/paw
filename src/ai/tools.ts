@@ -314,6 +314,12 @@ export class ToolRegistry {
 				return "vercel:read";
 			return "vercel:write";
 		}
+		// Playbook tools: load is a read; create/update are writes (the save is
+		// approval-gated + applied on approve, but the tool touches the workspace).
+		// Split read vs write so the fallthrough can never silently deny them.
+		if (tool.name === "load_playbook") return "playbook:read";
+		if (tool.name === "create_playbook" || tool.name === "update_playbook")
+			return "playbook:write";
 		if (tool.name === "spawn_agent") return "agent:spawn";
 		if (tool.name === "delegate_task") return "agent:delegate";
 		if (tool.name === "activate_skill") return "skill:activate";

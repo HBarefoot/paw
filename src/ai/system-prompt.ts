@@ -54,6 +54,7 @@ export function buildSystemPrompt(opts?: {
 	customPrompt?: string;
 	memoryContext?: string;
 	skillCatalog?: string;
+	playbookCatalog?: string;
 	agentDepth?: number;
 	feedbackContext?: string;
 	brandBrief?: string;
@@ -77,6 +78,10 @@ export function buildSystemPrompt(opts?: {
 
 	if (opts?.skillCatalog) {
 		prompt += opts.skillCatalog;
+	}
+
+	if (opts?.playbookCatalog) {
+		prompt += opts.playbookCatalog;
 	}
 
 	if (opts?.feedbackContext) {

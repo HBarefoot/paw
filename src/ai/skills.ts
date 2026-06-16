@@ -73,7 +73,10 @@ export class SkillManager {
 			if (
 				tool.name === "spawn_agent" ||
 				tool.name === "activate_skill" ||
-				tool.name === "execute_code"
+				tool.name === "execute_code" ||
+				tool.name === "load_playbook" ||
+				tool.name === "create_playbook" ||
+				tool.name === "update_playbook"
 			)
 				return "core";
 			return "files";
