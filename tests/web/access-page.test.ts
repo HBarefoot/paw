@@ -16,6 +16,11 @@ function render(overrides: Partial<AccessPageProps> = {}): string {
 		persistedIds: [],
 		ownerIds: [],
 		open: false,
+		security: {
+			enforcePermissions: true,
+			allowUnapprovedExternal: false,
+			rateLimiting: { enabled: true, maxRequestsPerMinute: 30 },
+		},
 	};
 	return String(AccessPage({ ...base, ...overrides }));
 }
@@ -112,6 +117,38 @@ describe("access page", () => {
 			"Access control is not active",
 		);
 	});
+
+	test("page title reads 'Security & Access'", () => {
+		expect(render()).toContain("Security &amp; Access");
+	});
+});
+
+describe("access page — relocated Security settings form", () => {
+	test("renders the security form posting to /api/security with all four fields", () => {
+		const html = render();
+		expect(html).toContain('action="/api/security"');
+		expect(html).toContain('name="security.enforcePermissions"');
+		expect(html).toContain('name="security.allowUnapprovedExternal"');
+		expect(html).toContain('name="security.rateLimiting.enabled"');
+		expect(html).toContain('name="security.rateLimiting.maxRequestsPerMinute"');
+	});
+
+	test("toggle values reflect the security config props", () => {
+		const html = render({
+			security: {
+				enforcePermissions: false,
+				allowUnapprovedExternal: true,
+				rateLimiting: { enabled: false, maxRequestsPerMinute: 99 },
+			},
+		});
+		expect(html).toContain(
+			'<input type="hidden" name="security.allowUnapprovedExternal" value="true">',
+		);
+		expect(html).toContain(
+			'<input type="hidden" name="security.enforcePermissions" value="false">',
+		);
+		expect(html).toContain("99");
+	});
 });
 
 describe("recognizedIds — robust to a PARTIAL live security config", () => {
@@ -193,11 +230,12 @@ describe("access page — inline script (template-trap guard)", () => {
 		expect(() => new Function(script)).not.toThrow();
 	});
 
-	test("exposes acApprove + acRevoke + acPersist + acOwner, no backslash escapes / regex", () => {
+	test("exposes acApprove + acRevoke + acPersist + acOwner + pawToggle, no backslash escapes / regex", () => {
 		expect(script).toContain("acApprove");
 		expect(script).toContain("acRevoke");
 		expect(script).toContain("acPersist");
 		expect(script).toContain("acOwner");
+		expect(script).toContain("function pawToggle");
 		expect(script).toContain("/api/access/approve");
 		expect(script).toContain("/api/access/revoke");
 		expect(script).toContain("/api/access/persist");

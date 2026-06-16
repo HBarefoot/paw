@@ -21,13 +21,6 @@ interface AgentEntry {
 	maxRoundtrips?: number;
 }
 
-export interface SecretStatus {
-	id: string;
-	label: string;
-	set: boolean;
-	fromEnv?: boolean;
-}
-
 export interface SettingsPageProps {
 	config: PawConfig;
 	saved?: boolean;
@@ -35,7 +28,6 @@ export interface SettingsPageProps {
 	icpSampleCities?: string[];
 	icpExcludeBrands?: string[];
 	agents?: AgentEntry[];
-	secrets?: SecretStatus[];
 	brands: Brand[];
 	defaultAvatar?: string;
 }
@@ -73,17 +65,14 @@ const SECTIONS: Array<{
 	form: boolean;
 }> = [
 	{ key: "general", label: "General", icon: "settings", form: true },
-	{ key: "agent", label: "Agent", icon: "sparkles", form: true },
+	{ key: "agent", label: "Persona", icon: "sparkles", form: true },
 	{ key: "provider", label: "AI Provider", icon: "zap", form: true },
-	{ key: "memory", label: "Memory", icon: "memory", form: true },
 	{ key: "web", label: "Web & Canvas", icon: "globe", form: true },
-	{ key: "security", label: "Security", icon: "shield", form: true },
 	{ key: "advanced", label: "Advanced", icon: "cpu", form: true },
-	{ key: "agents", label: "Agents", icon: "flow", form: true },
+	{ key: "agents", label: "Specialists", icon: "flow", form: true },
 	{ key: "integrations", label: "Integrations", icon: "flow", form: true },
 	{ key: "brand", label: "Brand Kit", icon: "brand", form: false },
 	{ key: "companion", label: "Companion", icon: "user", form: false },
-	{ key: "secrets", label: "Secrets", icon: "key", form: false },
 ];
 
 // --- small controls -------------------------------------------------------
@@ -600,21 +589,6 @@ function settingsScript(defaultAvatar: string): string {
       cur = cur || ${JSON.stringify(defaultAvatar)};
       document.querySelectorAll(".avatar-pick").forEach(function (b) { b.classList.toggle("active", b.dataset.avatar === cur); });
     })();
-
-    // --- Secrets rotation ---
-    window.rotateSecret = async function (id, label) {
-      var value = await pawModal.prompt("Rotate " + label, "Paste the new secret value. It will be written to the vault / credentials file and never displayed again.", "");
-      if (!value) return;
-      try {
-        var res = await fetch("/api/credentials/" + encodeURIComponent(id), {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ value: value })
-        });
-        if (!res.ok) { var err = await res.json().catch(function () { return {}; }); pawModal.alert("Rotate failed", err.error || ("HTTP " + res.status)); return; }
-        pawModal.alert("Rotated", label + " was updated. Restart the process for the running provider to pick up the new value.");
-        setTimeout(function () { window.location.reload(); }, 400);
-      } catch (e) { pawModal.alert("Rotate failed", String(e)); }
-    };
   `;
 }
 
@@ -633,7 +607,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 	icpSampleCities,
 	icpExcludeBrands,
 	agents,
-	secrets,
 	brands,
 	defaultAvatar,
 }) => {
@@ -683,7 +656,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 							</div>
 						</Section>
 
-						<Section keyName="agent" title="Agent" icon="sparkles" form>
+						<Section keyName="agent" title="Persona" icon="sparkles" form>
 							<div class="field">
 								<label>System prompt</label>
 								<textarea
@@ -729,48 +702,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 							</div>
 						</Section>
 
-						<Section keyName="memory" title="Memory" icon="memory" form>
-							<div class="set-group">
-								<Row
-									label="Memory enabled"
-									desc="Persist facts across sessions."
-								>
-									<Bool name="memory.enabled" value={config.memory.enabled} />
-								</Row>
-								<Row
-									label="Auto-extract facts"
-									desc="Pull durable facts from conversations."
-								>
-									<Bool
-										name="memory.autoExtract"
-										value={config.memory.autoExtract}
-									/>
-								</Row>
-								<Row label="Vector weight" desc="Hybrid recall weighting.">
-									<input
-										type="number"
-										name="memory.vectorWeight"
-										value={String(config.memory.vectorWeight)}
-										step="0.1"
-										min="0"
-										max="1"
-										class="input-sm"
-									/>
-								</Row>
-								<Row label="FTS weight">
-									<input
-										type="number"
-										name="memory.ftsWeight"
-										value={String(config.memory.ftsWeight)}
-										step="0.1"
-										min="0"
-										max="1"
-										class="input-sm"
-									/>
-								</Row>
-							</div>
-						</Section>
-
 						<Section keyName="web" title="Web & Canvas" icon="globe" form>
 							<div class="set-group">
 								<Row label="Host" desc="Restart required.">
@@ -786,46 +717,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 										type="number"
 										value={String(config.web.port)}
 										disabled
-										class="input-sm"
-									/>
-								</Row>
-							</div>
-						</Section>
-
-						<Section keyName="security" title="Security" icon="shield" form>
-							<div class="set-group">
-								<Row
-									label="Enforce permissions"
-									desc="Sandbox tool execution against manifests."
-								>
-									<Bool
-										name="security.enforcePermissions"
-										value={config.security.enforcePermissions}
-									/>
-								</Row>
-								<Row
-									label="⚠ Allow unapproved external users"
-									desc="DANGER — when ON, unrecognized Slack users command the agent with no approval. Leave OFF to require approval."
-								>
-									<Bool
-										name="security.allowUnapprovedExternal"
-										value={config.security.allowUnapprovedExternal}
-									/>
-								</Row>
-								<Row label="Rate limiting">
-									<Bool
-										name="security.rateLimiting.enabled"
-										value={config.security.rateLimiting.enabled}
-									/>
-								</Row>
-								<Row label="Max requests / min">
-									<input
-										type="number"
-										name="security.rateLimiting.maxRequestsPerMinute"
-										value={String(
-											config.security.rateLimiting.maxRequestsPerMinute,
-										)}
-										min="1"
 										class="input-sm"
 									/>
 								</Row>
@@ -883,7 +774,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 							</div>
 						</Section>
 
-						<Section keyName="agents" title="Agents" icon="flow" form>
+						<Section keyName="agents" title="Specialists" icon="flow" form>
 							<p class="text-muted text-sm" style="margin-bottom:12px">
 								Agent presets suggested when the main AI uses spawn_agent.
 								Changes require a restart.
@@ -1319,58 +1210,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({
 								</button>
 							))}
 						</div>
-					</Section>
-
-					<Section keyName="secrets" title="Secrets" icon="key" form={false}>
-						<p class="text-sm text-muted mb-md">
-							API keys are never displayed. Use <strong>Rotate</strong> to
-							replace the stored value.
-						</p>
-						{secrets && secrets.length > 0 ? (
-							<table class="tbl">
-								<thead>
-									<tr>
-										<th>Service</th>
-										<th>Status</th>
-										<th>Source</th>
-										<th style="text-align:right">Actions</th>
-									</tr>
-								</thead>
-								<tbody>
-									{secrets.map((s) => (
-										<tr key={s.id}>
-											<td>
-												<span class="nm">{s.label}</span>
-											</td>
-											<td>
-												<span class={`pill-badge ${s.set ? "green" : "dim"}`}>
-													{s.set ? "Set" : "Missing"}
-												</span>
-											</td>
-											<td class="dim">
-												{s.fromEnv ? "env var" : "credentials file"}
-											</td>
-											<td style="text-align:right">
-												<button
-													type="button"
-													class="btn-secondary btn-sm"
-													data-secret-id={s.id}
-													data-secret-label={s.label}
-													onclick="rotateSecret(this.dataset.secretId, this.dataset.secretLabel)"
-												>
-													Rotate
-												</button>
-											</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
-						) : (
-							<div class="empty-state">
-								{raw(icon("key", 30))}
-								<div class="t">No secrets configured</div>
-							</div>
-						)}
 					</Section>
 				</div>
 			</div>

@@ -1132,6 +1132,7 @@ export function createWebApp(
 				enabled: kernel.vault.enabled,
 				secrets: kernel.vault.enabled ? kernel.vault.list() : [],
 				slots: buildVaultSlots(),
+				providerCredentials: computeSecretStatuses(),
 			}),
 		);
 	});
@@ -1191,8 +1192,58 @@ export function createWebApp(
 				envIds: ac ? securityEnvIds().ownerUserIds : [],
 				// OFF banner: access control isn't enforcing on external channels.
 				open: liveConfig().security?.allowUnapprovedExternal === true,
+				// Security config (relocated from /settings). liveConfig().security may
+				// be partial (shallow override merge), so read each field defensively
+				// with the schema defaults as fallbacks.
+				security: {
+					enforcePermissions: liveConfig().security?.enforcePermissions ?? true,
+					allowUnapprovedExternal:
+						liveConfig().security?.allowUnapprovedExternal ?? false,
+					rateLimiting: {
+						enabled: liveConfig().security?.rateLimiting?.enabled ?? true,
+						maxRequestsPerMinute:
+							liveConfig().security?.rateLimiting?.maxRequestsPerMinute ?? 30,
+					},
+				},
 			}),
 		);
+	});
+
+	// Security configuration (relocated from the /settings "Security" tab). Writes
+	// ONLY the security subtree via saveConfigOverrides (additive deep-merge) — it
+	// must never wholesale-replace the agents subtree the way POST /settings does,
+	// or a security save would wipe the agents roster. Deep-merge also preserves
+	// security.allowedUsers / ownerUserIds (not in this form).
+	app.post("/api/security", async (c) => {
+		try {
+			const body = await c.req.parseBody();
+			const cur = liveConfig().security;
+			const max = Number(body["security.rateLimiting.maxRequestsPerMinute"]);
+			saveConfigOverrides({
+				security: {
+					enforcePermissions: body["security.enforcePermissions"] === "true",
+					allowUnapprovedExternal:
+						body["security.allowUnapprovedExternal"] === "true",
+					rateLimiting: {
+						enabled: body["security.rateLimiting.enabled"] === "true",
+						maxRequestsPerMinute: Number.isFinite(max)
+							? max
+							: (cur?.rateLimiting?.maxRequestsPerMinute ?? 30),
+					},
+				},
+			});
+			const session = c.get("session") as { user_id: number } | undefined;
+			authManager.audit.log(
+				"config.update",
+				session?.user_id ?? null,
+				{ fields: ["security"] },
+				getClientIp(c),
+			);
+			return c.redirect("/access");
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return c.json({ error: message }, 400);
+		}
 	});
 
 	app.post("/api/access/approve", async (c) => {
@@ -1879,7 +1930,6 @@ export function createWebApp(
 			config: liveConfig(),
 			...getIcpConfig(),
 			agents: getAgentEntries(),
-			secrets: computeSecretStatuses(),
 			brands: listBrands(kernel.database),
 			defaultAvatar: liveConfig().companion?.avatar ?? "gel",
 		};
@@ -3603,7 +3653,53 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			}
 		}
 
-		return c.html(MemoryPage({ memories, stats, query: q, category }));
+		const mem = liveConfig().memory;
+		return c.html(
+			MemoryPage({
+				memories,
+				stats,
+				memoryConfig: {
+					enabled: mem.enabled,
+					autoExtract: mem.autoExtract,
+					vectorWeight: mem.vectorWeight,
+					ftsWeight: mem.ftsWeight,
+				},
+				query: q,
+				category,
+			}),
+		);
+	});
+
+	// Memory configuration (relocated from the /settings "Memory" tab). Writes
+	// ONLY the memory subtree via saveConfigOverrides (additive deep-merge) — it
+	// must never wholesale-replace the agents subtree the way POST /settings does,
+	// or a memory save would wipe the agents roster.
+	app.post("/api/memory/config", async (c) => {
+		try {
+			const body = await c.req.parseBody();
+			const cur = liveConfig().memory;
+			const vw = Number(body["memory.vectorWeight"]);
+			const fw = Number(body["memory.ftsWeight"]);
+			saveConfigOverrides({
+				memory: {
+					enabled: body["memory.enabled"] === "true",
+					autoExtract: body["memory.autoExtract"] === "true",
+					vectorWeight: Number.isFinite(vw) ? vw : cur.vectorWeight,
+					ftsWeight: Number.isFinite(fw) ? fw : cur.ftsWeight,
+				},
+			});
+			const session = c.get("session") as { user_id: number } | undefined;
+			authManager.audit.log(
+				"config.update",
+				session?.user_id ?? null,
+				{ fields: ["memory"] },
+				getClientIp(c),
+			);
+			return c.redirect("/memory");
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return c.json({ error: message }, 400);
+		}
 	});
 
 	// --- Search Page ---
