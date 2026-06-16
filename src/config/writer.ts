@@ -103,6 +103,16 @@ function writeOverridesObject(obj: Record<string, unknown>): void {
 		if (Object.keys(store).length === 0) delete obj.store;
 	}
 
+	// Same infra rule for the persistent playbooks root: driven by
+	// PAW_PLAYBOOKS_ROOT (applied after the file merge). Persisting it would let a
+	// stale config.json push authored playbooks off the /data volume, wiping them
+	// on redeploy. Strip it (and an emptied workspace).
+	if (obj.workspace && typeof obj.workspace === "object") {
+		const ws = obj.workspace as Record<string, unknown>;
+		delete ws.playbooksRoot;
+		if (Object.keys(ws).length === 0) delete obj.workspace;
+	}
+
 	const CONFIG_FILE = configFile();
 	mkdirSync(configDir(), { recursive: true });
 	writeFileSync(CONFIG_FILE, JSON.stringify(obj, null, 2), "utf-8");

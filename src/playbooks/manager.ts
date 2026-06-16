@@ -25,6 +25,11 @@ export interface PlaybookEntry {
 	body: string;
 	/** Where it was loaded from: a flat `<name>.md` or a `<name>/SKILL.md` folder. */
 	source: "file" | "folder";
+	/**
+	 * Which root it came from: `bundled` (read-only, in-image/repo) or `writable`
+	 * (the persistent runtime root). On a name collision the `writable` entry wins.
+	 */
+	origin: "bundled" | "writable";
 }
 
 /** A playbook name: a filesystem-safe slug (lowercase, dash-separated). */
@@ -128,42 +133,86 @@ const NOOP_LOGGER: Logger = {
 } as unknown as Logger;
 
 export class PlaybookManager {
-	private readonly dir: string;
+	/** Read-only root: the in-image / repo-shipped (bundled) playbooks. */
+	private readonly bundledDir: string;
+	/** Persistent root: where runtime-authored playbooks are written. */
+	private readonly writableDir: string;
 	private readonly logger: Logger;
 	private playbooks = new Map<string, PlaybookEntry>();
 
-	constructor(opts: { dir: string; logger?: Logger }) {
-		this.dir = resolve(opts.dir);
+	/**
+	 * Two roots, read-merged into one catalog:
+	 * - `bundledDir` (read-only): the in-image / repo dir where committed
+	 *   playbooks ship (e.g. `onboarding.md`).
+	 * - `writableDir` (persistent): a `/data`-resolved dir for runtime-authored
+	 *   playbooks; `upsert` always writes here so authored playbooks survive a
+	 *   Railway redeploy.
+	 *
+	 * Pass `dir` instead for the single-root (dev/local) case — both roots
+	 * collapse to it, preserving the pre-two-root behavior.
+	 */
+	constructor(opts: {
+		dir?: string;
+		bundledDir?: string;
+		writableDir?: string;
+		logger?: Logger;
+	}) {
+		const bundled = opts.bundledDir ?? opts.dir;
+		const writable = opts.writableDir ?? opts.dir ?? bundled;
+		if (!bundled || !writable) {
+			throw new Error(
+				"PlaybookManager needs a `dir` or both `bundledDir`+`writableDir`.",
+			);
+		}
+		this.bundledDir = resolve(bundled);
+		this.writableDir = resolve(writable);
 		this.logger = opts.logger ?? NOOP_LOGGER;
 	}
 
-	/** The resolved playbooks directory (created on demand). */
+	/** The resolved WRITABLE playbooks directory (created on first write). */
 	get directory(): string {
-		return this.dir;
+		return this.writableDir;
+	}
+
+	/** The resolved bundled (read-only) playbooks directory. */
+	get bundledDirectory(): string {
+		return this.bundledDir;
 	}
 
 	/**
-	 * (Re)scan the playbooks dir into the in-memory catalog. Supports both
-	 * `playbooks/<name>.md` and `playbooks/<name>/SKILL.md`. A file missing
-	 * frontmatter is skipped with a warning, never fatal.
+	 * (Re)scan BOTH roots into the one in-memory catalog. Supports both
+	 * `playbooks/<name>.md` and `playbooks/<name>/SKILL.md`. The bundled root is
+	 * read first, then the writable root — so on a name collision the writable
+	 * (authored) entry wins. A file missing frontmatter is skipped with a warning,
+	 * never fatal; a missing root is a silent no-op.
 	 */
 	scan(): void {
 		this.playbooks.clear();
-		if (!existsSync(this.dir)) return;
+		this.scanRoot(this.bundledDir, "bundled");
+		// Writable second so an authored override beats a bundled playbook of the
+		// same name. Skip the redundant pass when both roots are the same dir.
+		if (this.writableDir !== this.bundledDir) {
+			this.scanRoot(this.writableDir, "writable");
+		}
+	}
+
+	private scanRoot(dir: string, origin: "bundled" | "writable"): void {
+		if (!existsSync(dir)) return;
 		let entries: import("node:fs").Dirent[];
 		try {
-			entries = readdirSync(this.dir, { withFileTypes: true });
+			entries = readdirSync(dir, { withFileTypes: true });
 		} catch (err) {
-			this.logger.warn("Playbook scan failed", { error: String(err) });
+			this.logger.warn("Playbook scan failed", { dir, error: String(err) });
 			return;
 		}
 		for (const ent of entries) {
 			try {
 				if (ent.isFile() && ent.name.endsWith(".md")) {
-					this.loadFromPath(join(this.dir, ent.name), "file");
+					this.loadFromPath(join(dir, ent.name), "file", origin);
 				} else if (ent.isDirectory()) {
-					const skillPath = join(this.dir, ent.name, "SKILL.md");
-					if (existsSync(skillPath)) this.loadFromPath(skillPath, "folder");
+					const skillPath = join(dir, ent.name, "SKILL.md");
+					if (existsSync(skillPath))
+						this.loadFromPath(skillPath, "folder", origin);
 				}
 			} catch (err) {
 				this.logger.warn("Skipping unreadable playbook", {
@@ -174,7 +223,11 @@ export class PlaybookManager {
 		}
 	}
 
-	private loadFromPath(path: string, source: "file" | "folder"): void {
+	private loadFromPath(
+		path: string,
+		source: "file" | "folder",
+		origin: "bundled" | "writable",
+	): void {
 		const raw = readFileSync(path, "utf-8");
 		const parsed = parseFrontmatter(raw);
 		if (!parsed) {
@@ -187,7 +240,13 @@ export class PlaybookManager {
 			this.logger.warn("Playbook missing name/description — skipped", { path });
 			return;
 		}
-		this.playbooks.set(name, { name, description, body: parsed.body, source });
+		this.playbooks.set(name, {
+			name,
+			description,
+			body: parsed.body,
+			source,
+			origin,
+		});
 	}
 
 	has(name: string): boolean {
@@ -284,9 +343,11 @@ export class PlaybookManager {
 	}
 
 	/**
-	 * Persist a playbook to `playbooks/<name>.md` AND refresh the live catalog
-	 * (hot) so it is immediately loadable in the same session. Called by the
-	 * approval-queue executor AFTER a human approves the save.
+	 * Persist a playbook to the WRITABLE root (`<writableDir>/<name>.md`) — never
+	 * the bundled root — AND refresh the live catalog (hot) so it is immediately
+	 * loadable in the same session. Writing to the persistent root is what lets an
+	 * authored playbook survive a redeploy. Called by the approval-queue executor
+	 * AFTER a human approves the save.
 	 */
 	async upsert(draft: DraftPlaybook): Promise<PlaybookEntry> {
 		const name = draft.name.trim();
@@ -294,8 +355,8 @@ export class PlaybookManager {
 		if (!PLAYBOOK_NAME_RE.test(name)) {
 			throw new Error(`invalid playbook name "${name}".`);
 		}
-		mkdirSync(this.dir, { recursive: true });
-		const path = join(this.dir, `${name}.md`);
+		mkdirSync(this.writableDir, { recursive: true });
+		const path = join(this.writableDir, `${name}.md`);
 		await Bun.write(
 			path,
 			renderPlaybook({ name, description, body: draft.body }),
@@ -305,6 +366,7 @@ export class PlaybookManager {
 			description,
 			body: draft.body.trimEnd(),
 			source: "file",
+			origin: "writable",
 		};
 		this.playbooks.set(name, entry);
 		return entry;

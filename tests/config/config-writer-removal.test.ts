@@ -63,6 +63,27 @@ describe("replaceConfigOverride — honors removals (Bug A)", () => {
 		expect(reread.mcpServers).toEqual({ a: { transport: "http" } });
 	});
 
+	test("the writer never persists workspace.playbooksRoot (infra guard)", () => {
+		seed({ store: { dbPath: "/somewhere/paw.db" } });
+		// Try to persist a workspace subtree that includes the infra-only root.
+		replaceConfigOverride("workspace", {
+			path: ".",
+			playbooksRoot: "/data/playbooks",
+		});
+		const disk = onDisk();
+		const ws = disk.workspace as Record<string, unknown>;
+		// playbooksRoot must be stripped (it's driven by PAW_PLAYBOOKS_ROOT)...
+		expect(ws.playbooksRoot).toBeUndefined();
+		// ...while a legitimate sibling survives.
+		expect(ws.path).toBe(".");
+	});
+
+	test("workspace is dropped entirely when playbooksRoot was its only key", () => {
+		seed({});
+		replaceConfigOverride("workspace", { playbooksRoot: "/data/playbooks" });
+		expect(onDisk().workspace).toBeUndefined();
+	});
+
 	test("deleteConfigOverride removes a dotted key, preserving siblings", () => {
 		seed({ github: { enabled: true, appId: "123" } });
 		deleteConfigOverride("github.appId");

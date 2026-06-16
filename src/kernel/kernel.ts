@@ -497,9 +497,18 @@ export class Kernel {
 		// create/update are approval-gated through the SAME queue as canvas edits and
 		// written + hot-added to the live catalog on approve via the executor below,
 		// so a playbook authored mid-session is loadable later in that same session.
-		// The dir lives under the workspace root (same root file_read/file_list use).
+		// TWO roots: bundled (read-only, in-image/repo) under the workspace root
+		// (same root file_read/file_list use) where committed playbooks ship; and a
+		// persistent writable root (PAW_PLAYBOOKS_ROOT → workspace.playbooksRoot,
+		// e.g. /data/playbooks on Railway) where authored playbooks are written so
+		// they survive redeploys. Unset = both collapse to the bundled dir (dev).
+		const bundledPlaybooksDir = resolve(config.workspace.path || ".", "playbooks");
+		const writablePlaybooksDir = config.workspace.playbooksRoot
+			? resolve(config.workspace.playbooksRoot)
+			: bundledPlaybooksDir;
 		this.playbookManager = new PlaybookManager({
-			dir: resolve(config.workspace.path || ".", "playbooks"),
+			bundledDir: bundledPlaybooksDir,
+			writableDir: writablePlaybooksDir,
 			logger: createLogger("playbooks"),
 		});
 		this.playbookManager.scan();
@@ -519,7 +528,8 @@ export class Kernel {
 			return { saved: entry.name, mode: p.mode ?? "save" };
 		});
 		this.logger.info("Playbooks initialized", {
-			dir: this.playbookManager.directory,
+			bundledDir: this.playbookManager.bundledDirectory,
+			writableDir: this.playbookManager.directory,
 			count: this.playbookManager.names.length,
 		});
 

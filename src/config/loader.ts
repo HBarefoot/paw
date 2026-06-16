@@ -223,6 +223,10 @@ function resolvedInfraOverrides(): Record<string, unknown> {
 	const out: Record<string, unknown> = {};
 	if (env.PAW_DB_PATH) out.store = { dbPath: env.PAW_DB_PATH };
 	if (env.PAW_CANVAS_ROOT) out.web = { canvas: { root: env.PAW_CANVAS_ROOT } };
+	// Persistent root for runtime-authored playbooks — same /data-volume concern
+	// as the DB/canvas: a stale config.json must not push it off-volume.
+	if (env.PAW_PLAYBOOKS_ROOT)
+		out.workspace = { playbooksRoot: env.PAW_PLAYBOOKS_ROOT };
 	return out;
 }
 
