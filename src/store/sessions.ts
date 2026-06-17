@@ -140,6 +140,28 @@ export function getSessionOwnedBy(
 	);
 }
 
+/** Read-only single-session lookup that mirrors listRecentSessionsForUser's
+ *  visibility: the session is returned when the user owns it OR it lives in a
+ *  shared channel (slack/cron/system) — so cron/scheduled output that's listed
+ *  for every admin is also openable. For OPEN/VIEW paths ONLY; every mutation
+ *  (delete/rename/fork) must keep using getSessionOwnedBy (strict ownership) so
+ *  one admin can't alter another's private session. */
+export function getSessionVisibleTo(
+	db: Database,
+	sessionId: string,
+	userId: string,
+): Session | null {
+	const placeholders = SHARED_SESSION_CHANNELS.map(() => "?").join(", ");
+	return (
+		db
+			.query<Session, [string, string, ...string[]]>(
+				`SELECT * FROM sessions
+				 WHERE id = ? AND (user_id = ? OR channel IN (${placeholders}))`,
+			)
+			.get(sessionId, userId, ...SHARED_SESSION_CHANNELS) ?? null
+	);
+}
+
 export interface SessionWithMessages {
 	session: Session;
 	messages: Array<{

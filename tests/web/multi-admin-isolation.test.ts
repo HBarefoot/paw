@@ -3,10 +3,12 @@ import { getDb, closeDb } from "../../src/store/db.js";
 import {
 	listRecentSessionsForUser,
 	getSessionOwnedBy,
+	getSessionVisibleTo,
 	deleteSessionOwnedBy,
 	updateSessionTitleOwnedBy,
 	forkSessionOwnedBy,
 } from "../../src/store/sessions.js";
+import { getSessionMessages } from "../../src/store/messages.js";
 import { MemoryStore } from "../../src/memory/store.js";
 import { unlinkSync } from "node:fs";
 
@@ -152,6 +154,68 @@ describe("Per-admin isolation (C-NEW-1)", () => {
 		);
 		expect(ok).not.toBeNull();
 		expect(ok?.newSessionId).toBe("s-forked-ok");
+	});
+
+	// Regression: shared-channel sessions (cron/slack/system) are LISTED for every
+	// admin but were not OPENABLE — the read routes used strict getSessionOwnedBy,
+	// so a cron session (user_id="system") 404'd as "Session not found".
+	// getSessionVisibleTo mirrors the list's visibility for the read/open paths.
+	test("getSessionVisibleTo opens shared-channel (cron/slack) sessions for any web admin, and messages load", () => {
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id) VALUES (?, ?, ?)",
+			["s-cron-open", "cron", "system"],
+		);
+		db.run(
+			"INSERT OR REPLACE INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)",
+			["m-cron-1", "s-cron-open", "assistant", "Morning briefing output"],
+		);
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id) VALUES (?, ?, ?)",
+			["s-slack-open", "slack", "U99999999"],
+		);
+
+		// The cron session is openable even though it's owned by "system"...
+		const cron = getSessionVisibleTo(db, "s-cron-open", "web-1");
+		expect(cron).not.toBeNull();
+		expect(cron?.channel).toBe("cron");
+		// ...and its messages load (the detail/messages routes' second step).
+		const msgs = getSessionMessages(db, "s-cron-open", 100_000);
+		expect(msgs.map((m) => m.content)).toContain("Morning briefing output");
+		// Slack sessions open too, for a different admin.
+		expect(getSessionVisibleTo(db, "s-slack-open", "web-2")).not.toBeNull();
+		// Pre-change behavior: strict ownership refused this (the bug).
+		expect(getSessionOwnedBy(db, "s-cron-open", "web-1")).toBeNull();
+	});
+
+	test("getSessionVisibleTo still refuses another admin's private (web) session", () => {
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id) VALUES (?, ?, ?)",
+			["s-priv-web2", "web", "web-2"],
+		);
+		// web-1 cannot open web-2's private web session...
+		expect(getSessionVisibleTo(db, "s-priv-web2", "web-1")).toBeNull();
+		// ...but the owner can.
+		const own = getSessionVisibleTo(db, "s-priv-web2", "web-2");
+		expect(own).not.toBeNull();
+		expect(own?.user_id).toBe("web-2");
+	});
+
+	test("mutations on a shared-channel session stay refused for a non-owner", () => {
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id, title) VALUES (?, ?, ?, ?)",
+			["s-cron-mut", "cron", "system", "Original"],
+		);
+		// A web admin is NOT the owner ("system"), so delete/rename stay refused...
+		expect(deleteSessionOwnedBy(db, "s-cron-mut", "web-1")).toBe(false);
+		expect(updateSessionTitleOwnedBy(db, "s-cron-mut", "Hacked", "web-1")).toBe(
+			false,
+		);
+		// ...even though the session is openable.
+		expect(getSessionVisibleTo(db, "s-cron-mut", "web-1")).not.toBeNull();
+		// And it's untouched.
+		expect(getSessionOwnedBy(db, "s-cron-mut", "system")?.title).toBe(
+			"Original",
+		);
 	});
 
 	test("memory store records ownerUserId; list filters by it", async () => {
