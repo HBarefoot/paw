@@ -11,6 +11,15 @@
   /* ===== RESET ===== */
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
+  /* Soft cross-document fade between the server-rendered full-page navigations
+     (progressive enhancement — ignored where unsupported). color-scheme + the
+     painted ground (layout.tsx) are what actually kill the white flash; this
+     just smooths the swap. Disabled under reduced-motion. */
+  @view-transition { navigation: auto; }
+  @media (prefers-reduced-motion: reduce) {
+    ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+  }
+
   /* ===== Vendored fonts (offline / CSP-clean — served from 'self', no CDN) ===== */
   @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/space-grotesk-400.woff2") format("woff2"); }
   @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/space-grotesk-500.woff2") format("woff2"); }
@@ -1585,20 +1594,31 @@
   .self-start { align-self: flex-start; }
   .max-w-form { max-width: 640px; }
 
-  /* ===== MODAL ===== */
+  /* ===== MODAL =====
+     Open/close are driven by JS toggling `.open` (in) / `.closing` (out) so both
+     directions animate; the element is appended closed, flipped to .open next
+     frame, and removed on transitionend (see modalScript in layout.tsx). */
   .paw-modal-overlay {
     position: fixed; inset: 0; z-index: 9999;
     background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
     display: flex; align-items: center; justify-content: center;
-    animation: pawModalFadeIn 150ms ease;
+    opacity: 0;
+    transition: opacity 170ms ease-out;
   }
-  @keyframes pawModalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .paw-modal-overlay.open { opacity: 1; }
+  .paw-modal-overlay.closing { opacity: 0; }
   .paw-modal {
     background: var(--bg-card); border: 1px solid var(--border-primary);
     border-radius: var(--radius-lg); padding: 24px; min-width: 340px; max-width: 480px;
-    box-shadow: var(--shadow-lg); animation: pawModalSlideIn 150ms ease;
+    box-shadow: var(--shadow-lg);
+    opacity: 0; transform: translateY(-8px) scale(0.97);
+    transition: opacity 170ms ease-out, transform 170ms ease-out;
   }
-  @keyframes pawModalSlideIn { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
+  .paw-modal-overlay.open .paw-modal { opacity: 1; transform: translateY(0) scale(1); }
+  .paw-modal-overlay.closing .paw-modal { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  @media (prefers-reduced-motion: reduce) {
+    .paw-modal-overlay, .paw-modal { transition: none; }
+  }
   .paw-modal-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary); }
   .paw-modal-body { font-size: 14px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 20px; }
   .paw-modal-body input, .paw-modal-body textarea {
