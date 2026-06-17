@@ -50,8 +50,29 @@ export function pawMark(size = 17): string {
 const modalScript = `
 window.pawModal = {
   _overlay: null,
+  _reducedMotion: function() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  },
   _close: function() {
-    if (this._overlay) { this._overlay.remove(); this._overlay = null; }
+    var overlay = this._overlay;
+    if (!overlay) return;
+    // Detach the reference immediately so Escape / a new _show see "closed"
+    // even while the close animation is still running.
+    this._overlay = null;
+    if (this._reducedMotion()) { overlay.remove(); return; }
+    var removed = false;
+    function done() {
+      if (removed) return;
+      removed = true;
+      overlay.removeEventListener("transitionend", onEnd);
+      overlay.remove();
+    }
+    function onEnd(e) { if (e.target === overlay) done(); }
+    overlay.addEventListener("transitionend", onEnd);
+    overlay.classList.remove("open");
+    overlay.classList.add("closing");
+    // Fallback so a missed transitionend can never leak the overlay.
+    setTimeout(done, 280);
   },
   // HTML-escape a string so it can be safely embedded into an attribute
   // or used as text content. C-NEW-2: callers pass model-derived text
@@ -67,7 +88,9 @@ window.pawModal = {
       .replace(/'/g, "&#39;");
   },
   _show: function(title, body, actions) {
-    this._close();
+    // Replacing an existing modal is instant (no out-animation stacking); the
+    // animated path is the user-initiated _close().
+    if (this._overlay) { this._overlay.remove(); this._overlay = null; }
     var overlay = document.createElement("div");
     overlay.className = "paw-modal-overlay";
     overlay.onclick = function(e) { if (e.target === overlay) pawModal._close(); };
@@ -120,6 +143,15 @@ window.pawModal = {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
     this._overlay = overlay;
+    // Animate in: appended in the closed state, flip to .open on the next frame
+    // so the transition runs. Reduced motion → open immediately (no transition).
+    if (this._reducedMotion()) {
+      overlay.classList.add("open");
+    } else {
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() { overlay.classList.add("open"); });
+      });
+    }
     var firstBtn = modal.querySelector(".btn-confirm");
     if (firstBtn) firstBtn.focus();
     return modal;
@@ -299,7 +331,15 @@ export const Layout: FC<LayoutProps> = ({
 			    declared via @font-face in ds.css — no external CDN (CSP-clean, offline). */}
 			<title>{title} - Paw</title>
 			{raw(
-				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");if(localStorage.getItem("paw-sidebar-collapsed")==="1")document.documentElement.classList.add("sidebar-collapsed");window.__pawToggleSidebar=function(){var c=document.documentElement.classList.toggle("sidebar-collapsed");try{localStorage.setItem("paw-sidebar-collapsed",c?"1":"0");}catch(e){}};window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`,
+				`<script>(function(){var t=localStorage.getItem("paw-theme")||"system";var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(dark)document.documentElement.classList.add("dark");document.documentElement.style.colorScheme=dark?"dark":"light";if(localStorage.getItem("paw-sidebar-collapsed")==="1")document.documentElement.classList.add("sidebar-collapsed");window.__pawToggleSidebar=function(){var c=document.documentElement.classList.toggle("sidebar-collapsed");try{localStorage.setItem("paw-sidebar-collapsed",c?"1":"0");}catch(e){}};window.__pawSetTheme=function(t){localStorage.setItem("paw-theme",t);var dark=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.documentElement.style.colorScheme=dark?"dark":"light";document.querySelectorAll(".theme-btn").forEach(function(b){b.classList.toggle("active",b.dataset.theme===t);});};window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){var t=localStorage.getItem("paw-theme")||"system";if(t==="system")__pawSetTheme("system");});})()</script>`,
+			)}
+			{/* Belt-and-suspenders against the inter-navigation white flash: paint
+			    the theme ground immediately, before ds.css loads, so the very first
+			    paint is never white. Hexes match ds.css --bg-primary (light/dark);
+			    the synchronous script above already put .dark on <html>, and set
+			    color-scheme so the browser's own canvas/scrollbars match too. */}
+			{raw(
+				"<style>:root{background-color:#f4f7f5}:root.dark{background-color:#050708}</style>",
 			)}
 			{/* The ~1700-line design system is served from 'self' as a real
 			    stylesheet (src/web/public/app/ds.css), NOT inlined from a JS template
