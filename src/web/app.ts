@@ -77,7 +77,7 @@ import {
 	deleteSessionOwnedBy,
 	forkSessionAtMessage,
 	forkSessionOwnedBy,
-	getSessionOwnedBy,
+	getSessionVisibleTo,
 	getSessionWithMessages,
 	listRecentSessions,
 	listRecentSessionsForUser,
@@ -3920,7 +3920,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		const id = c.req.param("id");
 		const userId = getRequestUserId(c);
 		if (!userId) return c.text("Unauthorized", 401);
-		const session = getSessionOwnedBy(kernel.database, id, userId);
+		const session = getSessionVisibleTo(kernel.database, id, userId);
 		if (!session) return c.text("Session not found", 404);
 		// High limit: the detail page shows full history (the old
 		// getSessionWithMessages had no limit; the default 50 would truncate).
@@ -5180,7 +5180,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		const id = c.req.param("id");
 		const userId = getRequestUserId(c);
 		if (!userId) return c.json({ error: "Unauthorized" }, 401);
-		const session = getSessionOwnedBy(kernel.database, id, userId);
+		const session = getSessionVisibleTo(kernel.database, id, userId);
 		if (!session) return c.json({ error: "Session not found" }, 404);
 		// High limit: return full history (parity with the old
 		// getSessionWithMessages, which had no LIMIT).
@@ -5213,7 +5213,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		const id = c.req.param("id");
 		const userId = getRequestUserId(c);
 		if (!userId) return c.json({ error: "Unauthorized" }, 401);
-		const session = getSessionOwnedBy(kernel.database, id, userId);
+		const session = getSessionVisibleTo(kernel.database, id, userId);
 		if (!session) return c.json({ error: "Session not found" }, 404);
 
 		const rawFormat = (c.req.query("format") ?? "md").toLowerCase();
