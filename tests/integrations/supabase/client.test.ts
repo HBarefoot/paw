@@ -6,7 +6,10 @@ import {
 	assertCanvasTable,
 } from "../../../src/integrations/supabase/client.js";
 import { createSupabaseTools } from "../../../src/integrations/supabase/tools.js";
-import { SupabaseError } from "../../../src/integrations/supabase/types.js";
+import {
+	SupabaseError,
+	type SupabaseFilter,
+} from "../../../src/integrations/supabase/types.js";
 
 const BASE_URL = "https://proj.supabase.co";
 const KEY = "service-role-key";
@@ -473,5 +476,169 @@ describe("supabase tools forward the schema param to the client", () => {
 		mockFetch(200, []);
 		await tool("supabase_select").handler({ table: "users" });
 		expect(calls[0].headers?.["Accept-Profile"]).toBeUndefined();
+	});
+});
+
+// Fail-loud hardening: a broken tool call must never read as an empty/zero
+// success. (fix/supabase-tools-fail-loud)
+describe("fail-loud: filter validation at the boundary", () => {
+	// Cast helper: deliberately build the malformed filters these tests exercise.
+	const bad = (f: Record<string, unknown>): SupabaseFilter[] =>
+		[f] as unknown as SupabaseFilter[];
+
+	const tool = (name: string) => {
+		const t = createSupabaseTools(makeClient()).find((x) => x.name === name);
+		if (!t) throw new Error(`tool not found: ${name}`);
+		return t;
+	};
+
+	test("select with a filter missing 'op' throws naming the column, and builds NO request", async () => {
+		mockFetch(200, []);
+		await expect(
+			makeClient().select("leads", {
+				filters: bad({ column: "status", value: "new" }),
+			}),
+		).rejects.toThrow(/filter for column 'status' is missing a valid 'op'/);
+		// Nothing was built → no `undefined.` ever reached a query string.
+		expect(calls.length).toBe(0);
+	});
+
+	test("select with an invalid 'op' throws and builds no request", async () => {
+		mockFetch(200, []);
+		await expect(
+			makeClient().select("leads", {
+				filters: bad({ column: "status", op: "contains", value: "x" }),
+			}),
+		).rejects.toThrow(/missing a valid 'op'/);
+		expect(calls.length).toBe(0);
+	});
+
+	test("update and delete with a bad filter throw before any request", async () => {
+		mockFetch(200, []);
+		await expect(
+			makeClient().update("leads", bad({ column: "status", value: "new" }), {
+				status: "seen",
+			}),
+		).rejects.toThrow(/missing a valid 'op'/);
+		await expect(
+			makeClient().delete("leads", bad({ column: "status", value: "x" })),
+		).rejects.toThrow(/missing a valid 'op'/);
+		expect(calls.length).toBe(0);
+	});
+
+	test("a missing 'value' throws, but 0 is a legitimate value (builds a real query, no undefined.)", async () => {
+		mockFetch(200, []);
+		await expect(
+			makeClient().select("leads", {
+				filters: bad({ column: "count", op: "eq" }),
+			}),
+		).rejects.toThrow(/missing a 'value'/);
+		expect(calls.length).toBe(0);
+		// 0 must NOT be treated as missing.
+		await makeClient().select("leads", {
+			filters: [{ column: "count", op: "eq", value: 0 }],
+		});
+		expect(calls[0].url).toContain("count=eq.0");
+		expect(calls[0].url).not.toContain("undefined.");
+	});
+
+	test("the supabase_select tool surfaces a bad filter as a clear is_error (not a false empty)", async () => {
+		mockFetch(200, []);
+		const res = await tool("supabase_select").handler({
+			table: "leads",
+			filters: [{ column: "status", value: "new" }],
+		});
+		expect(res.is_error).toBe(true);
+		expect(res.content).toContain("status");
+		expect(res.content).toContain("op");
+		expect(res.content).not.toContain("undefined.");
+		expect(calls.length).toBe(0);
+	});
+});
+
+describe("fail-loud: zero-row writes are explicit (affected + note)", () => {
+	const tool = (name: string) => {
+		const t = createSupabaseTools(makeClient()).find((x) => x.name === name);
+		if (!t) throw new Error(`tool not found: ${name}`);
+		return t;
+	};
+
+	test("update matching 0 rows returns affected:0 with a note (not a bare [])", async () => {
+		mockFetch(200, []);
+		const res = await tool("supabase_update").handler({
+			table: "leads",
+			filters: [{ column: "id", op: "eq", value: 999 }],
+			values: { status: "seen" },
+		});
+		expect(res.is_error).toBeFalsy();
+		const parsed = JSON.parse(res.content as string);
+		expect(parsed.affected).toBe(0);
+		expect(parsed.rows).toEqual([]);
+		expect(parsed.note).toContain("0 rows matched");
+	});
+
+	test("delete matching 0 rows returns affected:0 with a note", async () => {
+		mockFetch(200, []);
+		const res = await tool("supabase_delete").handler({
+			table: "leads",
+			filters: [{ column: "id", op: "eq", value: 999 }],
+		});
+		const parsed = JSON.parse(res.content as string);
+		expect(parsed.affected).toBe(0);
+		expect(parsed.note).toContain("0 rows matched");
+	});
+
+	test("a write that DID affect rows reports affected:n and omits the note", async () => {
+		mockFetch(200, [{ id: 1 }, { id: 2 }]);
+		const res = await tool("supabase_update").handler({
+			table: "leads",
+			filters: [{ column: "status", op: "eq", value: "new" }],
+			values: { status: "seen" },
+		});
+		const parsed = JSON.parse(res.content as string);
+		expect(parsed.affected).toBe(2);
+		expect(parsed.note).toBeUndefined();
+	});
+
+	test("insert affecting 0 rows surfaces affected:0 with an insert-specific note", async () => {
+		mockFetch(201, []);
+		const res = await tool("supabase_insert").handler({
+			table: "leads",
+			rows: [{ email: "a@b.com" }],
+		});
+		const parsed = JSON.parse(res.content as string);
+		expect(parsed.affected).toBe(0);
+		expect(parsed.note).toContain("0 rows were inserted");
+	});
+});
+
+describe("fail-loud: supabase_insert forwards schema → Content-Profile", () => {
+	const tool = (name: string) => {
+		const t = createSupabaseTools(makeClient()).find((x) => x.name === name);
+		if (!t) throw new Error(`tool not found: ${name}`);
+		return t;
+	};
+
+	test("supabase_insert with schema pins the write to that schema (writes the canvas yard)", async () => {
+		mockFetch(201, [{ id: 1 }]);
+		const res = await tool("supabase_insert").handler({
+			table: "leads",
+			rows: [{ email: "a@b.com" }],
+			schema: "canvas",
+		});
+		expect(res.is_error).toBeFalsy();
+		expect(calls[0].headers?.["Content-Profile"]).toBe("canvas");
+		expect(calls[0].url).toBe(`${BASE_URL}/rest/v1/leads`);
+		const parsed = JSON.parse(res.content as string);
+		expect(parsed.affected).toBe(1);
+	});
+
+	test("supabase_insert without schema sends no Content-Profile (public unchanged)", async () => {
+		mockFetch(201, [{ id: 1 }]);
+		await tool("supabase_insert").handler({
+			table: "leads",
+			rows: [{ email: "a@b.com" }],
+		});
+		expect(calls[0].headers?.["Content-Profile"]).toBeUndefined();
 	});
 });
