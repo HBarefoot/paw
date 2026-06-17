@@ -46,7 +46,7 @@ export function createSupabaseTools(
 	const filterSchema = {
 		type: "array",
 		description:
-			"Filters combined with AND. Each maps to a PostgREST operator; no raw query strings.",
+			'Filters combined with AND. Each filter is { "column": "status", "op": "eq", "value": "new" }; op ∈ eq,neq,gt,lt,like,in. No raw query strings.',
 		items: {
 			type: "object",
 			properties: {
@@ -80,10 +80,24 @@ export function createSupabaseTools(
 			"Non-default PostgREST schema to target, e.g. 'canvas' (the agent's own provisioned tables). Omit for the public schema.",
 	} as const;
 
+	// Shape a write (insert/update/delete) result so a zero-row write can't read
+	// as success. With `Prefer: return=representation` a write that matched/created
+	// nothing returns [] — surface `affected` explicitly and, on 0, an unmissable
+	// note so the model never reports a phantom "done." Stays a normal result.
+	const writeResult = (rows: unknown, zeroNote: string): ToolResult => {
+		const list = Array.isArray(rows) ? rows : [];
+		const payload: Record<string, unknown> = {
+			rows: list,
+			affected: list.length,
+		};
+		if (list.length === 0) payload.note = zeroNote;
+		return { content: JSON.stringify(payload) };
+	};
+
 	const select: ToolDefinition = {
 		name: "supabase_select",
 		description:
-			"Read rows from a Supabase table via PostgREST. Optionally pick columns, apply filters (eq/neq/gt/lt/like/in), and cap the row count.",
+			'Read rows from a Supabase table via PostgREST. Optionally pick columns, apply filters, and cap the row count. Each filter is { "column": "status", "op": "eq", "value": "new" }; op ∈ eq,neq,gt,lt,like,in. Pass schema:"canvas" to read the agent\'s own tables.',
 		plugin: "supabase",
 		input_schema: {
 			type: "object",
@@ -127,7 +141,7 @@ export function createSupabaseTools(
 	const insert: ToolDefinition = {
 		name: "supabase_insert",
 		description:
-			"Insert one or more rows into a Supabase table. Returns the inserted rows.",
+			'Insert one or more rows into a Supabase table. Returns { rows, affected }. Pass schema:"canvas" to write to the agent\'s own tables (omit for public).',
 		plugin: "supabase",
 		input_schema: {
 			type: "object",
@@ -138,6 +152,7 @@ export function createSupabaseTools(
 					items: { type: "object" },
 					description: "Rows to insert (array of column→value objects).",
 				},
+				schema: schemaProp,
 			},
 			required: ["table", "rows"],
 		},
@@ -145,9 +160,14 @@ export function createSupabaseTools(
 			const table = input.table as string;
 			try {
 				const rows = await audited("supabase.insert", { table }, () =>
-					client.insert(table, input.rows as Record<string, unknown>[]),
+					client.insert(table, input.rows as Record<string, unknown>[], {
+						schema: asSchema(input),
+					}),
 				);
-				return { content: JSON.stringify({ rows }) };
+				return writeResult(
+					rows,
+					"0 rows were inserted — nothing landed. Check the schema (canvas vs public) and that the row data is valid.",
+				);
 			} catch (err) {
 				return errResult(err);
 			}
@@ -157,7 +177,7 @@ export function createSupabaseTools(
 	const update: ToolDefinition = {
 		name: "supabase_update",
 		description:
-			"Update rows in a Supabase table that match the given filters. Filters are REQUIRED — an unfiltered update is refused.",
+			'Update rows in a Supabase table that match the given filters. Filters are REQUIRED — an unfiltered update is refused. Each filter is { "column": "status", "op": "eq", "value": "new" }; op ∈ eq,neq,gt,lt,like,in. Returns { rows, affected }; affected:0 means nothing matched. Pass schema:"canvas" for the agent\'s own tables.',
 		plugin: "supabase",
 		input_schema: {
 			type: "object",
@@ -183,7 +203,10 @@ export function createSupabaseTools(
 						{ schema: asSchema(input) },
 					),
 				);
-				return { content: JSON.stringify({ rows }) };
+				return writeResult(
+					rows,
+					"0 rows matched the filter — nothing was written/updated. Check the filter and the schema (canvas vs public).",
+				);
 			} catch (err) {
 				return errResult(err);
 			}
@@ -193,7 +216,7 @@ export function createSupabaseTools(
 	const del: ToolDefinition = {
 		name: "supabase_delete",
 		description:
-			"Delete rows from a Supabase table that match the given filters. Filters are REQUIRED — an unfiltered delete is refused.",
+			'Delete rows from a Supabase table that match the given filters. Filters are REQUIRED — an unfiltered delete is refused. Each filter is { "column": "status", "op": "eq", "value": "new" }; op ∈ eq,neq,gt,lt,like,in. Returns { rows, affected }; affected:0 means nothing matched. Pass schema:"canvas" for the agent\'s own tables.',
 		plugin: "supabase",
 		input_schema: {
 			type: "object",
@@ -210,7 +233,10 @@ export function createSupabaseTools(
 				const rows = await audited("supabase.delete", { table }, () =>
 					client.delete(table, asFilters(input), { schema: asSchema(input) }),
 				);
-				return { content: JSON.stringify({ rows }) };
+				return writeResult(
+					rows,
+					"0 rows matched the filter — nothing was written/updated. Check the filter and the schema (canvas vs public).",
+				);
 			} catch (err) {
 				return errResult(err);
 			}

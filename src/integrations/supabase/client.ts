@@ -7,6 +7,7 @@
  */
 
 import {
+	SUPABASE_FILTER_OPS,
 	type SupabaseClientConfig,
 	SupabaseError,
 	type SupabaseFilter,
@@ -310,10 +311,22 @@ function assertFilters(
 	}
 }
 
-/** Map the typed filter subset to PostgREST `column=op.value` query params. */
+/** Map the typed filter subset to PostgREST `column=op.value` query params.
+ * Every filter is validated FIRST so a missing/invalid `op` or `value` throws a
+ * clear error instead of interpolating `undefined`/`null` into the query string
+ * (the `status=undefined.new` phantom-empty bug). This is the single chokepoint
+ * for select/update/delete. */
 function encodeFilters(filters: SupabaseFilter[]): string[] {
 	return filters.map((f) => {
 		const col = assertIdentifier("column", f.column);
+		if (!f.op || !SUPABASE_FILTER_OPS.includes(f.op)) {
+			throw new Error(
+				`filter for column '${col}' is missing a valid 'op'; expected one of ${SUPABASE_FILTER_OPS.join(",")}`,
+			);
+		}
+		if (f.value === undefined || f.value === null) {
+			throw new Error(`filter for column '${col}' is missing a 'value'.`);
+		}
 		if (f.op === "in") {
 			const vals = Array.isArray(f.value) ? f.value : [f.value];
 			const list = vals.map((v) => encodeURIComponent(String(v))).join(",");
