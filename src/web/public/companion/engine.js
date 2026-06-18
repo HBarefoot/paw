@@ -18,6 +18,12 @@
 	const PENDING_TTL_MS = 6000; // drop a relay spawn the feed never confirmed
 	const POLL_BUSY_MS = 700; // poll fast while a swarm is live…
 	const POLL_IDLE_MS = 2000; // …and lazily when idle
+	// How long the main face stays "working" after the last feed poll that
+	// reported in-flight ops. Debounces stop (so it doesn't flicker between bursts)
+	// and is fail-open: if an op-end is ever missed, the face self-idles after this
+	// window instead of sticking. Kept > POLL_IDLE_MS so continuous background work
+	// stays lit even across the lazy cadence.
+	const FEED_BUSY_LINGER_MS = 2500;
 
 	function freshMachine() {
 		return window.CompanionExpression
@@ -61,6 +67,12 @@
 		this._errAt = 0; // last tool-error time…
 		this._errRecovered = true; // …cleared once a later tool succeeds
 		this._seenFailed = {}; // sub-agent ids already counted as failed (latch once)
+		// Feed-driven "is anything running" — the SAME signal the Agent Ops panel
+		// uses (ops feed `working`/`inflight`). Lit by _ingestFeed for ANY in-flight
+		// op (foreground chat, cron, sub-agent, background tool), so the face no
+		// longer relies solely on the foreground chat's paw:tool relay. Held until
+		// FEED_BUSY_LINGER_MS after the last working poll (debounce + fail-open).
+		this._feedBusyUntil = 0;
 		this._cursor = 0;
 		this._timer = null;
 		this._stopped = false;
@@ -124,11 +136,14 @@
 			.catch(() => {})
 			.finally(() => {
 				if (self._stopped) return;
-				// Poll fast while any agent is live/pending so orbs track the chat.
+				// Poll fast while any agent is live/pending so orbs track the chat,
+				// or while the feed reports in-flight work, so background/cron bursts
+				// are caught promptly and the busy linger keeps refreshing.
 				const live =
 					self.pendingSpawns.size > 0 ||
 					self.agents.some((a) => !a.done) ||
-					self.subDone.size > 0;
+					self.subDone.size > 0 ||
+					Date.now() < self._feedBusyUntil;
 				self._timer = setTimeout(
 					() => self._poll(),
 					live ? POLL_BUSY_MS : POLL_IDLE_MS,
@@ -139,6 +154,18 @@
 	CompanionEngine.prototype._ingestFeed = function (data, now) {
 		now = now || Date.now();
 		if (typeof data.cursor === "number") this._cursor = data.cursor;
+		// Live activity from the SAME source the Agent Ops dashboard consumes: the
+		// feed's `working` flag (in-flight ops OR a live sub-agent) plus a defensive
+		// check of the `inflight` array. This is what makes the avatar reflect
+		// background/cron/sub-agent work and fast bursts — not just the foreground
+		// chat's paw:tool relay. Refreshes the linger on every working poll.
+		const feedWorking =
+			data.working === true ||
+			(Array.isArray(data.inflight) && data.inflight.length > 0);
+		if (feedWorking) {
+			this._feedBusyUntil = now + FEED_BUSY_LINGER_MS;
+			this.lastActiveAt = now; // keep the idle→sleepy decay from firing mid-work
+		}
 		// Pending GitHub approvals → "waiting" (feed read-path, default 0 when off).
 		if (typeof data.pendingApprovals === "number") {
 			this.setWaiting(data.pendingApprovals, data.pendingApprovalsLabel);
@@ -336,7 +363,9 @@
 		}
 		const agents = this._buildAgents(now);
 		const snapshot = {
-			busy: this.active.size > 0,
+			// Busy = a foreground skill is lit (paw:tool relay) OR the ops feed
+			// reports live work (cron/sub-agent/background) within the linger window.
+			busy: this.active.size > 0 || now < this._feedBusyUntil,
 			thinking: now < this.thinkingUntil,
 			waiting: this.waiting,
 			waitingLabel: this.waitingLabel,

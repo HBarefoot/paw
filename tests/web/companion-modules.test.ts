@@ -570,6 +570,44 @@ describe("companion static modules", () => {
 		expect(e2.getState(now).expression).toBe("worried");
 	});
 
+	// REGRESSION (fix/companion-avatar-activity-sync): the main face must animate
+	// from the SAME in-flight-ops signal the Agent Ops panel uses — not only the
+	// foreground chat's paw:tool relay — so cron / sub-agent / background work
+	// (which never reaches the chat stream) still lights the avatar.
+	test("engine: feed `working` flag drives the busy/working face (background work)", () => {
+		const win: Record<string, unknown> = {};
+		runModule(win, {}, read("expression.js"));
+		runModule(win, {}, read("engine.js"));
+		const Engine = win.CompanionEngine as new () => {
+			_ingestFeed: (data: unknown, now?: number) => void;
+			getState: (now?: number) => { busy: boolean; expression: string };
+		};
+		const now = 5000;
+
+		// A feed reporting in-flight work (no chat paw:tool, no sub-agent orbs) —
+		// pre-fix this left the face idle.
+		const e = new Engine();
+		e._ingestFeed({ working: true, agents: [], inflight: [] }, now);
+		expect(e.getState(now).busy).toBe(true);
+		expect(e.getState(now).expression).toBe("working");
+
+		// The `inflight` array alone also counts (defensive path).
+		const e2 = new Engine();
+		e2._ingestFeed({ inflight: [{ id: -1, op: "exec_command" }] }, now);
+		expect(e2.getState(now).busy).toBe(true);
+
+		// It settles back to idle once the feed drains and the linger elapses
+		// (fail-open: a missed op-end can't leave the face stuck animating).
+		const later = now + 2500 /* FEED_BUSY_LINGER_MS */ + 1;
+		expect(e.getState(later).busy).toBe(false);
+		expect(e.getState(later).expression).toBe("idle");
+
+		// An empty/idle feed never lights the face.
+		const e3 = new Engine();
+		e3._ingestFeed({ working: false, agents: [], inflight: [] }, now);
+		expect(e3.getState(now).busy).toBe(false);
+	});
+
 	// ── Sub-agent fidelity (PR B) ──
 	type AgentEngine = new () => {
 		ingestTool: (m: unknown, now?: number) => void;
