@@ -22,3 +22,4 @@ llms-full.txt
 # design tool) — reference only; the shipped design notes live in docs/design/.
 Interactive Data Visualization/
 Skill Layout Design/
+docs/prompts/PROMPT-*
