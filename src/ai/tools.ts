@@ -121,6 +121,7 @@ export class ToolRegistry {
 		name: string,
 		input: Record<string, unknown>,
 		sessionId?: string,
+		opts?: { bypassApproval?: boolean },
 	): Promise<ToolResult> {
 		const tool = this.tools.get(name);
 		const start = Date.now();
@@ -189,7 +190,7 @@ export class ToolRegistry {
 				});
 				return { content: msg, is_error: true };
 			}
-			if (verdict.kind === "require-approval") {
+			if (verdict.kind === "require-approval" && !opts?.bypassApproval) {
 				const id = hooks.enqueueApproval(ctx, verdict.reason);
 				const msg = id
 					? `Queued for human approval (id=${id}): ${verdict.reason}. The operator has been notified — re-issue this call once it's approved.`
@@ -205,6 +206,10 @@ export class ToolRegistry {
 				});
 				return { content: msg, is_error: true };
 			}
+			// bypassApproval: this call has ALREADY been human-approved (execute-on-
+			// approve re-running the exact gated tool). Treat a `require-approval`
+			// verdict as allow — do NOT re-enqueue (that would loop a fresh approval)
+			// — but keep every other check above (sandbox, `deny`, `modify`) intact.
 			// allow — adopt any input a `modify` hook threaded through.
 			effectiveInput = hookedInput;
 			ctx.input = hookedInput;

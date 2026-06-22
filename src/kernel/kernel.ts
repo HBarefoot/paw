@@ -471,6 +471,13 @@ export class Kernel {
 				origin: ctx.origin,
 			}),
 		);
+		// Execute-on-approve: when an `external` (hook-gated) approval is approved,
+		// re-run the EXACT stored tool — bypassing ONLY the approval verdict (every
+		// other sandbox/permission check still applies). The queue calls this back;
+		// it never imports the tool registry.
+		approvals.setToolExecutor((tool, input, sessionId) =>
+			this.executeApprovedTool(tool, input, sessionId),
+		);
 		// Resolve approvals decided from any channel surface (web modal, Slack
 		// buttons). Authorization is done here — plugins can't see the access
 		// controller. approve()/reject() emit `approval:resolved`.
@@ -1351,6 +1358,30 @@ export class Kernel {
 			provider: this.config.provider,
 			plugins: this.plugins.map((p) => p.name),
 		});
+	}
+
+	/**
+	 * Execute-on-approve runner: re-run an already-approved tool with its exact
+	 * stored params, bypassing ONLY the approval verdict (sandbox + all other
+	 * checks still apply, and no fresh approval is enqueued — see ToolRegistry
+	 * `bypassApproval`). Returns a flat ok/result/error the approvals queue maps
+	 * to `executed`/`failed`. Runs under the original requesting session so
+	 * sandbox/skill context matches the gated call. Never throws.
+	 */
+	private async executeApprovedTool(
+		tool: string,
+		input: Record<string, unknown>,
+		sessionId?: string,
+	): Promise<{ ok: boolean; result?: unknown; error?: string }> {
+		try {
+			const res = await this.toolRegistry.execute(tool, input, sessionId, {
+				bypassApproval: true,
+			});
+			if (res.is_error) return { ok: false, error: res.content };
+			return { ok: true, result: res.content };
+		} catch (err) {
+			return { ok: false, error: err instanceof Error ? err.message : String(err) };
+		}
 	}
 
 	/**
