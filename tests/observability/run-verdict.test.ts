@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
 	type VerdictTask,
 	type VerdictToolEntry,
+	claimAssertsCompletion,
 	computeRunVerdict,
 	recordRunVerdict,
+	sqliteStamp,
 } from "../../src/observability/run-verdict.js";
 
 function tool(
@@ -206,5 +208,57 @@ describe("recordRunVerdict orchestrator — fail-open", () => {
 		});
 		expect(rows.length).toBe(1);
 		expect(notes.length).toBe(0);
+	});
+});
+
+describe("claimAssertsCompletion — negation false-positives", () => {
+	test("honest no-op (negated completion verbs) does NOT assert completion", () => {
+		const claim =
+			"No new leads today — no task created, no fabricated work.";
+		expect(claimAssertsCompletion(claim)).toBe(false);
+	});
+
+	test("a genuine, non-negated completion verb still asserts completion", () => {
+		expect(
+			claimAssertsCompletion("Created the company and marked the lead seen."),
+		).toBe(true);
+	});
+
+	test("n't contractions count as negators", () => {
+		expect(claimAssertsCompletion("I haven't created anything.")).toBe(false);
+	});
+
+	test("a non-negated verb later in the text still wins", () => {
+		// "no leads found" is negated, but "sent the digest" is a real claim.
+		expect(
+			claimAssertsCompletion("No leads found, but I sent the digest."),
+		).toBe(true);
+	});
+
+	test("negation false-positive does not flag an honest no-op run as suspect", () => {
+		const r = computeRunVerdict({
+			claimText: "No new leads today — no task created, no fabricated work.",
+			toolEntries: [tool("find_many_companies", 0)],
+			sessionTasks: [],
+		});
+		expect(r.verdict).toBe("ok");
+		expect(r.flags).not.toContain("success_claim_no_write");
+	});
+});
+
+describe("sqliteStamp — run-window timestamp normalization", () => {
+	test("converts ISO to the SQLite datetime('now') shape", () => {
+		expect(sqliteStamp("2026-06-22T16:59:00.123Z")).toBe("2026-06-22 16:59:00");
+	});
+
+	test("a SQLite-format row at/after run start is in-window; raw ISO would drop it", () => {
+		const startedAt = "2026-06-22T16:59:00.123Z";
+		// What the DB default datetime('now') actually writes (space, no ms/zone).
+		const rowCreatedAt = "2026-06-22 16:59:01";
+		// The bug: comparing against the raw ISO string excludes every row
+		// (space 0x20 < 'T' 0x54 at index 10).
+		expect(rowCreatedAt >= startedAt).toBe(false);
+		// The fix: normalize first, and the in-window row is included.
+		expect(rowCreatedAt >= sqliteStamp(startedAt)).toBe(true);
 	});
 });
