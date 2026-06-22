@@ -9,6 +9,8 @@ import {
 	updateTask,
 	upsertCronCard,
 } from "../../src/store/agent-work.js";
+import { createTaskTools } from "../../src/tools/task-tools.js";
+import type { ToolDefinition } from "../../src/types/message.js";
 
 // Phase 2c — cron-as-cards. A cron `prompt` run gets ONE durable board card per
 // JOB (linked by created_by="cron:<jobId>"), cycling working → done/blocked/failed
@@ -232,5 +234,114 @@ describe("full cron-card cycle", () => {
 		const card = getTask(db, id);
 		expect(card?.status).toBe("working");
 		expect(card?.evidence).toBeNull();
+	});
+});
+
+// Phase 2c.1 — the verdict advance is now a FALLBACK: it only acts on a card
+// still in `working` (the agent didn't self-report). A self-closed card keeps the
+// agent's real evidence; the generic verdict summary must never overwrite it.
+describe("advanceCardOnVerdict — fallback only (self-report wins)", () => {
+	function selfClosed(db: Database, status: "done" | "blocked", patch: object) {
+		const id = upsertCronCard(db, {
+			jobId: "job-1",
+			jobName: "Daily lead sweep",
+			sessionId: "cron-job-1-1000",
+		}) as string;
+		updateTask(db, id, { status, ...patch });
+		return id;
+	}
+
+	test("no-op on a self-closed `done` card — real evidence preserved", () => {
+		const db = freshDb();
+		const id = selfClosed(db, "done", {
+			evidence: "created 3 CRM records (re-query: 3)",
+		});
+		const status = advanceCardOnVerdict(
+			db,
+			"cron-job-1-1000",
+			"ok",
+			"Autonomous run ok — 1 tool call(s)",
+		);
+		expect(status).toBeNull();
+		const card = getTask(db, id);
+		expect(card?.status).toBe("done");
+		expect(card?.evidence).toBe("created 3 CRM records (re-query: 3)"); // NOT clobbered
+	});
+
+	test("no-op on a self-closed `blocked` card — status + error preserved", () => {
+		const db = freshDb();
+		const id = selfClosed(db, "blocked", { error: "playbook missing" });
+		expect(
+			advanceCardOnVerdict(db, "cron-job-1-1000", "ok", "ok summary"),
+		).toBeNull();
+		const card = getTask(db, id);
+		expect(card?.status).toBe("blocked");
+		expect(card?.error).toBe("playbook missing");
+	});
+
+	test("still advances a `working` card by verdict (fallback unchanged)", () => {
+		const db = freshDb();
+		const id = upsertCronCard(db, {
+			jobId: "job-1",
+			jobName: "x",
+			sessionId: "cron-job-1-1000",
+		}) as string;
+		expect(
+			advanceCardOnVerdict(db, "cron-job-1-1000", "ok", "verdict ok"),
+		).toBe("done");
+		expect(getTask(db, id)?.evidence).toBe("verdict ok");
+	});
+});
+
+describe("cron self-report via the real task_update tool (integration)", () => {
+	function taskUpdateTool(db: Database): ToolDefinition {
+		const tool = createTaskTools({ database: db }).find(
+			(t) => t.name === "task_update",
+		);
+		if (!tool) throw new Error("task_update tool not found");
+		return tool;
+	}
+
+	test("self-report wins: card done with REAL evidence; verdict no-ops", async () => {
+		const db = freshDb();
+		const id = upsertCronCard(db, {
+			jobId: "job-1",
+			jobName: "Daily lead sweep",
+			sessionId: "cron-job-1-1000",
+		}) as string;
+
+		// Agent proves its work on the durable card mid-run.
+		const res = await taskUpdateTool(db).handler({
+			id,
+			status: "done",
+			evidence: "re-query: 3 created, 5 flipped to seen",
+		});
+		expect(res.is_error).toBeFalsy();
+
+		// The verdict fallback fires AFTER and must not overwrite the real evidence.
+		expect(
+			advanceCardOnVerdict(
+				db,
+				"cron-job-1-1000",
+				"ok",
+				"Autonomous run ok — 4 tool call(s)",
+			),
+		).toBeNull();
+		const card = getTask(db, id);
+		expect(card?.status).toBe("done");
+		expect(card?.evidence).toBe("re-query: 3 created, 5 flipped to seen");
+	});
+
+	test("silent cron (no self-report) still ends per the verdict", () => {
+		const db = freshDb();
+		const id = upsertCronCard(db, {
+			jobId: "job-2",
+			jobName: "Quiet job",
+			sessionId: "cron-job-2-1000",
+		}) as string;
+		expect(
+			advanceCardOnVerdict(db, "cron-job-2-1000", "suspect", "phantom success"),
+		).toBe("blocked");
+		expect(getTask(db, id)?.error).toContain("phantom");
 	});
 });

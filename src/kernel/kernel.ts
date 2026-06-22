@@ -87,7 +87,6 @@ import {
 	listEscalatable,
 	markEscalated,
 	parkCardForApproval,
-	upsertCronCard,
 } from "../store/agent-work.js";
 import { createTaskTools } from "../tools/task-tools.js";
 import { recordRunVerdict } from "../observability/run-verdict.js";
@@ -106,6 +105,7 @@ import type {
 import { createWebApp } from "../web/app.js";
 import { startWebServer } from "../web/server.js";
 import { EventBus } from "./bus.js";
+import { prepareCronCardRun } from "./cron-card-run.js";
 import {
 	type GateReason,
 	accessControlOffWarning,
@@ -672,23 +672,29 @@ export class Kernel {
 			this.cronScheduler.setPromptHandler(async (jobId, jobName, prompt) => {
 				const sessionId = `cron-${jobId}-${Date.now()}`;
 				// Phase 2c — cron-as-cards: surface this autonomous run on the board
-				// BEFORE it starts, so it's `working` and findable by an
-				// approval:pending. One durable card per job (upsert). Fail-open.
-				if (this.config.tasks.enabled) {
-					upsertCronCard(
-						this.db,
-						{ jobId, jobName, sessionId, prompt },
-						(err) =>
-							this.logger.warn("Cron card upsert failed", {
-								error: String(err),
-							}),
-					);
-				}
+				// BEFORE it starts (so it's `working` and findable by an
+				// approval:pending), one durable card per job. Phase 2c.1 — also tell
+				// the run which card it's on + demand evidence, and pre-activate the
+				// `tasks` skill so it can self-report. Fail-open (bare prompt on error).
+				const content = this.config.tasks.enabled
+					? prepareCronCardRun({
+							db: this.db,
+							skillManager: this.skillManager,
+							jobId,
+							jobName,
+							sessionId,
+							prompt,
+							onError: (err) =>
+								this.logger.warn("Cron card prepare failed", {
+									error: String(err),
+								}),
+						})
+					: prompt;
 				await this.bus.emit("message:inbound", {
 					id: crypto.randomUUID(),
 					sessionId,
 					channel: "cron",
-					content: prompt,
+					content,
 					user: { id: "system", name: "Cron Scheduler" },
 					timestamp: new Date().toISOString(),
 				});

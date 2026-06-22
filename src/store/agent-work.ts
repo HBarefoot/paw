@@ -420,15 +420,18 @@ export function upsertCronCard(
 }
 
 /**
- * Advance a cron card when its run completes, driven by the #182 run verdict
- * (cron agents don't call task_update, so the evidence gate alone would blanket-
- * block them — the verdict IS the proof-of-work signal):
+ * FALLBACK advance for a cron card whose run completes WITHOUT self-reporting
+ * (Phase 2c.1). Only acts on a card still in `working` — i.e. the agent did not
+ * close it via `task_update`. A self-closed card (`done`/`blocked`/`failed`, with
+ * the agent's REAL evidence) or an approval-parked card (`needs_approval`) is its
+ * owner's; we must never overwrite real evidence with the generic verdict summary.
+ * Driven by the #182 verdict (a silent cron leaves no evidence, so the gate alone
+ * would blanket-block it — the verdict is the proof-of-work signal):
  * - `ok`      → `done` (evidence = the verdict summary; gated move).
  * - `suspect` → `blocked` (phantom success — needs a look).
  * - `error`   → `failed`.
  * - `null`    → `blocked` (verdict unavailable — can't confirm success).
- * No card for this session → no-op. A `needs_approval` card is owned by the
- * approval lane → no-op. Fail-open. Returns the resulting status or null.
+ * No card / not `working` → no-op. Fail-open. Returns the resulting status or null.
  */
 export function advanceCardOnVerdict(
 	db: Database,
@@ -440,7 +443,9 @@ export function advanceCardOnVerdict(
 	try {
 		const card = getBySession(db, sessionId);
 		if (!card) return null;
-		if (card.status === "needs_approval") return null;
+		// Short-circuit BEFORE any write: only a still-`working` card (agent didn't
+		// self-report) gets the verdict fallback.
+		if (card.status !== "working") return null;
 		if (verdict === "ok") {
 			updateTask(db, card.id, { evidence: summary });
 			move(db, card.id, "done", card.position); // gated — evidence set
