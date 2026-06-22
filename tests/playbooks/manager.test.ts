@@ -312,3 +312,21 @@ describe("PlaybookManager.upsert (hot, no re-scan)", () => {
 		expect(reloaded.has("lead-intake")).toBe(true);
 	});
 });
+
+describe("bundled playbooks (repo-shipped)", () => {
+	// The repo's read-only playbooks/ dir, relative to this test file.
+	const bundledDir = join(import.meta.dir, "..", "..", "playbooks");
+
+	test("ships new-prospect-intro so §4 of the lead cron never depends on a runtime-only file", () => {
+		const mgr = new PlaybookManager({ bundledDir, writableDir: dir });
+		mgr.scan();
+		const entry = mgr.get("new-prospect-intro");
+		expect(entry).toBeDefined();
+		expect(entry?.origin).toBe("bundled");
+		// Description must read as a "when to use" so progressive-disclosure recall fires.
+		expect(entry?.description.toLowerCase()).toContain("intro");
+		// The approve-leash discipline must be in the body (draft, never auto-send).
+		expect(entry?.body.toLowerCase()).toContain("draft");
+		expect(entry?.body.toLowerCase()).toContain("never");
+	});
+});
