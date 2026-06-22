@@ -115,6 +115,8 @@ import { createOpenAiApi } from "./routes/openai-api.js";
 import { buildOpsFeed } from "./routes/ops-feed.js";
 import { buildTasksFeed } from "./routes/tasks-feed.js";
 import { listAll as listAllTasks } from "../store/agent-work.js";
+import { buildRunsFeed } from "./routes/runs-feed.js";
+import { listRecentRuns } from "../store/runs.js";
 import { AccessPage, recognizedIds } from "./views/access-page.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
@@ -128,6 +130,7 @@ import { MemoryPage } from "./views/memory-page.js";
 import { NotificationsPage } from "./views/notifications-page.js";
 import { OpsPage } from "./views/ops-page.js";
 import { TasksPage } from "./views/tasks-page.js";
+import { RunsPage } from "./views/runs-page.js";
 import { PromptsPage } from "./views/prompts-page.js";
 import { type SearchHit, SearchPage } from "./views/search-page.js";
 import { SessionDetailPage, SessionsListPage } from "./views/sessions-page.js";
@@ -962,6 +965,21 @@ export function createWebApp(
 	});
 	app.get("/api/tasks/feed", (c) => {
 		return c.json(buildTasksFeed(listAllTasks(kernel.database)));
+	});
+
+	// Run verdicts board (read-only, observability Phase 1) + its live feed.
+	// runs.js polls /api/runs/feed (LIVE rate class); phantom-success/error runs
+	// sort to the top.
+	app.get("/runs", (c) => {
+		// .toString() holds the c.html(JSXNode) TS2769 gate — see /tasks above.
+		const node = RunsPage({
+			assetVersion: ASSET_VERSION,
+			currentPath: "/runs",
+		});
+		return c.html((node ?? "").toString());
+	});
+	app.get("/api/runs/feed", (c) => {
+		return c.json(buildRunsFeed(listRecentRuns(kernel.database, 100)));
 	});
 
 	// Live feed for the Dashboard agent-ops scene. Returns tool calls newer than
@@ -2204,6 +2222,23 @@ export function createWebApp(
 		const file = c.req.param("file");
 		if (!/^[a-z0-9_-]+\.(js|css)$/.test(file)) return c.text("Not found", 404);
 		const p = resolve(import.meta.dir, "public/tasks", file);
+		if (!existsSync(p)) return c.text("Not found", 404);
+		c.header(
+			"Content-Type",
+			file.endsWith(".css")
+				? "text/css; charset=utf-8"
+				: "application/javascript; charset=utf-8",
+		);
+		c.header("Cache-Control", "public, max-age=3600");
+		return c.body(await Bun.file(p).arrayBuffer());
+	});
+
+	// Run verdicts board module + styles. Same whitelist/content-type pattern as
+	// /tasks/static. Read-only board behind /runs.
+	app.get("/runs/static/:file", async (c) => {
+		const file = c.req.param("file");
+		if (!/^[a-z0-9_-]+\.(js|css)$/.test(file)) return c.text("Not found", 404);
+		const p = resolve(import.meta.dir, "public/runs", file);
 		if (!existsSync(p)) return c.text("Not found", 404);
 		c.header(
 			"Content-Type",

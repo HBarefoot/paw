@@ -652,6 +652,31 @@ function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_agent_work_status ON agent_work(status, position);
   `);
 
+	// Run ledger: one denormalized row per completed run holding a deterministic
+	// VERDICT (observability Phase 1). After each run the harness cross-references
+	// the agent's claim (final assistant text) against the tool log + task ledger
+	// and flags phantom success (e.g. "marked the lead seen" with zero successful
+	// mutating tool calls). Advisory only — surfaced on /runs, never blocks a run.
+	// Mirrors the github_pending_actions block above.
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS runs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      channel TEXT,                              -- web | canvas | slack | cron | system
+      user_id TEXT,
+      claim_preview TEXT,                        -- final assistant text, capped ~2000 chars
+      tool_calls INTEGER NOT NULL DEFAULT 0,
+      tool_errors INTEGER NOT NULL DEFAULT 0,
+      verdict TEXT NOT NULL DEFAULT 'ok' CHECK(verdict IN ('ok','suspect','error')),
+      flags TEXT NOT NULL DEFAULT '[]',          -- JSON array of flag strings
+      started_at TEXT,
+      ended_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_runs_verdict ON runs(verdict);
+  `);
+
 	// Backfill: re-parent canvas sessions to the per-admin user_id.
 	// Before per-admin scoping was added (REVIEW-2026-06-09.md C-NEW-1),
 	// canvas sessions were stored with user_id="canvas-user". Now they

@@ -1,0 +1,112 @@
+/* Run verdicts board (read-only). Uses DS tokens so it themes with the active
+   brand. A simple vertical list of cards; verdict drives the left accent + badge
+   color. Verdict colors are semantic (fixed), not brand-tinted. */
+
+.runs-list {
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+	padding: 14px 15px;
+}
+
+.runs-empty {
+	color: var(--ink-dim, #8a978f);
+	font-size: 13px;
+	padding: 10px 0;
+	opacity: 0.6;
+}
+
+.run-card {
+	background: var(--panel, rgba(255, 255, 255, 0.03));
+	border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+	border-left-width: 3px;
+	border-radius: 8px;
+	padding: 9px 11px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.run-card.verdict-ok {
+	border-left-color: var(--success, #3fe08f);
+}
+.run-card.verdict-suspect {
+	border-left-color: var(--warning, #e0a13f);
+}
+.run-card.verdict-error {
+	border-left-color: var(--error, #e0556a);
+}
+
+.run-card-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.run-verdict.badge {
+	text-transform: uppercase;
+	font-size: 10px;
+	letter-spacing: 0.06em;
+}
+.verdict-ok .run-verdict.badge {
+	background: var(--success-bg, rgba(63, 224, 143, 0.12));
+	color: var(--success, #3fe08f);
+}
+.verdict-suspect .run-verdict.badge {
+	background: var(--warning-bg, rgba(224, 161, 63, 0.12));
+	color: var(--warning, #e0a13f);
+}
+.verdict-error .run-verdict.badge {
+	background: var(--error-bg, rgba(224, 85, 106, 0.12));
+	color: var(--error, #e0556a);
+}
+
+.run-channel {
+	font-size: 11px;
+	color: var(--ink-dim, #8a978f);
+	background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+	border-radius: 999px;
+	padding: 1px 8px;
+}
+
+.run-time {
+	margin-left: auto;
+	font-size: 11px;
+	color: var(--ink-dim, #8a978f);
+}
+
+.run-claim {
+	font-size: 13px;
+	line-height: 1.4;
+	color: var(--ink-bright, #e6ece8);
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.run-flags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+}
+
+.run-flag {
+	font-size: 11px;
+	font-family: var(--mono, ui-monospace, monospace);
+	color: var(--warning, #e0a13f);
+	background: var(--warning-bg, rgba(224, 161, 63, 0.1));
+	border-radius: 4px;
+	padding: 1px 6px;
+}
+
+.run-meta {
+	display: flex;
+	gap: 12px;
+	font-size: 11.5px;
+	color: var(--ink-dim, #8a978f);
+}
+
+.run-errcount {
+	color: var(--error, #e0556a);
+}

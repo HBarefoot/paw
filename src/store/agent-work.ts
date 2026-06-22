@@ -115,6 +115,15 @@ export function listAll(db: Database): AgentWork[] {
 		.all();
 }
 
+/** Tasks owned by a session (the run-verdict scopes these to the run window). */
+export function listBySession(db: Database, sessionId: string): AgentWork[] {
+	return db
+		.query<AgentWork, [string]>(
+			"SELECT * FROM agent_work WHERE session_id = ? ORDER BY created_at ASC",
+		)
+		.all(sessionId);
+}
+
 export interface UpdateTaskInput {
 	title?: string;
 	body?: string | null;
