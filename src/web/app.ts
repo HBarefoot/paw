@@ -18,6 +18,7 @@ import { getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { logger as honoLogger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
+import { withSkill } from "../agents/registry.js";
 import type { StreamChunk } from "../ai/base-provider.js";
 import {
 	type StoredCredentials,
@@ -979,9 +980,18 @@ export function createWebApp(
 			delegate: (parentSessionId, turnText) => {
 				const name = kernel.agentNames[0];
 				if (!name) return null;
+				const base = kernel.agents.get(name);
+				if (!base) return null;
+				// Pre-activate the on-demand `tasks` skill for board runs so the agent
+				// can actually call task_update/task_get to record evidence (the skill
+				// is on-demand since #180). runAgentTurn accepts an inline definition and
+				// activates its skills on the child session — the agent needn't discover it.
+				const agent = withSkill(base, "tasks");
 				// Fire-and-forget: runAgentTurn logs + emits agent:completed on error,
 				// which routes the card to `failed`.
-				void kernel.runAgentTurn(name, turnText, parentSessionId).catch(() => {});
+				void kernel
+					.runAgentTurn(agent, turnText, parentSessionId)
+					.catch(() => {});
 				return name;
 			},
 			audit: (action, userId, details, ip) =>
