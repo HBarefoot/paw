@@ -89,7 +89,7 @@ import {
 	parkCardForApproval,
 } from "../store/agent-work.js";
 import { createTaskTools } from "../tools/task-tools.js";
-import { recordRunVerdict } from "../observability/run-verdict.js";
+import { recordRunVerdict, sqliteStamp } from "../observability/run-verdict.js";
 import { recordRun } from "../store/runs.js";
 import { createCodeTools } from "../tools/code-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
@@ -2682,11 +2682,16 @@ export class Kernel {
 		startedAt: string,
 	): void {
 		try {
+			// `startedAt` is ISO ("…T…Z"); tool_log/agent_work created_at use the
+			// SQLite `datetime('now')` shape ("… …", a space, no ms/zone). Compare
+			// in the SQLite shape — comparing the raw ISO string would drop EVERY
+			// row (a space at index 10 sorts before 'T'), blinding the verdict.
+			const startedSql = sqliteStamp(startedAt);
 			const entries = (
 				this.toolLog?.query({ sessionId: msg.sessionId, limit: 500 }) ?? []
-			).filter((e) => e.created_at >= startedAt);
+			).filter((e) => e.created_at >= startedSql);
 			const tasks = listBySession(this.db, msg.sessionId).filter(
-				(t) => t.created_at >= startedAt,
+				(t) => t.created_at >= startedSql,
 			);
 			const verdict = recordRunVerdict({
 				input: { claimText, toolEntries: entries, sessionTasks: tasks },

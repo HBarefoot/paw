@@ -55,13 +55,54 @@ const MUTATING_TOOL_RE =
 
 const TERMINAL_TASK_STATUSES = new Set(["done", "failed"]);
 
+// A completion verb immediately preceded (within ~3 words) by one of these is a
+// NEGATED claim — an honest no-op ("no ledger task created", "nothing saved"),
+// not phantom success. Matched against a single cleaned word; `n't` contractions
+// (didn't/haven't) are handled separately. Conservative by design: we'd rather
+// miss a negation than over-suppress a real completion claim.
+const NEGATOR_RE = /^(no|not|never|zero|0|without|nothing)$/i;
+
 function isBlank(s: string | null | undefined): boolean {
 	return !s || s.trim().length === 0;
 }
 
-/** Does the claim assert an action was completed (vs. a purely informational reply)? */
+/**
+ * Does the claim assert an action was completed (vs. a purely informational
+ * reply or an honest no-op)? A completion verb counts only when it is NOT
+ * negated by one of {@link NEGATOR_RE} (or an `n't` contraction) within the 3
+ * words immediately before it. A single non-negated completion verb is enough.
+ */
 export function claimAssertsCompletion(claimText: string): boolean {
-	return ACTION_CLAIM_RE.test(claimText);
+	// Fresh global clone so `lastIndex` state never leaks across calls.
+	const re = new RegExp(ACTION_CLAIM_RE.source, "gi");
+	let m: RegExpExecArray | null;
+	// biome-ignore lint/suspicious/noAssignInExpressions: standard exec() loop.
+	while ((m = re.exec(claimText)) !== null) {
+		const precedingWords = claimText
+			.slice(0, m.index)
+			.split(/\s+/)
+			.filter(Boolean)
+			.slice(-3);
+		const negated = precedingWords.some((w) => {
+			const clean = w.replace(/[^a-z0-9']/gi, "");
+			return NEGATOR_RE.test(clean) || /n't$/i.test(clean);
+		});
+		if (!negated) return true;
+	}
+	return false;
+}
+
+/**
+ * Convert an ISO-8601 timestamp ("2026-06-22T16:59:00.123Z") to the SQLite
+ * `datetime('now')` shape ("2026-06-22 16:59:00") used by the `tool_log` /
+ * `agent_work` `created_at` columns, so a run window can be compared
+ * lexicographically. Both sides are UTC; the SQLite value carries no zone
+ * marker, so we string-shape rather than round-trip through `Date` (which would
+ * risk a local-time reinterpretation). Second-precision truncation is
+ * intentional — a row in the same wall-clock second as run start is in-window.
+ */
+export function sqliteStamp(iso: string): string {
+	return iso.replace("T", " ").slice(0, 19);
 }
 
 /**
