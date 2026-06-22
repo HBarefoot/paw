@@ -360,6 +360,125 @@ export function advanceCardOnApproval(
 	}
 }
 
+// --- Cron-as-cards reactors (Phase 2c) --------------------------------------
+// Autonomous cron `prompt` runs don't go through runAgentTurn (no agent:* events);
+// they emit message:inbound (channel "cron") and get a run verdict (#182). One
+// DURABLE card per cron JOB, linked by created_by = "cron:<jobId>", cycles
+// working → done/blocked/failed each fire. Same fail-open contract as above.
+
+/** The created_by marker that links a board card to its cron job. */
+export function cronCreatedBy(jobId: string): string {
+	return `cron:${jobId}`;
+}
+
+/** The durable card for a cron job (by its created_by marker), if any. */
+export function getCronCard(db: Database, jobId: string): AgentWork | null {
+	return db
+		.query<AgentWork, [string]>(
+			"SELECT * FROM agent_work WHERE created_by = ? ORDER BY created_at ASC LIMIT 1",
+		)
+		.get(cronCreatedBy(jobId));
+}
+
+/**
+ * Create-or-reuse the durable card for a cron job at run start, pointing it at
+ * the new run's session and flipping it to `working`. A re-fire RESETS the card
+ * (clears prior evidence/error and any stale approval link) so the new run must
+ * re-prove itself. No schema migration — the job link rides `created_by`.
+ * Fail-open. Returns the card id, or null on error.
+ */
+export function upsertCronCard(
+	db: Database,
+	input: { jobId: string; jobName: string; sessionId: string; prompt?: string },
+	onError?: (err: unknown) => void,
+): string | null {
+	try {
+		const existing = getCronCard(db, input.jobId);
+		if (existing) {
+			updateTask(db, existing.id, {
+				session_id: input.sessionId,
+				status: "working",
+				evidence: null,
+				error: null,
+				approval_id: null,
+			});
+			return existing.id;
+		}
+		const card = createTask(db, {
+			title: input.jobName,
+			body: input.prompt ?? null,
+			session_id: input.sessionId,
+			agent_name: "cron",
+			created_by: cronCreatedBy(input.jobId),
+		});
+		updateTask(db, card.id, { status: "working" });
+		return card.id;
+	} catch (err) {
+		onError?.(err);
+		return null;
+	}
+}
+
+/**
+ * Advance a cron card when its run completes, driven by the #182 run verdict
+ * (cron agents don't call task_update, so the evidence gate alone would blanket-
+ * block them — the verdict IS the proof-of-work signal):
+ * - `ok`      → `done` (evidence = the verdict summary; gated move).
+ * - `suspect` → `blocked` (phantom success — needs a look).
+ * - `error`   → `failed`.
+ * - `null`    → `blocked` (verdict unavailable — can't confirm success).
+ * No card for this session → no-op. A `needs_approval` card is owned by the
+ * approval lane → no-op. Fail-open. Returns the resulting status or null.
+ */
+export function advanceCardOnVerdict(
+	db: Database,
+	sessionId: string,
+	verdict: "ok" | "suspect" | "error" | null,
+	summary: string,
+	onError?: (err: unknown) => void,
+): TaskStatus | null {
+	try {
+		const card = getBySession(db, sessionId);
+		if (!card) return null;
+		if (card.status === "needs_approval") return null;
+		if (verdict === "ok") {
+			updateTask(db, card.id, { evidence: summary });
+			move(db, card.id, "done", card.position); // gated — evidence set
+			return "done";
+		}
+		if (verdict === "error") {
+			updateTask(db, card.id, { status: "failed", error: summary });
+			return "failed";
+		}
+		// suspect | null → blocked (needs attention / can't confirm success)
+		updateTask(db, card.id, { status: "blocked", error: summary });
+		return "blocked";
+	} catch (err) {
+		onError?.(err);
+		return null;
+	}
+}
+
+/**
+ * Fail a cron job's card when its run threw at the scheduler/emit level
+ * (`cron:error`). Skips a `needs_approval` card (owned by the approval lane).
+ * Fail-open.
+ */
+export function failCronCard(
+	db: Database,
+	jobId: string,
+	error: string,
+	onError?: (err: unknown) => void,
+): void {
+	try {
+		const card = getCronCard(db, jobId);
+		if (!card || card.status === "needs_approval") return;
+		updateTask(db, card.id, { status: "failed", error });
+	} catch (err) {
+		onError?.(err);
+	}
+}
+
 export interface UpdateTaskInput {
 	title?: string;
 	body?: string | null;

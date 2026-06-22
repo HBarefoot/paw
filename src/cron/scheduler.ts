@@ -203,7 +203,11 @@ export class CronScheduler {
 	private logger: Logger;
 	private tickInterval: ReturnType<typeof setInterval> | null = null;
 	private tickMs: number;
-	private onPromptAction?: (jobId: string, prompt: string) => Promise<void>;
+	private onPromptAction?: (
+		jobId: string,
+		jobName: string,
+		prompt: string,
+	) => Promise<void>;
 	private aiProvider: AIProvider | null = null;
 	private workspacePath = ".";
 
@@ -222,7 +226,7 @@ export class CronScheduler {
 	}
 
 	setPromptHandler(
-		handler: (jobId: string, prompt: string) => Promise<void>,
+		handler: (jobId: string, jobName: string, prompt: string) => Promise<void>,
 	): void {
 		this.onPromptAction = handler;
 	}
@@ -554,7 +558,7 @@ export class CronScheduler {
 					});
 					break;
 				}
-				await this.onPromptAction(jobId, action.prompt);
+				await this.onPromptAction(jobId, jobName, action.prompt);
 				break;
 			case "tool":
 				if (!action.tool) {

@@ -80,11 +80,14 @@ import { createCanvasTools } from "../tools/canvas-tools.js";
 import {
 	advanceCardOnApproval,
 	advanceCardOnCompletion,
+	advanceCardOnVerdict,
+	failCronCard,
 	linkCardOnDelegation,
 	listBySession,
 	listEscalatable,
 	markEscalated,
 	parkCardForApproval,
+	upsertCronCard,
 } from "../store/agent-work.js";
 import { createTaskTools } from "../tools/task-tools.js";
 import { recordRunVerdict } from "../observability/run-verdict.js";
@@ -666,8 +669,21 @@ export class Kernel {
 				createLogger("cron"),
 				config.cron.tickIntervalMs,
 			);
-			this.cronScheduler.setPromptHandler(async (jobId, prompt) => {
+			this.cronScheduler.setPromptHandler(async (jobId, jobName, prompt) => {
 				const sessionId = `cron-${jobId}-${Date.now()}`;
+				// Phase 2c — cron-as-cards: surface this autonomous run on the board
+				// BEFORE it starts, so it's `working` and findable by an
+				// approval:pending. One durable card per job (upsert). Fail-open.
+				if (this.config.tasks.enabled) {
+					upsertCronCard(
+						this.db,
+						{ jobId, jobName, sessionId, prompt },
+						(err) =>
+							this.logger.warn("Cron card upsert failed", {
+								error: String(err),
+							}),
+					);
+				}
 				await this.bus.emit("message:inbound", {
 					id: crypto.randomUUID(),
 					sessionId,
@@ -743,6 +759,11 @@ export class Kernel {
 			});
 			this.bus.on("approval:resolved", (e) => {
 				advanceCardOnApproval(this.db, e.id, e.status, e.result, onErr);
+			});
+			// Phase 2c — a cron run that threw at the scheduler/emit level fails its
+			// card. (Success completion is verdict-driven in scoreCompletedRun.)
+			this.bus.on("cron:error", (e) => {
+				failCronCard(this.db, e.jobId, e.error, onErr);
 			});
 		}
 	}
@@ -2661,7 +2682,7 @@ export class Kernel {
 			const tasks = listBySession(this.db, msg.sessionId).filter(
 				(t) => t.created_at >= startedAt,
 			);
-			recordRunVerdict({
+			const verdict = recordRunVerdict({
 				input: { claimText, toolEntries: entries, sessionTasks: tasks },
 				id: crypto.randomUUID(),
 				sessionId: msg.sessionId,
@@ -2672,6 +2693,24 @@ export class Kernel {
 				recordRun: (row) => recordRun(this.db, row),
 				notify: (n) => this.notificationStoreInstance.add(n),
 			});
+			// Phase 2c — advance the cron card for this autonomous run by its verdict
+			// (ok→done, suspect→blocked, error/null→blocked/failed). Cron only; the
+			// approval lane owns a parked card (guarded in advanceCardOnVerdict).
+			if (this.config.tasks.enabled && msg.channel === "cron") {
+				const summary = verdict
+					? `Autonomous run ${verdict.verdict} — ${verdict.toolCalls} tool call(s), ${verdict.toolErrors} error(s)${verdict.flags.length ? ` [${verdict.flags.join(", ")}]` : ""}`
+					: "Autonomous run completed without a verdict";
+				advanceCardOnVerdict(
+					this.db,
+					msg.sessionId,
+					verdict?.verdict ?? null,
+					summary,
+					(err) =>
+						this.logger.warn("Cron card verdict advance failed", {
+							error: String(err),
+						}),
+				);
+			}
 		} catch (err) {
 			this.logger.warn("Run verdict scoring failed", { error: String(err) });
 		}

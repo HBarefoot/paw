@@ -151,7 +151,7 @@ describe("CronScheduler firing", () => {
 			fired.push(e.jobName);
 		});
 		const prompts: string[] = [];
-		scheduler.setPromptHandler(async (_id, p) => {
+		scheduler.setPromptHandler(async (_id, _name, p) => {
 			prompts.push(p);
 		});
 
@@ -165,6 +165,25 @@ describe("CronScheduler firing", () => {
 			.query<{ next_run: string }, []>("SELECT next_run FROM cron_jobs")
 			.get();
 		expect(next && next.next_run > "2001").toBe(true);
+	});
+
+	test("prompt handler receives jobId, jobName, and prompt (cron-as-cards)", async () => {
+		const { scheduler } = makeScheduler(db);
+		const calls: Array<{ jobId: string; jobName: string; prompt: string }> = [];
+		scheduler.setPromptHandler(async (jobId, jobName, prompt) => {
+			calls.push({ jobId, jobName, prompt });
+		});
+		const id = dueJob(scheduler, "Daily lead sweep", {
+			type: "prompt",
+			prompt: "sweep",
+		});
+		await tick(scheduler);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toEqual({
+			jobId: id,
+			jobName: "Daily lead sweep",
+			prompt: "sweep",
+		});
 	});
 
 	test("one failing job doesn't kill the loop (misfire isolation)", async () => {
