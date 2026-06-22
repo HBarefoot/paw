@@ -121,3 +121,52 @@ describe("companion head-clip fix wiring", () => {
 		expect(body).toContain("overflow: hidden");
 	});
 });
+
+// fix/companion-fit-and-tethers: during a multi-agent stress run the orb's head
+// clipped again and the dotted tethers drifted off the pills. BOTH trace to the
+// .fit-anim 240ms scale transition: when content grows (an agent spawns) the fit
+// scale must SHRINK, but animating that shrink (a) leaves the content oversized
+// for 240ms → center-clips the orb, and (b) makes getBoundingClientRect report a
+// mid-transition size while the `scale` var already holds the target → tether
+// endpoints unscale by the wrong factor.
+describe("companion fit transition: shrink snaps, grow animates (no clip)", () => {
+	const scaleFn = SHELL.slice(
+		SHELL.indexOf("function scaleToFit"),
+		SHELL.indexOf("function activeKey"),
+	);
+
+	test("scaleToFit SNAPS (removes .fit-anim) when the scale shrinks", () => {
+		// Animating a shrink is exactly what re-clipped the orb's head.
+		expect(scaleFn).toContain('fit.classList.remove("fit-anim")');
+		// Gated on the scale actually getting smaller than the current one.
+		expect(scaleFn).toContain("s < scale");
+	});
+
+	test("scaleToFit still ANIMATES (adds .fit-anim) when growing (zoom-in is safe)", () => {
+		expect(scaleFn).toContain('fit.classList.add("fit-anim")');
+	});
+});
+
+describe("companion tethers unscale by the LIVE rendered scale, not the target", () => {
+	const fn = SHELL.slice(
+		SHELL.indexOf("function computeTethers"),
+		SHELL.indexOf("function paintTethers"),
+	);
+
+	test("computeTethers derives a live scale from the measured home rect", () => {
+		// crect.width / home.offsetWidth == the scale applied to the DOM right now,
+		// even mid-transition — so endpoints track the pills instead of snapping to
+		// the target early and drifting.
+		expect(fn).toContain("crect.width / home.offsetWidth");
+		expect(fn).toContain("liveScale");
+	});
+
+	test("the unscale divisions use liveScale, not the bare target `scale` var", () => {
+		// Regression: dividing by the target `scale` during the .fit-anim transition
+		// is what drifted the tethers. None of the coordinate conversions may divide
+		// by the bare `scale` var anymore.
+		expect(fn).not.toMatch(/\/\s*scale\b/);
+		// And they DO divide by liveScale.
+		expect(fn).toMatch(/\/\s*liveScale\b/);
+	});
+});
