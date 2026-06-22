@@ -75,6 +75,70 @@
 	border-color: var(--warning, #e0a13f);
 }
 
+.task-card[draggable="true"] {
+	cursor: grab;
+}
+.task-card.dragging {
+	opacity: 0.5;
+}
+
+/* Drop-target affordance while dragging a card over a column. */
+.task-col.drag-over {
+	outline: 2px dashed var(--accent, #3fe08f);
+	outline-offset: -2px;
+}
+
+/* Per-card actions (Start / Retry). */
+.task-actions {
+	display: flex;
+	gap: 6px;
+	margin-top: 2px;
+}
+.task-btn {
+	font-size: 12px;
+	padding: 3px 10px;
+	border-radius: 6px;
+	border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+	background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+	color: var(--ink-bright, #e6ece8);
+	cursor: pointer;
+}
+.task-btn:hover {
+	border-color: var(--accent, #3fe08f);
+}
+.task-btn.primary {
+	background: var(--accent, #3fe08f);
+	color: var(--accent-fg, #06231a);
+	border-color: var(--accent, #3fe08f);
+}
+.task-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+/* Add-card input in the Backlog header. */
+.task-add {
+	display: flex;
+	gap: 6px;
+	padding: 8px 9px 0;
+}
+.task-add-input {
+	flex: 1;
+	min-width: 0;
+	font-size: 12.5px;
+	padding: 4px 8px;
+	border-radius: 6px;
+	border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+	background: var(--panel, rgba(255, 255, 255, 0.03));
+	color: var(--ink-bright, #e6ece8);
+}
+
+.task-error {
+	font-size: 12px;
+	color: var(--error, #e0556a);
+	word-break: break-word;
+}
+
 .task-card-head {
 	display: flex;
 	align-items: flex-start;

@@ -110,6 +110,7 @@ import {
 	resolveRateClass,
 } from "./rate-limit-policy.js";
 import { createCanvasEditRoutes } from "./routes/canvas-edit.js";
+import { createTaskRoutes } from "./routes/tasks-actions.js";
 import { createFormReceiver } from "./routes/forms.js";
 import { createOpenAiApi } from "./routes/openai-api.js";
 import { buildOpsFeed } from "./routes/ops-feed.js";
@@ -966,6 +967,28 @@ export function createWebApp(
 	app.get("/api/tasks/feed", (c) => {
 		return c.json(buildTasksFeed(listAllTasks(kernel.database)));
 	});
+
+	// Live task-board mutations (Phase 2a): create / start / move / retry. Start
+	// reuses the existing delegation path (kernel.runAgentTurn) via `delegate` —
+	// fire-and-forget; the auto-advance subscriber moves the card on lifecycle
+	// events. Mounted like createCanvasEditRoutes (auth-gated, app.request-testable).
+	app.route(
+		"/",
+		createTaskRoutes({
+			db: kernel.database,
+			delegate: (parentSessionId, turnText) => {
+				const name = kernel.agentNames[0];
+				if (!name) return null;
+				// Fire-and-forget: runAgentTurn logs + emits agent:completed on error,
+				// which routes the card to `failed`.
+				void kernel.runAgentTurn(name, turnText, parentSessionId).catch(() => {});
+				return name;
+			},
+			audit: (action, userId, details, ip) =>
+				authManager.audit.log(action, userId, details, ip),
+			getClientIp,
+		}),
+	);
 
 	// Run verdicts board (read-only, observability Phase 1) + its live feed.
 	// runs.js polls /api/runs/feed (LIVE rate class); phantom-success/error runs
