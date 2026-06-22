@@ -1112,10 +1112,16 @@
 			const crect = home.getBoundingClientRect();
 			const av = home.querySelector("[data-avatar]");
 			if (!av || crect.width === 0) return { skills: [], links: [] };
+			// Unscale by the scale ACTUALLY rendered right now, not the target `scale`
+			// var: `.fit` animates scale over 240ms (.fit-anim) on a count change, so
+			// mid-transition getBoundingClientRect() returns intermediate sizes while
+			// `scale` already holds the target — using it drifts the endpoints off the
+			// pills. crect.width / home.offsetWidth is the live applied scale.
+			const liveScale = home.offsetWidth ? crect.width / home.offsetWidth : scale;
 			const edge = (r) => ({
-				cx: (r.left + r.width / 2 - crect.left) / scale,
-				cy: (r.top + r.height / 2 - crect.top) / scale,
-				rad: r.width / 2 / scale,
+				cx: (r.left + r.width / 2 - crect.left) / liveScale,
+				cy: (r.top + r.height / 2 - crect.top) / liveScale,
+				rad: r.width / 2 / liveScale,
 			});
 			const main = edge(av.getBoundingClientRect());
 			const targets = { main };
@@ -1132,10 +1138,10 @@
 				const tgt = targets[node.getAttribute("data-tether")] || main;
 				const r = node.getBoundingClientRect();
 				const src = {
-					cx: (r.left + r.width / 2 - crect.left) / scale,
-					cy: (r.top + r.height / 2 - crect.top) / scale,
-					w: r.width / scale,
-					h: r.height / scale,
+					cx: (r.left + r.width / 2 - crect.left) / liveScale,
+					cy: (r.top + r.height / 2 - crect.top) / liveScale,
+					w: r.width / liveScale,
+					h: r.height / liveScale,
 				};
 				const a = R.anchor(src, tgt, 5, 10);
 				const d = R.orthPath(a.sx, a.sy, a.ex, a.ey);
@@ -1248,6 +1254,16 @@
 			if (s == null) {
 				fit.style.transform = prev;
 				return;
+			}
+			// Direction-gate the .fit-anim transition. When the content GREW (an agent
+			// spawned, a skill lit) the fit scale must SHRINK — animating that shrink
+			// over 240ms leaves the content oversized for the transition and
+			// center-clips the orb's head, so snap it instantly. Only GROWING the scale
+			// (zoom-in after content shrank) is safe to animate, which is the smooth
+			// count-change zoom .fit-anim was added for.
+			if (fitted) {
+				if (s < scale - 0.0005) fit.classList.remove("fit-anim");
+				else fit.classList.add("fit-anim");
 			}
 			scale = s;
 			fit.style.transform = s === 1 ? "" : `scale(${s})`;
