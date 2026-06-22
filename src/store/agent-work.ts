@@ -173,6 +173,18 @@ export function getBySession(
 		.get(sessionId);
 }
 
+/** First task linked to an approval id — the card↔approval link (Phase 2b lane). */
+export function getByApprovalId(
+	db: Database,
+	approvalId: string,
+): AgentWork | null {
+	return db
+		.query<AgentWork, [string]>(
+			"SELECT * FROM agent_work WHERE approval_id = ? ORDER BY created_at ASC LIMIT 1",
+		)
+		.get(approvalId);
+}
+
 // --- Lifecycle reactors (Phase 2a auto-advance) -----------------------------
 // These react to agent:delegated / agent:completed bus events. They are
 // intentionally FAIL-OPEN (try/catch, never throw, optional onError) — a card
@@ -219,6 +231,10 @@ export function advanceCardOnCompletion(
 	try {
 		const card = getBySession(db, agentSessionId);
 		if (!card) return null;
+		// A card parked awaiting an approval decision is owned by the approval lane
+		// (Phase 2b), not run-completion: a gated run ends at the gate and still
+		// emits agent:completed{ok:true}, which must NOT block the parked card.
+		if (card.status === "needs_approval") return null;
 		if (!ok) {
 			updateTask(db, card.id, {
 				status: "failed",
@@ -241,6 +257,109 @@ export function advanceCardOnCompletion(
 	}
 }
 
+// --- Approval lane reactors (Phase 2b) --------------------------------------
+// React to approval:pending / approval:resolved for cards whose run hit a gated
+// tool. Same fail-open contract as the auto-advance reactors above.
+
+/** Compact, always-non-empty evidence line from an executed approval's result. */
+function summarizeApprovalResult(approvalId: string, result: unknown): string {
+	let detail = "";
+	if (result && typeof result === "object") {
+		try {
+			detail = JSON.stringify(result);
+		} catch {
+			detail = String(result);
+		}
+	} else if (result !== undefined && result !== null) {
+		detail = String(result);
+	}
+	const trimmed = detail.length > 500 ? `${detail.slice(0, 500)}…` : detail;
+	return `Approved & executed (approval ${approvalId})${trimmed ? `: ${trimmed}` : ""}`;
+}
+
+/** Pull a failure reason out of an approval result (`{error}` from approve()'s catch). */
+function approvalErrorReason(result: unknown): string {
+	if (result && typeof result === "object" && "error" in result) {
+		const e = (result as { error?: unknown }).error;
+		if (typeof e === "string" && e.trim()) return e;
+	}
+	return "approval action failed";
+}
+
+/**
+ * Park a card in `needs_approval` when a tool in its run is gated. Resolves the
+ * card by the run's session (the approval's `requestedBy`) and records the
+ * `approval_id` so the resolution can find it. No card → no-op (non-board runs
+ * unaffected). Fail-open.
+ */
+export function parkCardForApproval(
+	db: Database,
+	requestedBy: string | null | undefined,
+	approvalId: string,
+	onError?: (err: unknown) => void,
+): void {
+	try {
+		if (!requestedBy) return;
+		const card = getBySession(db, requestedBy);
+		if (!card) return;
+		updateTask(db, card.id, {
+			approval_id: approvalId,
+			status: "needs_approval",
+		});
+	} catch (err) {
+		onError?.(err);
+	}
+}
+
+/**
+ * Advance a parked card when its approval resolves:
+ * - `executed`   → evidence = a summary of the action's result, then gated move to `done`
+ *   (the action's result IS the proof — the gate passes because evidence is set).
+ * - `rejected`   → `blocked` ("approval denied").
+ * - `failed`     → `failed` (with the reason).
+ * - `unauthorized` → no-op: the request is still actionable, so the card stays
+ *   `needs_approval` until a permitted user decides.
+ * No card for this approval id → no-op. Fail-open. Returns the resulting status or null.
+ */
+export function advanceCardOnApproval(
+	db: Database,
+	approvalId: string,
+	status: "executed" | "rejected" | "failed" | "unauthorized",
+	result?: unknown,
+	onError?: (err: unknown) => void,
+): TaskStatus | null {
+	try {
+		const card = getByApprovalId(db, approvalId);
+		if (!card) return null;
+		switch (status) {
+			case "executed": {
+				updateTask(db, card.id, {
+					evidence: summarizeApprovalResult(approvalId, result),
+				});
+				move(db, card.id, "done", card.position); // gated — evidence now set
+				return "done";
+			}
+			case "rejected":
+				updateTask(db, card.id, {
+					status: "blocked",
+					error: "approval denied",
+				});
+				return "blocked";
+			case "failed":
+				updateTask(db, card.id, {
+					status: "failed",
+					error: approvalErrorReason(result),
+				});
+				return "failed";
+			default:
+				return null; // unauthorized — stays needs_approval (still actionable)
+		}
+	} catch (err) {
+		onError?.(err);
+		return null;
+	}
+}
+
 export interface UpdateTaskInput {
 	title?: string;
 	body?: string | null;
@@ -251,6 +370,7 @@ export interface UpdateTaskInput {
 	error?: string | null;
 	session_id?: string | null;
 	agent_name?: string | null;
+	approval_id?: string | null;
 }
 
 /**
@@ -287,6 +407,7 @@ export function updateTask(
 	if (patch.error !== undefined) set("error", patch.error);
 	if (patch.session_id !== undefined) set("session_id", patch.session_id);
 	if (patch.agent_name !== undefined) set("agent_name", patch.agent_name);
+	if (patch.approval_id !== undefined) set("approval_id", patch.approval_id);
 
 	if (sets.length === 0) return current;
 

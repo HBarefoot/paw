@@ -78,11 +78,13 @@ import {
 } from "../tools/canvas-bridge-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
 import {
+	advanceCardOnApproval,
 	advanceCardOnCompletion,
 	linkCardOnDelegation,
 	listBySession,
 	listEscalatable,
 	markEscalated,
+	parkCardForApproval,
 } from "../store/agent-work.js";
 import { createTaskTools } from "../tools/task-tools.js";
 import { recordRunVerdict } from "../observability/run-verdict.js";
@@ -730,6 +732,17 @@ export class Kernel {
 					e.error,
 					onErr,
 				);
+			});
+			// Phase 2b — board approval lane. A gated tool mid-run emits
+			// `approval:pending`; park the run's card in `needs_approval`. On
+			// `approval:resolved` (PR1 execute-on-approve), advance it: executed →
+			// done (evidence = the action result), rejected → blocked, failed →
+			// failed, unauthorized → stays parked. Fail-open like the reactors above.
+			this.bus.on("approval:pending", (e) => {
+				parkCardForApproval(this.db, e.requestedBy, e.id, onErr);
+			});
+			this.bus.on("approval:resolved", (e) => {
+				advanceCardOnApproval(this.db, e.id, e.status, e.result, onErr);
 			});
 		}
 	}
