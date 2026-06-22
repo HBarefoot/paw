@@ -55,6 +55,11 @@ export const defaults: PawConfig = {
 		enabled: true,
 		tickIntervalMs: 60_000,
 	},
+	tasks: {
+		enabled: true,
+		escalationIntervalMs: 300_000,
+		escalationDedupeHours: 6,
+	},
 	heartbeat: {
 		enabled: true,
 		intervalMinutes: 30,

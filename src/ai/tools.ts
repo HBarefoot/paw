@@ -244,7 +244,8 @@ export class ToolRegistry {
 				isError: true,
 				durationMs: Date.now() - start,
 			});
-			if (hooks && ctx) await hooks.runAfter(ctx, errResult, Date.now() - start);
+			if (hooks && ctx)
+				await hooks.runAfter(ctx, errResult, Date.now() - start);
 			return errResult;
 		} finally {
 			this.trackEnd(seq);
@@ -323,6 +324,13 @@ export class ToolRegistry {
 		if (tool.name === "spawn_agent") return "agent:spawn";
 		if (tool.name === "delegate_task") return "agent:delegate";
 		if (tool.name === "activate_skill") return "skill:activate";
+		// Objective-ledger tools: list/get are reads; create/update are writes.
+		// Named before the fallthrough so they can never be silently denied
+		// (the `return tool.plugin` fallthrough class — bit #88/#164/#168).
+		if (tool.name === "task_list" || tool.name === "task_get")
+			return "task:read";
+		if (tool.name === "task_create" || tool.name === "task_update")
+			return "task:write";
 		// PostHog read tools (#168): all posthog_* tools are read-only; the posthog
 		// manifest grants posthog:read, so map them there instead of the bare "posthog".
 		if (tool.name.startsWith("posthog_")) return "posthog:read";

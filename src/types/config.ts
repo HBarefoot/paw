@@ -65,6 +65,11 @@ export interface PawConfig {
 		enabled: boolean;
 		tickIntervalMs: number;
 	};
+	tasks: {
+		enabled: boolean;
+		escalationIntervalMs: number;
+		escalationDedupeHours: number;
+	};
 	heartbeat: {
 		enabled: boolean;
 		intervalMinutes: number;

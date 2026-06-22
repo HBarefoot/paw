@@ -233,7 +233,11 @@ describe("ToolRegistry sandbox enforcement (H-NEW-4)", () => {
 			mk("update_playbook"),
 		]);
 
-		for (const name of ["load_playbook", "create_playbook", "update_playbook"]) {
+		for (const name of [
+			"load_playbook",
+			"create_playbook",
+			"update_playbook",
+		]) {
 			const res = await registry.execute(name, {});
 			expect(res.is_error).toBeFalsy();
 			expect(res.content).toBe("ok");
@@ -305,6 +309,8 @@ describe("ToolRegistry sandbox enforcement (H-NEW-4)", () => {
 			"canvas:write",
 			"playbook:read",
 			"playbook:write",
+			"task:read",
+			"task:write",
 		];
 		const sandbox = new Sandbox(logger);
 		sandbox.registerManifest({
@@ -318,5 +324,63 @@ describe("ToolRegistry sandbox enforcement (H-NEW-4)", () => {
 		for (const perm of kernelManifestPerms) {
 			expect(sandbox.checkPermission("kernel", perm)).toBe(true);
 		}
+	});
+
+	test("task_* tools split read vs write and are reachable under the kernel grants", async () => {
+		// REGRESSION (the #88/#164/#168 fallthrough class): task_* tools carry
+		// plugin: "kernel". Before inferPermission gained explicit cases they fell
+		// through to the bare plugin name "kernel" (not a granted permission) →
+		// silently denied. list/get map to task:read, create/update to task:write,
+		// both granted by the kernel manifest.
+		const sandbox = new Sandbox(logger);
+		sandbox.registerManifest({
+			name: "kernel",
+			version: "0.1.0",
+			description: "",
+			permissions: ["task:read", "task:write"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		const mk = (name: string) => ({
+			name,
+			description: name,
+			input_schema: { type: "object" as const },
+			plugin: "kernel",
+			handler: async () => ({ content: "ok" }),
+		});
+		const taskTools = ["task_list", "task_get", "task_create", "task_update"];
+		registry.register(taskTools.map(mk));
+
+		for (const name of taskTools) {
+			const res = await registry.execute(name, {});
+			expect(res.is_error).toBeFalsy();
+			expect(res.content).toBe("ok");
+		}
+	});
+
+	test("task_* tools are denied when only the bare 'kernel' string is granted (pre-fix behaviour)", async () => {
+		// Confirms the bare plugin name does NOT satisfy task:read/task:write — the
+		// fix is the explicit inferPermission cases, not a manifest fallback.
+		const sandbox = new Sandbox(logger);
+		sandbox.registerManifest({
+			name: "kernel",
+			version: "0.1.0",
+			description: "",
+			permissions: ["kernel"],
+		});
+		const registry = new ToolRegistry();
+		registry.setSandbox(sandbox, true);
+		registry.register([
+			{
+				name: "task_create",
+				description: "task_create",
+				input_schema: { type: "object" },
+				plugin: "kernel",
+				handler: async () => ({ content: "ok" }),
+			},
+		]);
+		const res = await registry.execute("task_create", {});
+		expect(res.is_error).toBe(true);
+		expect(res.content).toContain("Permission denied");
 	});
 });
