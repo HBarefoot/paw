@@ -9,6 +9,13 @@ import type { Database } from "bun:sqlite";
  * the gate by going through `updateTask` / `move`.
  */
 
+/**
+ * The synthetic `parentSessionId` a card's Start uses when delegating, so the
+ * `agent:delegated` event (which carries parentSessionId) can be resolved back
+ * to the card. Shared by the Start route and the kernel auto-advance subscriber.
+ */
+export const TASK_RUN_PREFIX = "task-";
+
 export type TaskStatus =
 	| "backlog"
 	| "queued"
@@ -60,6 +67,36 @@ function assertDoneHasEvidence(
 	if (status === "done" && !(evidence && evidence.trim().length > 0)) {
 		throw new TaskError("done requires evidence");
 	}
+}
+
+/** Thrown when a status change isn't a legal column transition (Phase 2a). */
+export class TransitionError extends Error {
+	constructor(from: TaskStatus, to: TaskStatus) {
+		super(`illegal transition: ${from} → ${to}`);
+		this.name = "TransitionError";
+	}
+}
+
+// The board state machine. Same-status (reorder) is always allowed and handled
+// by the caller. `queued→working` is legal but Start-only (the drag route
+// additionally refuses dragging into `working`). `done` is terminal.
+const LEGAL_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+	backlog: ["queued"],
+	queued: ["backlog", "working"],
+	working: ["needs_approval", "done", "failed", "blocked"],
+	needs_approval: ["working", "done", "failed", "blocked"],
+	blocked: ["queued"],
+	failed: ["queued"],
+	done: [],
+};
+
+export function isLegalTransition(from: TaskStatus, to: TaskStatus): boolean {
+	if (from === to) return true; // same-column reorder
+	return LEGAL_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+export function assertLegalTransition(from: TaskStatus, to: TaskStatus): void {
+	if (!isLegalTransition(from, to)) throw new TransitionError(from, to);
 }
 
 export interface CreateTaskInput {
@@ -124,6 +161,86 @@ export function listBySession(db: Database, sessionId: string): AgentWork[] {
 		.all(sessionId);
 }
 
+/** First task linked to a run session — the card↔run link for auto-advance. */
+export function getBySession(
+	db: Database,
+	sessionId: string,
+): AgentWork | null {
+	return db
+		.query<AgentWork, [string]>(
+			"SELECT * FROM agent_work WHERE session_id = ? ORDER BY created_at ASC LIMIT 1",
+		)
+		.get(sessionId);
+}
+
+// --- Lifecycle reactors (Phase 2a auto-advance) -----------------------------
+// These react to agent:delegated / agent:completed bus events. They are
+// intentionally FAIL-OPEN (try/catch, never throw, optional onError) — a card
+// move must NEVER break or delay the agent run that already happened. The kernel
+// subscriber calls these; they're exported so the matrix is unit-testable
+// without booting the kernel/bus.
+
+/**
+ * Link a card to its real child session when its run is delegated. Start used a
+ * synthetic `parentSessionId = "task-<cardId>"`; on `agent:delegated` we re-point
+ * the card's `session_id` to the actual child session and ensure it's `working`.
+ */
+export function linkCardOnDelegation(
+	db: Database,
+	parentSessionId: string,
+	agentSessionId: string,
+	onError?: (err: unknown) => void,
+): void {
+	try {
+		if (!parentSessionId.startsWith(TASK_RUN_PREFIX)) return;
+		const cardId = parentSessionId.slice(TASK_RUN_PREFIX.length);
+		if (!getTask(db, cardId)) return;
+		updateTask(db, cardId, { session_id: agentSessionId, status: "working" });
+	} catch (err) {
+		onError?.(err);
+	}
+}
+
+/**
+ * Advance a card when its run completes. The evidence gate is sacred:
+ * - error → `failed` (with the error).
+ * - ok + evidence (the agent set it via task_update mid-run) → `done` (gated move).
+ * - ok + NO evidence → `blocked` — a finished run that didn't prove its work does
+ *   NOT get a green card for free.
+ * Returns the resulting status, or null (no card / swallowed error).
+ */
+export function advanceCardOnCompletion(
+	db: Database,
+	agentSessionId: string,
+	ok: boolean,
+	error?: string,
+	onError?: (err: unknown) => void,
+): TaskStatus | null {
+	try {
+		const card = getBySession(db, agentSessionId);
+		if (!card) return null;
+		if (!ok) {
+			updateTask(db, card.id, {
+				status: "failed",
+				error: error ?? "agent run failed",
+			});
+			return "failed";
+		}
+		if (card.evidence && card.evidence.trim().length > 0) {
+			move(db, card.id, "done", card.position); // gated — evidence present
+			return "done";
+		}
+		updateTask(db, card.id, {
+			status: "blocked",
+			error: "run completed without evidence",
+		});
+		return "blocked";
+	} catch (err) {
+		onError?.(err);
+		return null;
+	}
+}
+
 export interface UpdateTaskInput {
 	title?: string;
 	body?: string | null;
@@ -132,6 +249,8 @@ export interface UpdateTaskInput {
 	status?: TaskStatus;
 	evidence?: string | null;
 	error?: string | null;
+	session_id?: string | null;
+	agent_name?: string | null;
 }
 
 /**
@@ -166,6 +285,8 @@ export function updateTask(
 	if (patch.status !== undefined) set("status", patch.status);
 	if (patch.evidence !== undefined) set("evidence", patch.evidence);
 	if (patch.error !== undefined) set("error", patch.error);
+	if (patch.session_id !== undefined) set("session_id", patch.session_id);
+	if (patch.agent_name !== undefined) set("agent_name", patch.agent_name);
 
 	if (sets.length === 0) return current;
 
@@ -184,6 +305,9 @@ export function move(
 ): AgentWork | null {
 	const current = getTask(db, id);
 	if (!current) return null;
+	// Validate the column transition (reorder within a column is allowed), then
+	// the evidence gate for done. Both throw; callers map to 400.
+	assertLegalTransition(current.status, status);
 	assertDoneHasEvidence(status, current.evidence);
 	db.run(
 		"UPDATE agent_work SET status = ?, position = ?, updated_at = datetime('now') WHERE id = ?",

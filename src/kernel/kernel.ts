@@ -78,6 +78,8 @@ import {
 } from "../tools/canvas-bridge-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
 import {
+	advanceCardOnCompletion,
+	linkCardOnDelegation,
 	listBySession,
 	listEscalatable,
 	markEscalated,
@@ -695,6 +697,34 @@ export class Kernel {
 				a.finishedAt = Date.now();
 			}
 		});
+
+		// Ledger Phase 2a: auto-advance task cards off the agent lifecycle. A card
+		// started from the board delegates with parentSessionId = "task-<cardId>";
+		// we re-point the card to the real child session on `delegated`, then
+		// advance it on `completed`. The evidence gate is sacred: `ok` without
+		// evidence goes to `blocked`, never `done`. Fail-open: a subscriber error
+		// must never break the run.
+		if (this.config.tasks.enabled) {
+			const onErr = (err: unknown) =>
+				this.logger.warn("Task auto-advance failed", { error: String(err) });
+			this.bus.on("agent:delegated", (e) => {
+				linkCardOnDelegation(
+					this.db,
+					e.parentSessionId,
+					e.agentSessionId,
+					onErr,
+				);
+			});
+			this.bus.on("agent:completed", (e) => {
+				advanceCardOnCompletion(
+					this.db,
+					e.agentSessionId,
+					e.ok,
+					e.error,
+					onErr,
+				);
+			});
+		}
 	}
 
 	async boot(pluginsDir = "./plugins"): Promise<void> {
@@ -3251,6 +3281,11 @@ export class Kernel {
 
 	get database(): Database {
 		return this.db;
+	}
+
+	/** Registered agent names (config-loaded). Used by the task board's Start. */
+	get agentNames(): string[] {
+		return this.agentRegistry.agentNames;
 	}
 
 	/** Credential vault — web-managed encrypted secrets (server-side only). */

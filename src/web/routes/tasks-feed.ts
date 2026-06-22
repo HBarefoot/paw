@@ -27,6 +27,10 @@ export interface TaskCard {
 	due_at: string | null;
 	overdue: boolean;
 	evidence: string | null;
+	/** Set once a run is linked — the board uses it to show the running agent. */
+	session_id: string | null;
+	agent_name: string | null;
+	error: string | null;
 	updated_at: string;
 }
 
@@ -51,6 +55,9 @@ function toCard(row: AgentWork, nowMs: number): TaskCard {
 		due_at: row.due_at,
 		overdue,
 		evidence: row.evidence,
+		session_id: row.session_id,
+		agent_name: row.agent_name,
+		error: row.error,
 		updated_at: row.updated_at,
 	};
 }
