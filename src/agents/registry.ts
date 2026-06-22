@@ -55,3 +55,19 @@ export class AgentRegistry {
 		return this.agents.size;
 	}
 }
+
+/**
+ * Return `agent` with `skill` guaranteed present in its `skills` list. Pure +
+ * idempotent: unchanged (same object) if the skill is already there, otherwise a
+ * shallow copy with the skill appended. Used to pre-activate an on-demand skill
+ * (e.g. `tasks`) for a specific delegated run without mutating the registered
+ * definition — `runAgentTurn` accepts an inline AgentDefinition and activates
+ * `agent.skills` on the child session.
+ */
+export function withSkill(
+	agent: AgentDefinition,
+	skill: string,
+): AgentDefinition {
+	if (agent.skills.includes(skill)) return agent;
+	return { ...agent, skills: [...agent.skills, skill] };
+}

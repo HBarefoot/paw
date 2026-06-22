@@ -48,12 +48,22 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
 		(c.var as unknown as { admin?: { id: number } }).admin?.id ?? null;
 	const ip = (c: Context): string | undefined => getClientIp?.(c);
 
-	// Compose the turn handed to the agent: the card's title/body plus an explicit
-	// instruction to prove completion via the evidence gate. If the agent never
-	// sets evidence, auto-advance routes the run to `blocked`, not `done`.
+	// Compose the turn handed to the agent: a leading card-context preamble that
+	// names the card and spells out the close-out obligation, then the card's
+	// title/body. The agent MUST record the outcome via `task_update` — `done`
+	// requires real evidence (the gate refuses a done without it), otherwise the
+	// auto-advance subscriber routes the finished run to `blocked`. The preamble
+	// leads the turn (the delegate carries only a turn string, so this is the
+	// preamble channel) and interpolates the exact card id both paths must use.
 	const turnFor = (id: string, title: string, body: string | null): string => {
-		const base = body ? `${title}\n\n${body}` : title;
-		return `${base}\n\n[Ledger task ${id}: when you have VERIFIABLY completed this, call task_update with id="${id}" and evidence (a re-query result, a diff, or a URL). Do not claim done without it.]`;
+		const card = body ? `${title}\n\n${body}` : title;
+		const preamble = [
+			`You are working board card ${id}. When you finish, you MUST record the outcome on the card with the task_update tool:`,
+			`- If you completed the work, call task_update { id: "${id}", status: "done", evidence: <proof> } where evidence is real proof it landed — a re-query result, a diff, or a URL. Do not write vague or fabricated evidence; if you can't prove it, you are not done.`,
+			`- If you could not finish or can't prove it, call task_update { id: "${id}", status: "blocked", error: <one line why> } and explain.`,
+			"Never claim done without evidence — the system will refuse it.",
+		].join("\n");
+		return `${preamble}\n\n---\n\n${card}`;
 	};
 
 	// Shared start logic: validate, link the card to a run, delegate. Returns a

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AgentRegistry } from "../../src/agents/registry.js";
+import { AgentRegistry, withSkill } from "../../src/agents/registry.js";
 import type { AgentDefinition } from "../../src/agents/types.js";
 
 const mockLogger = {
@@ -95,5 +95,23 @@ describe("AgentRegistry", () => {
 		expect(registry.size).toBe(2);
 		expect(registry.get("icp-discovery")?.skills).toEqual(["icp-discovery"]);
 		expect(registry.get("researcher")?.description).toBe("Researches topics");
+	});
+});
+
+describe("withSkill", () => {
+	test("appends a missing skill (board runs get `tasks`)", () => {
+		const base = makeAgent({ skills: ["files"] });
+		const got = withSkill(base, "tasks");
+		expect(got.skills).toContain("tasks");
+		expect(got.skills).toEqual(["files", "tasks"]);
+		// pure: the base definition is untouched.
+		expect(base.skills).toEqual(["files"]);
+	});
+
+	test("idempotent — already-present skill returns the agent unchanged", () => {
+		const base = makeAgent({ skills: ["files", "tasks"] });
+		const got = withSkill(base, "tasks");
+		expect(got).toBe(base); // same reference, no copy
+		expect(got.skills).toEqual(["files", "tasks"]);
 	});
 });

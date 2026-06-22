@@ -99,6 +99,25 @@ describe("task board mutation routes", () => {
 			expect(card?.agent_name).toBe("default");
 		});
 
+		it("turn carries the card-context preamble: card id + done & blocked paths", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "ship it" });
+			updateTask(db, t.id, { status: "queued" });
+
+			await post(app, `/api/tasks/${t.id}/start`);
+			const turn = delegateCalls[0]?.turn ?? "";
+			// The exact card id is interpolated so task_update targets THIS card.
+			expect(turn).toContain(t.id);
+			// Happy path: close with done + evidence.
+			expect(turn).toContain('status: "done"');
+			expect(turn).toContain("evidence");
+			// Blocked fallback path — NEW in 2a.1; the #183 turn had no blocked
+			// guidance, so this anchor fails on pre-change code.
+			expect(turn).toContain('status: "blocked"');
+			// The card body still rides the turn.
+			expect(turn).toContain("ship it");
+		});
+
 		it("refuses a second start on the same card (409)", async () => {
 			const app = appWith({ id: 1 });
 			const t = createTask(db, { title: "x" });
