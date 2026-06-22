@@ -8,6 +8,7 @@ import type {
 	ChatResponse,
 	StreamChunk,
 } from "./base-provider.js";
+import { FRAME_CLOSE, FRAME_OPEN } from "../security/untrusted.js";
 import { summarizeToolInput } from "./tool-summary.js";
 import {
 	executeToolsParallel,
@@ -66,10 +67,13 @@ const MAX_TOOL_RESULT_CHARS = 4_000;
 
 function truncateToolResult(content: string): string {
 	if (content.length <= MAX_TOOL_RESULT_CHARS) return content;
-	return (
-		content.slice(0, MAX_TOOL_RESULT_CHARS) +
-		`\n\n[Truncated — original was ${content.length} chars]`
-	);
+	const head = `${content.slice(
+		0,
+		MAX_TOOL_RESULT_CHARS,
+	)}\n\n[Truncated — original was ${content.length} chars]`;
+	// If the content was framed as untrusted tool output, re-append the closing
+	// sentinel so truncation never leaves the data boundary open.
+	return content.startsWith(FRAME_OPEN) ? `${head}\n${FRAME_CLOSE}` : head;
 }
 
 /** Absolute ceiling on a single model response. Ollama has no server-side
