@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week at a Glance — Jun 15–21, 2026</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --ink: #1c1d22;
+    --muted: #71757f;
+    --line: #e7e9ee;
+    --accent: #3b6ef5;
+    --today: #fff8e6;
+    --today-line: #f0c95b;
+    --holiday: #2f9e6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    padding: 32px 20px 48px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  header { margin-bottom: 24px; }
+  h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .grid { display: grid; gap: 12px; }
+  .day {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 18px;
+  }
+  .day.today { background: var(--today); border-color: var(--today-line); }
+  .dcol { border-right: 1px solid var(--line); padding-right: 14px; }
+  .today .dcol { border-color: var(--today-line); }
+  .dow { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .dnum { font-size: 30px; font-weight: 700; line-height: 1; margin-top: 4px; }
+  .badge { display: inline-block; margin-top: 8px; font-size: 11px; font-weight: 600; color: var(--accent); background: #eef2fe; padding: 2px 8px; border-radius: 999px; }
+  .today .badge { color: #946c00; background: #fdeecb; }
+  .summary { font-size: 14px; color: var(--muted); margin: 0 0 10px; }
+  .events { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .event { display: flex; gap: 12px; align-items: baseline; }
+  .time { font-size: 13px; font-weight: 600; color: var(--ink); min-width: 92px; white-space: nowrap; }
+  .ev-title { font-size: 14px; }
+  .ev-sub { color: var(--muted); font-size: 12.5px; }
+  .pill-holiday { color: var(--holiday); font-weight: 600; font-size: 13px; }
+  .empty { font-size: 13.5px; color: #9aa0ab; font-style: italic; }
+  footer { margin-top: 22px; font-size: 12px; color: #9aa0ab; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Week at a Glance</h1>
+    <div class="sub">Monday, June 15 – Sunday, June 21, 2026 · America/New_York</div>
+  </header>
+
+  <div class="grid">
+
+    <div class="day">
+      <div class="dcol">
+        <div class="dow">Mon</div>
+        <div class="dnum">15</div>
+        <span class="badge">1 event</span>
+      </div>
+      <div>
+        <p class="summary">A morning Toptal screening call, then an open afternoon.</p>
+        <ul class="events">
+          <li class="event">
+            <span class="time">9:30–9:50 AM</span>
+            <span><span class="ev-title">Call with Regina Rékási Neres (Toptal)</span><br>
+            <span class="ev-sub">Toptal Screening Call — Sr Web Developer. She calls you at 954-540-1902.</span></span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="dcol">
+        <div class="dow">Tue</div>
+        <div class="dnum">16</div>
+      </div>
+      <div>
+        <p class="summary">Nothing scheduled — a clear day to plan ahead.</p>
+        <div class="empty">No events</div>
+      </div>
+    </div>
+
+    <div class="day today">
+      <div class="dcol">
+        <div class="dow">Wed</div>
+        <div class="dnum">17</div>
+        <span class="badge">Today</span>
+      </div>
+      <div>
+        <p class="summary">Open calendar today — good window for focused work.</p>
+        <div class="empty">No events</div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="dcol">
+        <div class="dow">Thu</div>
+        <div class="dnum">18</div>
+      </div>
+      <div>
+        <p class="summary">Clear day, nothing on the books.</p>
+        <div class="empty">No events</div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="dcol">
+        <div class="dow">Fri</div>
+        <div class="dnum">19</div>
+        <span class="badge">Holiday</span>
+      </div>
+      <div>
+        <p class="summary">Juneteenth — federal holiday. No meetings scheduled.</p>
+        <ul class="events">
+          <li class="event">
+            <span class="time">All day</span>
+            <span class="pill-holiday">Juneteenth</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="dcol">
+        <div class="dow">Sat</div>
+        <div class="dnum">20</div>
+      </div>
+      <div>
+        <p class="summary">Weekend — nothing scheduled.</p>
+        <div class="empty">No events</div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="dcol">
+        <div class="dow">Sun</div>
+        <div class="dnum">21</div>
+        <span class="badge">Holiday</span>
+      </div>
+      <div>
+        <p class="summary">Father's Day — a day for family.</p>
+        <ul class="events">
+          <li class="event">
+            <span class="time">All day</span>
+            <span class="pill-holiday">Father's Day</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  <footer>Generated June 17, 2026 from Google Calendar (primary, Barefoot Digital, US Holidays).</footer>
+</div>
+</body>
+</html>
