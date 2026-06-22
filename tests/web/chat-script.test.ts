@@ -178,4 +178,35 @@ describe("chat client script", () => {
 		expect(script).toContain("addMessageActions(col, role,");
 		expect(script).toContain("wrapper.appendChild(col)");
 	});
+
+	test("cross-canvas link routing: parent handles paw:open-canvas / open-external", () => {
+		// A link inside a canvas page posts up to the console; the parent opens it in
+		// the tab system (navigate-in-place by default, new tab on modified click).
+		expect(script).toContain('m.type === "paw:open-canvas"');
+		expect(script).toContain('m.type === "paw:open-external"');
+		// Source-window gate (sandboxed frames post origin "null", so match by source).
+		expect(script).toContain(".contentWindow === e.source");
+		// Path guard mirrors canvasFileFromUrlPath (no absolute/reserved/traversal).
+		expect(script).toContain(
+			'path.charAt(0) === "/" || path.indexOf("__") === 0',
+		);
+		expect(script).toContain('if (segs[s] === "..") return;');
+		// Navigate-in-place vs new tab, reusing the existing tab helpers.
+		expect(script).toContain("function navigateCanvasTab(");
+		expect(script).toContain(
+			"if (m.newTab || srcTab.pinned) findOrCreateTab(path);",
+		);
+		expect(script).toContain("else navigateCanvasTab(srcTab.id, path);");
+	});
+
+	test("navigateCanvasTab repoints a tab's iframe via canvasTabSrc (not raw nav)", () => {
+		// The fix routes cross-page links through canvasTabSrc so the target loads in
+		// a correctly-served iframe, instead of the sandbox navigating itself (which
+		// failed with ERR_CONNECTION_REFUSED under the null-origin CSP).
+		expect(script).toContain("tab.iframeEl.src = canvasTabSrc(path);");
+		// The pinned Home tab can't be repointed — it opens a real tab instead.
+		expect(script).toContain(
+			"if (tab.pinned) { findOrCreateTab(path); return; }",
+		);
+	});
 });
