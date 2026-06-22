@@ -1,5 +1,5 @@
-import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
+import type { FC } from "hono/jsx";
 import { Layout, pawMark } from "./layout.js";
 
 interface ChatPageProps {
@@ -1861,12 +1861,40 @@ export function getChatScript(): string {
   }
   setInterval(pollAmbient, 20000);
   setTimeout(pollAmbient, 1500);
-  // The portrait (sandboxed iframe) asks the parent to open a notification link.
+  // The portrait (sandboxed iframe) asks the parent to open a notification link;
+  // canvas preview pages ask the parent to follow a link to another canvas page
+  // (the null-origin sandbox can't navigate itself there) or to an external URL.
   window.addEventListener("message", function(e){
     var m = e.data;
-    if (m && m.type === "paw:notify-open") {
+    if (!m || typeof m !== "object") return;
+    if (m.type === "paw:notify-open") {
       if (m.url) window.open(m.url, "_blank", "noopener");
       else window.location.href = "/notifications";
+      return;
+    }
+    if (m.type === "paw:open-external") {
+      if (m.url) window.open(m.url, "_blank", "noopener");
+      return;
+    }
+    if (m.type === "paw:open-canvas") {
+      // Only trust messages from one of our own canvas iframes: sandboxed frames
+      // post with origin "null", so match by source window, not by origin.
+      var srcTab = null;
+      for (var i = 0; i < canvasTabs.length; i++) {
+        if (canvasTabs[i].iframeEl && canvasTabs[i].iframeEl.contentWindow === e.source) { srcTab = canvasTabs[i]; break; }
+      }
+      if (!srcTab) return;
+      var path = m.path;
+      if (typeof path !== "string" || !path) return;
+      // Reject absolute / reserved / traversal paths (server re-validates too).
+      if (path.charAt(0) === "/" || path.indexOf("__") === 0) return;
+      var segs = path.split("/");
+      for (var s = 0; s < segs.length; s++) { if (segs[s] === "..") return; }
+      // New tab on modified click / target; otherwise navigate the source tab in
+      // place. The pinned Home tab can't be navigated, so open a tab instead.
+      if (m.newTab || srcTab.pinned) findOrCreateTab(path);
+      else navigateCanvasTab(srcTab.id, path);
+      return;
     }
   });
 
@@ -2038,6 +2066,25 @@ export function getChatScript(): string {
       }
     }
     return createCanvasTab(path);
+  }
+
+  // Navigate an existing (non-pinned) tab in place to another canvas file — used
+  // when a link inside a canvas page points to another canvas page, so it browses
+  // like a multi-page site instead of opening a tab per click. The pinned Home
+  // tab can't be repointed, so fall back to opening/activating a real tab.
+  function navigateCanvasTab(id, path) {
+    for (var i = 0; i < canvasTabs.length; i++) {
+      if (canvasTabs[i].id !== id) continue;
+      var tab = canvasTabs[i];
+      if (tab.pinned) { findOrCreateTab(path); return; }
+      if (tab.path === path) { activateCanvasTab(tab.id); return; }
+      tab.path = path;
+      tab.label = null;
+      tab.iframeEl.src = canvasTabSrc(path);
+      canvasCurrentFileName = path;
+      renderCanvasTabs();
+      return;
+    }
   }
 
   // Initialize the pinned Home tab (the live portrait). Real files (incl. the

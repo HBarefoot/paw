@@ -179,6 +179,163 @@ describe("injectCanvasRuntime", () => {
 	});
 });
 
+// ── Cross-canvas-page link routing (fix/canvas-cross-page-links) ────────────
+// A link from one canvas page to another used to navigate the null-origin
+// sandboxed preview iframe itself, which fails under the CSP 'self' token (an
+// opaque origin matches nothing) → ERR_CONNECTION_REFUSED / blocked frame. The
+// runtime shim now intercepts those clicks and hands the target up to the parent
+// console via postMessage, so the tab system opens it in a fresh iframe.
+describe("CANVAS_RUNTIME cross-page link interception", () => {
+	// Pull the runtime shim (the script that carries the link router).
+	const runtimeScript = (): string => {
+		const s = extractScripts(injectCanvasRuntime("<body></body>")).find((x) =>
+			x.includes("paw:open-canvas"),
+		);
+		if (!s) throw new Error("runtime shim with link router not found");
+		return s;
+	};
+
+	// Load the cooked shim against DOM stubs and return its captured click
+	// handler + the messages it posts to window.parent.
+	function loadClick(scrollTarget?: unknown) {
+		const handlers: Record<string, (e: unknown) => void> = {};
+		const messages: unknown[] = [];
+		const doc = {
+			addEventListener(type: string, fn: (e: unknown) => void) {
+				handlers[type] = fn;
+			},
+			getElementById: () => scrollTarget ?? null,
+			querySelector: () => scrollTarget ?? null,
+		};
+		let scrolledTop = false;
+		const win = {
+			parent: { postMessage: (msg: unknown) => messages.push(msg) },
+			scrollTo: () => {
+				scrolledTop = true;
+			},
+		};
+		const loc = {
+			host: "paw.test",
+			href: "https://paw.test/api/canvas/preview/index.html",
+			pathname: "/api/canvas/preview/index.html",
+		};
+		new Function(
+			"document",
+			"window",
+			"location",
+			"FormData",
+			"fetch",
+			"setTimeout",
+			"CustomEvent",
+			runtimeScript(),
+		)(
+			doc,
+			win,
+			loc,
+			function FormData() {
+				return { forEach() {} };
+			},
+			() => Promise.resolve({ json: () => Promise.resolve({}) }),
+			() => 0,
+			function CustomEvent() {},
+		);
+		return { click: handlers.click, messages, top: () => scrolledTop };
+	}
+
+	function clickEvent(anchor: unknown, extra: Record<string, unknown> = {}) {
+		let prevented = false;
+		return {
+			target: { closest: () => anchor },
+			preventDefault() {
+				prevented = true;
+			},
+			metaKey: false,
+			ctrlKey: false,
+			button: 0,
+			wasPrevented: () => prevented,
+			...extra,
+		};
+	}
+
+	const link = (href: string, target = "") => {
+		// .href mirrors the browser-resolved absolute URL; getAttribute returns raw.
+		let abs: string;
+		if (/^[a-z]+:/i.test(href))
+			abs = href; // already has a scheme (http(s), mailto, tel)
+		else if (href.charAt(0) === "#")
+			abs = `https://paw.test/api/canvas/preview/index.html${href}`;
+		else abs = `https://paw.test/api/canvas/preview/${href}`; // relative to current page
+		return {
+			href: abs,
+			getAttribute: (n: string) =>
+				n === "href" ? href : n === "target" ? target : null,
+		};
+	};
+
+	it("routes a relative link to another canvas page to the parent (navigate in place)", () => {
+		const { click, messages } = loadClick();
+		// The real-world case: a page at /api/canvas/preview/index.html with
+		// <a href="sales-campaign/broker-outreach/index.html"> (browser resolves it).
+		const a = link("sales-campaign/broker-outreach/index.html");
+		const e = clickEvent(a);
+		click(e);
+		expect(messages).toEqual([
+			{
+				type: "paw:open-canvas",
+				path: "sales-campaign/broker-outreach/index.html",
+				newTab: false,
+			},
+		]);
+		expect(e.wasPrevented()).toBe(true);
+	});
+
+	it("decodes a percent-encoded canvas path", () => {
+		const { click, messages } = loadClick();
+		click(
+			clickEvent(link("https://paw.test/api/canvas/preview/my%20page.html")),
+		);
+		expect(messages).toEqual([
+			{ type: "paw:open-canvas", path: "my page.html", newTab: false },
+		]);
+	});
+
+	it("meta/ctrl-click (and target=_blank) opens a new tab", () => {
+		const url = "https://paw.test/api/canvas/preview/b.html";
+		const meta = loadClick();
+		meta.click(clickEvent(link(url), { metaKey: true }));
+		expect((meta.messages[0] as { newTab: boolean }).newTab).toBe(true);
+
+		const blank = loadClick();
+		blank.click(clickEvent(link(url, "_blank")));
+		expect((blank.messages[0] as { newTab: boolean }).newTab).toBe(true);
+	});
+
+	it("hands an external http(s) link up to open in a new browser tab", () => {
+		const { click, messages } = loadClick();
+		const e = clickEvent(link("https://example.com/post"));
+		click(e);
+		expect(messages).toEqual([
+			{ type: "paw:open-external", url: "https://example.com/post" },
+		]);
+		expect(e.wasPrevented()).toBe(true);
+	});
+
+	it("still smooth-scrolls in-page #anchors (no parent message)", () => {
+		const scrollTarget = { scrollIntoView: () => {} };
+		const { click, messages } = loadClick(scrollTarget);
+		click(clickEvent(link("#section")));
+		expect(messages).toEqual([]);
+	});
+
+	it("leaves mailto: links alone (no preventDefault, no message)", () => {
+		const { click, messages } = loadClick();
+		const e = clickEvent(link("mailto:hi@paw.test"));
+		click(e);
+		expect(messages).toEqual([]);
+		expect(e.wasPrevented()).toBe(false);
+	});
+});
+
 describe("shouldServeCompanion (authed-only gating)", () => {
 	// Stand-in for authManager.validateSession: only "good" tokens validate.
 	const validate = (t: string) => (t === "good" ? { user_id: 1 } : null);
