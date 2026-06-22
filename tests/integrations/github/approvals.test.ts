@@ -175,3 +175,144 @@ describe("GitHubApprovals — origin + lifecycle + events", () => {
 		expect(audits.filter((a) => a.endsWith(".expired"))).toHaveLength(1);
 	});
 });
+
+describe("execute-on-approve — external (hook-gated) approvals", () => {
+	// Helper: queue an `external` approval the way the kernel's approval sink does.
+	function enqueueExternal(
+		q: GitHubApprovals,
+		tool: string,
+		input: Record<string, unknown>,
+		requestedBy = "agent-x-1",
+	): string {
+		return q.enqueueExternal({
+			summary: `${tool} — needs approval`,
+			params: { tool, input },
+			requestedBy,
+		});
+	}
+
+	test("approve runs the stored tool ONCE with the exact stored input → executed", async () => {
+		const db = freshDb();
+		const calls: Array<{
+			tool: string;
+			input: Record<string, unknown>;
+			sessionId?: string;
+		}> = [];
+		const q = new GitHubApprovals(db); // no GitHub client — external must still run
+		q.setToolExecutor(async (tool, input, sessionId) => {
+			calls.push({ tool, input, sessionId });
+			return { ok: true, result: { sent: true } };
+		});
+
+		const id = enqueueExternal(q, "slack_send", { channel: "C1", text: "hi" });
+		const row = await q.approve(id, "web:1");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0].tool).toBe("slack_send");
+		expect(calls[0].input).toEqual({ channel: "C1", text: "hi" });
+		expect(calls[0].sessionId).toBe("agent-x-1"); // original requesting session
+		expect(row.status).toBe("executed");
+		expect(row.result).toEqual({ tool: "slack_send", result: { sent: true } });
+	});
+
+	test("executor returns ok:false → failed with the error in result_json", async () => {
+		const db = freshDb();
+		const q = new GitHubApprovals(db);
+		q.setToolExecutor(async () => ({ ok: false, error: "channel not found" }));
+		const id = enqueueExternal(q, "slack_send", { channel: "bad" });
+		const row = await q.approve(id, "web:1");
+		expect(row.status).toBe("failed");
+		expect((row.result as { error?: string })?.error).toContain(
+			"channel not found",
+		);
+	});
+
+	test("executor throws → failed (no silent swallow)", async () => {
+		const db = freshDb();
+		const q = new GitHubApprovals(db);
+		q.setToolExecutor(async () => {
+			throw new Error("boom");
+		});
+		const id = enqueueExternal(q, "slack_send", {});
+		const row = await q.approve(id, "web:1");
+		expect(row.status).toBe("failed");
+		expect((row.result as { error?: string })?.error).toContain("boom");
+	});
+
+	test("no executor wired → failed with a clear error (never a guess)", async () => {
+		const db = freshDb();
+		const q = new GitHubApprovals(db); // setToolExecutor NOT called
+		const id = enqueueExternal(q, "slack_send", {});
+		const row = await q.approve(id, "web:1");
+		expect(row.status).toBe("failed");
+		expect((row.result as { error?: string })?.error).toContain(
+			"no tool executor",
+		);
+	});
+
+	test("malformed row (no tool recorded) → failed, executor not called", async () => {
+		const db = freshDb();
+		let called = 0;
+		const q = new GitHubApprovals(db);
+		q.setToolExecutor(async () => {
+			called++;
+			return { ok: true };
+		});
+		// Queue an external approval with no `tool` in params.
+		const id = q.enqueueExternal({ summary: "x", params: { input: {} } });
+		const row = await q.approve(id, "web:1");
+		expect(row.status).toBe("failed");
+		expect(called).toBe(0);
+		expect((row.result as { error?: string })?.error).toContain("no tool");
+	});
+
+	test("idempotent: a second approve does NOT execute the tool again", async () => {
+		const db = freshDb();
+		let called = 0;
+		const q = new GitHubApprovals(db);
+		q.setToolExecutor(async () => {
+			called++;
+			return { ok: true, result: "ok" };
+		});
+		const id = enqueueExternal(q, "slack_send", {});
+		await q.approve(id, "web:1");
+		expect(called).toBe(1);
+		// The status guard refuses a second decision (throws) — and crucially the
+		// side-effecting tool never runs twice.
+		await expect(q.approve(id, "web:2")).rejects.toThrow(/already executed/);
+		expect(called).toBe(1);
+	});
+
+	test("reject records rejection and never calls the executor", async () => {
+		const db = freshDb();
+		let called = 0;
+		const q = new GitHubApprovals(db);
+		q.setToolExecutor(async () => {
+			called++;
+			return { ok: true };
+		});
+		const id = enqueueExternal(q, "slack_send", {});
+		const row = q.reject(id, "web:1");
+		expect(row.status).toBe("rejected");
+		expect(called).toBe(0);
+	});
+
+	test("approval:resolved carries the executed result", async () => {
+		const db = freshDb();
+		const bus = new EventBus();
+		const resolved: EventMap["approval:resolved"][] = [];
+		bus.on("approval:resolved", (r) => {
+			resolved.push(r);
+		});
+		const q = new GitHubApprovals(db, undefined, undefined, bus);
+		q.setToolExecutor(async () => ({ ok: true, result: { merged: true } }));
+		const id = enqueueExternal(q, "github_merge", { pr: 7 });
+		await q.approve(id, "web:1");
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0].status).toBe("executed");
+		expect(resolved[0].result).toEqual({
+			tool: "github_merge",
+			result: { merged: true },
+		});
+	});
+});

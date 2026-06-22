@@ -94,6 +94,8 @@ export interface EventMap {
 		decidedBy: string;
 		originChannel: string | null;
 		originRef: string | null;
+		/** The executed action's result (e.g. the re-run tool's output), if any. */
+		result?: unknown;
 	};
 	"mcp:schema-drift": {
 		server: string;

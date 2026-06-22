@@ -146,6 +146,17 @@ export class GitHubApprovals {
 		string,
 		(row: PendingActionRow) => Promise<unknown>
 	>();
+	// Execute-on-approve for hook-gated `external` approvals (Phase 2b): re-runs
+	// the EXACT stored {tool, input}, bypassing ONLY the approval verdict (every
+	// other sandbox/permission check still applies). Kernel-injected so this
+	// module never imports the tool registry. Its own seam — distinct from the
+	// action-keyed `executors` map — because re-executing an arbitrary tool is
+	// security-sensitive and deserves a single, reviewable entry point.
+	private toolExecutor?: (
+		tool: string,
+		input: Record<string, unknown>,
+		sessionId?: string,
+	) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
 
 	constructor(
 		db: Database,
@@ -170,6 +181,21 @@ export class GitHubApprovals {
 		fn: (row: PendingActionRow) => Promise<unknown>,
 	): void {
 		this.executors.set(action, fn);
+	}
+
+	/**
+	 * Wire the approved-tool runner (kernel-injected). On approve of an `external`
+	 * row this re-runs the gated tool with its stored params, bypassing ONLY the
+	 * approval verdict — every other sandbox/permission check still applies.
+	 */
+	setToolExecutor(
+		fn: (
+			tool: string,
+			input: Record<string, unknown>,
+			sessionId?: string,
+		) => Promise<{ ok: boolean; result?: unknown; error?: string }>,
+	): void {
+		this.toolExecutor = fn;
 	}
 
 	/** Queue an action for approval. Returns the new pending-action id. */
@@ -244,6 +270,10 @@ export class GitHubApprovals {
 			decidedBy,
 			originChannel: row.origin_channel,
 			originRef: row.origin_ref,
+			// The executed action's result (e.g. the re-run tool's output), so
+			// downstream consumers — the board approval lane (Phase 2b) — can record
+			// it as evidence. Null for reject/failed.
+			result: row.result ?? undefined,
 		});
 	}
 
@@ -374,6 +404,31 @@ export class GitHubApprovals {
 		if (executor) return executor(row);
 
 		const p = row.params;
+
+		// A hook-gated tool call, now human-approved: re-run the EXACT stored
+		// {tool, input} via the kernel-injected executor (bypassing ONLY the
+		// approval verdict). Handled BEFORE the GitHub-client guard — external
+		// approvals must work without the GitHub integration. A throw here →
+		// approve() records `failed` with the error in result_json.
+		if (row.action === "external") {
+			const tool = typeof p.tool === "string" ? p.tool : null;
+			if (!tool)
+				throw new Error("external approval: no tool recorded to execute.");
+			if (!this.toolExecutor)
+				throw new Error("external approval: no tool executor wired.");
+			const input =
+				p.input && typeof p.input === "object" && !Array.isArray(p.input)
+					? (p.input as Record<string, unknown>)
+					: {};
+			const r = await this.toolExecutor(
+				tool,
+				input,
+				row.requested_by ?? undefined,
+			);
+			if (!r.ok) throw new Error(r.error ?? `tool ${tool} failed`);
+			return { tool, result: r.result };
+		}
+
 		// All remaining branches are GitHub actions; they need the client.
 		if (!this.client) {
 			throw new Error(`No executor for action "${row.action}".`);
@@ -396,14 +451,6 @@ export class GitHubApprovals {
 					String(p.ref),
 					p.inputs as Record<string, string> | undefined,
 				);
-			case "external":
-				// Approving an external (hook-originated) request records the human
-				// decision but does NOT re-run the blocked tool call — full
-				// re-execution on approve is a deferred follow-up. Resolves cleanly.
-				return {
-					approved: true,
-					note: "External approval recorded; tool re-execution on approve is not yet automated.",
-				};
 			default:
 				throw new Error(`Unknown gated action: ${row.action}`);
 		}
