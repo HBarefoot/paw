@@ -1,0 +1,123 @@
+/* Objective ledger board (read-only). Uses the DS design tokens (var(--line),
+   --panel, --ink-*, etc.) so it themes with the active brand. Horizontal-scroll
+   kanban lanes; cards are compact. No drag-and-drop this phase. */
+
+.tasks-board {
+	display: flex;
+	gap: 12px;
+	padding: 14px 15px;
+	overflow-x: auto;
+	align-items: flex-start;
+}
+
+.task-col {
+	flex: 0 0 240px;
+	display: flex;
+	flex-direction: column;
+	background: var(--panel-2, rgba(255, 255, 255, 0.02));
+	border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+	border-radius: 10px;
+	min-height: 80px;
+}
+
+.task-col-hd {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 9px 11px;
+	border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+}
+
+.task-col-label {
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ink-dim, #8a978f);
+	font-weight: 600;
+}
+
+.task-col-count {
+	font-size: 11px;
+	color: var(--ink-dim, #8a978f);
+	background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+	border-radius: 999px;
+	padding: 1px 8px;
+	min-width: 20px;
+	text-align: center;
+}
+
+.task-col-body {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 9px;
+}
+
+.task-col-empty {
+	color: var(--ink-dim, #8a978f);
+	font-size: 13px;
+	text-align: center;
+	padding: 8px 0;
+	opacity: 0.5;
+}
+
+.task-card {
+	background: var(--panel, rgba(255, 255, 255, 0.03));
+	border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+	border-radius: 8px;
+	padding: 9px 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.task-card.overdue {
+	border-color: var(--warning, #e0a13f);
+}
+
+.task-card-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.task-title {
+	font-size: 13.5px;
+	line-height: 1.35;
+	color: var(--ink-bright, #e6ece8);
+	font-weight: 500;
+}
+
+.task-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+}
+
+.task-evidence {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	border-top: 1px dashed var(--line, rgba(255, 255, 255, 0.08));
+	padding-top: 6px;
+}
+
+.task-evidence-label {
+	font-size: 9.5px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--success, #3fe08f);
+}
+
+.task-evidence-text {
+	font-size: 12px;
+	color: var(--ink-dim, #8a978f);
+	word-break: break-word;
+}
+
+.task-evidence-link {
+	font-size: 12px;
+	color: var(--accent-bright, #3fe08f);
+	word-break: break-all;
+}

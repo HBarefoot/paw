@@ -77,6 +77,11 @@ import {
 	createCanvasBridgeTools,
 } from "../tools/canvas-bridge-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
+import {
+	listEscalatable,
+	markEscalated,
+} from "../store/agent-work.js";
+import { createTaskTools } from "../tools/task-tools.js";
 import { createCodeTools } from "../tools/code-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
 import { createFileTools } from "../tools/file-tools.js";
@@ -137,6 +142,7 @@ export class Kernel {
 	private webServer: { stop: () => void } | null = null;
 	private webAppCleanup: (() => void) | null = null;
 	private sessionCleanupInterval: ReturnType<typeof setInterval> | null = null;
+	private taskEscalationInterval: ReturnType<typeof setInterval> | null = null;
 	private mcpClientManager: MCPClientManager;
 	private strapiClient:
 		| import("../integrations/strapi/client.js").StrapiClient
@@ -294,6 +300,8 @@ export class Kernel {
 				"canvas:write",
 				"playbook:read",
 				"playbook:write",
+				"task:read",
+				"task:write",
 			],
 		});
 
@@ -625,6 +633,14 @@ export class Kernel {
 				}),
 			);
 			this.logger.info("Canvas tools registered", { canvasRoot });
+		}
+
+		// Objective ledger: the agent's persistent task board (task_* tools).
+		// Grouped under the on-demand "tasks" skill. The escalation valve is
+		// started in start() (it needs the notifications store + a live timer).
+		if (config.tasks.enabled) {
+			this.toolRegistry.register(createTaskTools({ database: this.db }));
+			this.logger.info("Task tools registered");
 		}
 
 		// Initialize cron scheduler
@@ -1263,6 +1279,38 @@ export class Kernel {
 				host: this.config.web.host,
 				port: this.config.web.port,
 			});
+		}
+
+		// Escalation valve: the "interrupt the owner" path. A dedicated timer
+		// (independent of heartbeat/cron, so it runs even when those are off)
+		// scans for overdue/blocked tasks and posts a notification once per
+		// task, deduped via last_escalated_at.
+		if (this.config.tasks.enabled) {
+			const intervalMs = this.config.tasks.escalationIntervalMs;
+			const dedupeHours = this.config.tasks.escalationDedupeHours;
+			this.taskEscalationInterval = setInterval(() => {
+				try {
+					const now = new Date().toISOString();
+					for (const t of listEscalatable(this.db, now, dedupeHours)) {
+						const why =
+							t.status === "blocked"
+								? "Task is blocked."
+								: `Task is past its deadline (due ${t.due_at}).`;
+						this.notificationStoreInstance.add({
+							kind: "tasks",
+							level: "warning",
+							title: `Task ${t.status === "blocked" ? "blocked" : "overdue"}: ${t.title}`,
+							body: why,
+							url: `/tasks#${t.id}`,
+						});
+						markEscalated(this.db, t.id, now);
+					}
+				} catch (err) {
+					this.logger.error("Task escalation check failed", {
+						error: String(err),
+					});
+				}
+			}, intervalMs);
 		}
 
 		await this.bus.emit("kernel:ready", undefined);
@@ -2933,6 +2981,10 @@ export class Kernel {
 		if (this.sessionCleanupInterval) {
 			clearInterval(this.sessionCleanupInterval);
 			this.sessionCleanupInterval = null;
+		}
+		if (this.taskEscalationInterval) {
+			clearInterval(this.taskEscalationInterval);
+			this.taskEscalationInterval = null;
 		}
 		// Stop the rate-limiter's periodic eviction timer (H-NEW-12). The
 		// timer holds a strong reference to the limiter (and indirectly

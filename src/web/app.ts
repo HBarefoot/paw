@@ -113,6 +113,8 @@ import { createCanvasEditRoutes } from "./routes/canvas-edit.js";
 import { createFormReceiver } from "./routes/forms.js";
 import { createOpenAiApi } from "./routes/openai-api.js";
 import { buildOpsFeed } from "./routes/ops-feed.js";
+import { buildTasksFeed } from "./routes/tasks-feed.js";
+import { listAll as listAllTasks } from "../store/agent-work.js";
 import { AccessPage, recognizedIds } from "./views/access-page.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
@@ -125,6 +127,7 @@ import { MCPPage } from "./views/mcp-page.js";
 import { MemoryPage } from "./views/memory-page.js";
 import { NotificationsPage } from "./views/notifications-page.js";
 import { OpsPage } from "./views/ops-page.js";
+import { TasksPage } from "./views/tasks-page.js";
 import { PromptsPage } from "./views/prompts-page.js";
 import { type SearchHit, SearchPage } from "./views/search-page.js";
 import { SessionDetailPage, SessionsListPage } from "./views/sessions-page.js";
@@ -942,6 +945,23 @@ export function createWebApp(
 				assetVersion: ASSET_VERSION,
 			}),
 		);
+	});
+
+	// Objective ledger board (read-only, Phase 1) + its live feed. The board
+	// JS polls /api/tasks/feed (LIVE rate class) and renders the agent_work
+	// columns. Drag-and-drop / writes are Phase 2.
+	app.get("/tasks", (c) => {
+		// .toString() renders the JSX node to the same HTML string Hono would
+		// produce internally, but typed as `string` — so it doesn't add to the
+		// known c.html(JSXNode) TS2769 overload class (_CONVENTIONS.md gate).
+		const node = TasksPage({
+			assetVersion: ASSET_VERSION,
+			currentPath: "/tasks",
+		});
+		return c.html((node ?? "").toString());
+	});
+	app.get("/api/tasks/feed", (c) => {
+		return c.json(buildTasksFeed(listAllTasks(kernel.database)));
 	});
 
 	// Live feed for the Dashboard agent-ops scene. Returns tool calls newer than
@@ -2166,6 +2186,24 @@ export function createWebApp(
 		const file = c.req.param("file");
 		if (!/^[a-z0-9_-]+\.(js|css)$/.test(file)) return c.text("Not found", 404);
 		const p = resolve(import.meta.dir, "public/ops", file);
+		if (!existsSync(p)) return c.text("Not found", 404);
+		c.header(
+			"Content-Type",
+			file.endsWith(".css")
+				? "text/css; charset=utf-8"
+				: "application/javascript; charset=utf-8",
+		);
+		c.header("Cache-Control", "public, max-age=3600");
+		return c.body(await Bun.file(p).arrayBuffer());
+	});
+
+	// Tasks board module + styles (served from 'self', not template-literal
+	// strings — the inline-script-template-trap). Same whitelist/content-type
+	// pattern as /ops/static. Read-only board behind /tasks.
+	app.get("/tasks/static/:file", async (c) => {
+		const file = c.req.param("file");
+		if (!/^[a-z0-9_-]+\.(js|css)$/.test(file)) return c.text("Not found", 404);
+		const p = resolve(import.meta.dir, "public/tasks", file);
 		if (!existsSync(p)) return c.text("Not found", 404);
 		c.header(
 			"Content-Type",

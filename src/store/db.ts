@@ -623,6 +623,35 @@ function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_brands_active ON brands(active);
   `);
 
+	// Objective ledger: the agent's persistent task board. Unlike ephemeral
+	// chat/cron runs, these rows survive so Paw can read + write its own work,
+	// carry deadlines (due_at), and escalate when overdue/blocked. The verify
+	// gate (a transition to status='done' REQUIRES non-empty evidence) is
+	// enforced in src/store/agent-work.ts, not here. Mirrors the
+	// github_pending_actions block above. DnD/auto-advance are Phase 2.
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_work (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      body TEXT,                                  -- markdown detail
+      status TEXT NOT NULL DEFAULT 'backlog'
+        CHECK(status IN ('backlog','queued','working','needs_approval','blocked','done','failed')),
+      priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high')),
+      due_at TEXT,                                -- ISO; NULL = no deadline       [AUTONOMY]
+      evidence TEXT,                              -- verification artifact; REQUIRED for done [AUTONOMY]
+      approval_id TEXT,                           -- FK-ish to github_pending_actions.id (Phase 2)
+      session_id TEXT,                            -- the run that owns it
+      agent_name TEXT,
+      error TEXT,
+      position INTEGER NOT NULL DEFAULT 0,
+      last_escalated_at TEXT,                     -- dedupes escalation notifications [AUTONOMY]
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_work_status ON agent_work(status, position);
+  `);
+
 	// Backfill: re-parent canvas sessions to the per-admin user_id.
 	// Before per-admin scoping was added (REVIEW-2026-06-09.md C-NEW-1),
 	// canvas sessions were stored with user_id="canvas-user". Now they

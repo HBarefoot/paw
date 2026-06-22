@@ -68,6 +68,10 @@ export class SkillManager {
 		// under their own always-active "canvas" skill rather than falling
 		// into "files". Match by name so this holds regardless of plugin.
 		if (tool.name.startsWith("canvas_")) return "canvas";
+		// Objective-ledger tools carry plugin: "kernel" but group under their own
+		// on-demand "tasks" skill (NOT always-on — held off the per-request token
+		// budget; the agent activates it when managing its work).
+		if (tool.name.startsWith("task_")) return "tasks";
 		if (tool.plugin === "kernel") {
 			if (tool.name.startsWith("memory_")) return "memory";
 			if (
@@ -92,6 +96,8 @@ export class SkillManager {
 				"Read, write, and list files; run shell commands in the workspace.",
 			canvas:
 				"Build the live canvas workspace: write/read/list files, organize into folders (mkdir/move/delete), and wire page forms to real backends (canvas_action_create routes submissions to Strapi/HubSpot).",
+			tasks:
+				"Track and manage the persistent objective ledger (task board): create, list, get, and update tasks with deadlines. Mark a task done only with verification evidence proving the work landed.",
 			slack: "Post messages and add reactions in Slack.",
 			"web-pilot":
 				"Browse the web: navigate, click, fill forms, take screenshots.",

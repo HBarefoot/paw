@@ -98,6 +98,16 @@ export const configSchema = z.object({
 		enabled: z.boolean().default(true),
 		tickIntervalMs: z.number().int().positive().default(60_000),
 	}),
+	tasks: z
+		.object({
+			// Gates the task_* tools AND the escalation valve.
+			enabled: z.boolean().default(true),
+			// How often the escalation valve scans for overdue/blocked tasks.
+			escalationIntervalMs: z.number().int().positive().default(300_000),
+			// Don't re-notify the owner about the same task within this window.
+			escalationDedupeHours: z.number().int().positive().default(6),
+		})
+		.default({}),
 	heartbeat: z.object({
 		enabled: z.boolean().default(true),
 		intervalMinutes: z.number().int().positive().default(30),
