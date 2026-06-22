@@ -1,3 +1,4 @@
+import { frameUntrustedToolResult } from "../security/untrusted.js";
 import type { ToolResult, ToolResultImage } from "../types/message.js";
 import type { StreamChunk } from "./base-provider.js";
 import { summarizeToolInput } from "./tool-summary.js";
@@ -86,7 +87,8 @@ export async function executeToolsParallel(
 		return {
 			id: call.id,
 			name: call.name,
-			content: result.content ?? "",
+			// Frame untrusted tool output as data (see security/untrusted.ts).
+			content: frameUntrustedToolResult(result.content ?? ""),
 			is_error: result.is_error,
 			images: result.images,
 			durationMs: Date.now() - startTime,
@@ -195,7 +197,8 @@ export async function* executeToolsParallelStreaming(
 			{
 				id: call.id,
 				name: call.name,
-				content: result.content ?? "",
+				// Frame untrusted tool output as data (see security/untrusted.ts).
+			content: frameUntrustedToolResult(result.content ?? ""),
 				is_error: result.is_error,
 				images: result.images,
 				durationMs,
@@ -282,7 +285,8 @@ export async function* executeToolsParallelStreaming(
 					result: {
 						id: call.id,
 						name: call.name,
-						content: result.content ?? "",
+						// Frame untrusted tool output as data (see security/untrusted.ts).
+			content: frameUntrustedToolResult(result.content ?? ""),
 						is_error: result.is_error,
 						images: result.images,
 						durationMs: Date.now() - startTime,
