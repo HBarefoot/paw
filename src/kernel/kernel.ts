@@ -78,10 +78,13 @@ import {
 } from "../tools/canvas-bridge-tools.js";
 import { createCanvasTools } from "../tools/canvas-tools.js";
 import {
+	listBySession,
 	listEscalatable,
 	markEscalated,
 } from "../store/agent-work.js";
 import { createTaskTools } from "../tools/task-tools.js";
+import { recordRunVerdict } from "../observability/run-verdict.js";
+import { recordRun } from "../store/runs.js";
 import { createCodeTools } from "../tools/code-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
 import { createFileTools } from "../tools/file-tools.js";
@@ -1677,6 +1680,9 @@ export class Kernel {
 	}
 
 	private async handleInbound(msg: InboundMessage): Promise<void> {
+		// Run-window start: scopes the post-run verdict's tool/task lookups to
+		// THIS run (logs accumulate across a session's turns).
+		const runStartedAt = new Date().toISOString();
 		this.logger.info("Inbound message", {
 			channel: msg.channel,
 			sessionId: msg.sessionId,
@@ -2065,6 +2071,9 @@ export class Kernel {
 					this.logger.warn("Auto-extract failed", { error: String(err) });
 				});
 			}
+
+			// Score this run for phantom success (fail-open, after outbound).
+			this.scoreCompletedRun(msg, replyText, runStartedAt);
 		} catch (err) {
 			this.logger.error("AI provider error", { error: String(err) });
 			const errStr = String(err);
@@ -2284,6 +2293,9 @@ export class Kernel {
 	}
 
 	async *handleInboundStream(msg: InboundMessage): AsyncGenerator<StreamChunk> {
+		// Run-window start: scopes the post-run verdict's tool/task lookups to
+		// THIS run (logs accumulate across a session's turns).
+		const runStartedAt = new Date().toISOString();
 		this.logger.info("Inbound stream message", {
 			channel: msg.channel,
 			sessionId: msg.sessionId,
@@ -2531,6 +2543,9 @@ export class Kernel {
 					this.logger.warn("Auto-extract failed", { error: String(err) });
 				});
 			}
+
+			// Score this run for phantom success (fail-open, post-`done`).
+			this.scoreCompletedRun(msg, replyText, runStartedAt);
 		} catch (err) {
 			this.logger.error("Stream error", { error: String(err) });
 			yield { type: "error", error: String(err) };
@@ -2548,6 +2563,45 @@ export class Kernel {
 	// timestamp of the last accepted extract call.
 	private lastAutoExtractAt = new Map<string, number>();
 	private static readonly AUTO_EXTRACT_COOLDOWN_MS = 5_000;
+
+	/**
+	 * Score a completed run for phantom success (observability Phase 1).
+	 * Cross-references the agent's claim (final assistant text) against this
+	 * run's tool log + ledger tasks, records a verdict row, and alerts on a
+	 * non-ok verdict. Called from BOTH completion paths (stream + non-stream)
+	 * since each run traverses exactly one — so it fires once per run.
+	 *
+	 * FAIL-OPEN: the whole thing is wrapped so a scoring error can never break
+	 * or delay a run that already succeeded for the user. `startedAt` scopes the
+	 * tool/task lookups to THIS run (logs accumulate across a session's turns).
+	 */
+	private scoreCompletedRun(
+		msg: InboundMessage,
+		claimText: string,
+		startedAt: string,
+	): void {
+		try {
+			const entries = (
+				this.toolLog?.query({ sessionId: msg.sessionId, limit: 500 }) ?? []
+			).filter((e) => e.created_at >= startedAt);
+			const tasks = listBySession(this.db, msg.sessionId).filter(
+				(t) => t.created_at >= startedAt,
+			);
+			recordRunVerdict({
+				input: { claimText, toolEntries: entries, sessionTasks: tasks },
+				id: crypto.randomUUID(),
+				sessionId: msg.sessionId,
+				channel: msg.channel,
+				userId: msg.user.id,
+				startedAt,
+				endedAt: new Date().toISOString(),
+				recordRun: (row) => recordRun(this.db, row),
+				notify: (n) => this.notificationStoreInstance.add(n),
+			});
+		} catch (err) {
+			this.logger.warn("Run verdict scoring failed", { error: String(err) });
+		}
+	}
 
 	/**
 	 * Returns true if the cooldown has elapsed for this user. The

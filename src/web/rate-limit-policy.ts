@@ -54,6 +54,7 @@ const LIVE_EXACT = new Set([
 	"/api/agent-ops",
 	"/api/ops/feed",
 	"/api/tasks/feed",
+	"/api/runs/feed",
 	"/api/canvas/events",
 	"/api/canvas/files",
 	"/api/github/events",
