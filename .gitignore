@@ -23,3 +23,10 @@ llms-full.txt
 Interactive Data Visualization/
 Skill Layout Design/
 docs/prompts/PROMPT-*
+
+# Agent-tooling state (added by `skills add`): local skill cache + symlinks +
+# lockfile. Machine-local — .claude/skills holds symlinks that break on other
+# checkouts. Not paw source.
+.agents/
+.claude/
+skills-lock.json
