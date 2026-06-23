@@ -1,6 +1,16 @@
 # Paw
 
-A personal AI assistant framework built with Bun. Supports multiple AI providers, a plugin system, MCP servers, memory with vector search, cron scheduling, and a web UI for management.
+An AI assistant framework built with Bun, designed to run unattended *honestly*: it tracks its work on a ledger it can't fake, scores its own runs for phantom success, and asks a human before any consequential action. Multi-provider, with a plugin system, MCP servers, vector-search memory, cron scheduling, and a web console.
+
+## Trust & Autonomy
+
+Paw is built to be safe to run **unattended**. Three layers keep it honest:
+
+- **Objective ledger + evidence gate** (`/tasks`) — work is tracked as kanban cards, and a task **cannot be marked done without evidence** (a re-query, a diff, a URL). No silent "I did it."
+- **Run verdicts** (`/runs`) — after every run Paw scores itself against its own tool log and flags "claimed success, no actual work."
+- **Approve-leash + execute-on-approve** — side-effecting actions queue for human approval; on approval Paw runs the *exact* approved action and records the result. Propose → you approve → it proceeds.
+
+Net: Paw can't silently misreport its own work, surfaces every run for verification, and a human approves every consequential action.
 
 ## Quick Start
 
@@ -20,6 +30,9 @@ bun run dev
 
 ## Features
 
+- **Objective ledger + board** (`/tasks`) — work is tracked as kanban cards; a task can't reach *done* without evidence. Cron runs surface as durable cards on the same board.
+- **Run verdicts** (`/runs`) — every run is scored against its own tool log and flagged when it claims success with no actual work (phantom-success detection).
+- **Approve-leash** — side-effecting actions queue for human approval; on approval Paw re-runs the *exact* approved action and records the result (execute-on-approve).
 - **Multi-provider AI** — Claude, OpenAI, Ollama, Gemini. Switch providers via config. Optional vision routing sends image-bearing turns to a configured vision model.
 - **Memory system** — Hybrid vector + full-text search. Auto-extracts facts from conversations. Persists across sessions.
 - **Skills ecosystem** — Tools grouped into skills that load on demand, reducing token usage. Manage via web UI at `/skills`.
@@ -33,7 +46,7 @@ bun run dev
 - **Credential vault** — Encrypted, web-managed secrets (AES-256-GCM); resolved server-side and never exposed to the model.
 - **Agent Ops console** — The `/` dashboard: a live operation feed (Stream + Swarm lenses over the real tool stream) with in-flight tracking and session attribution.
 - **Web UI** — Agent Ops dashboard, chat + canvas, memory browser, session history, config editor, brand/vault/GitHub admin, and skill/cron/MCP management.
-- **Security** — Class-tiered rate limiting, user allowlist/blocklist, pairing code approval, optional TOTP 2FA, sandboxed tool execution.
+- **Security** — Class-tiered rate limiting, user allowlist/blocklist, pairing code approval, optional TOTP 2FA, sandboxed tool execution, and untrusted tool-result framing (external tool output is delimited as data, never instructions).
 
 ## Configuration
 
@@ -117,6 +130,8 @@ Start with `PAW_WEB_ENABLED=true` (or set in config). Default: `http://127.0.0.1
 |------|------|-------------|
 | Agent Ops | `/` | Live operation feed (Stream + Swarm lenses), in-flight tracking, session attribution |
 | Chat | `/chat` | Interactive chat with session persistence; toggle canvas mode for the live visual workspace |
+| Tasks | `/tasks` | Objective-ledger kanban; work advances only with evidence |
+| Runs | `/runs` | Per-run verdicts (phantom-success detection) |
 | Memory | `/memory` | Browse, search, and manage stored memories |
 | Sessions | `/sessions` | View past conversation sessions |
 | Skills | `/skills` | View/toggle/edit skill groups and their tools |
@@ -203,12 +218,13 @@ src/
   kernel/           Kernel, event bus, sandbox, plugin loader
   ai/               Providers (Claude, OpenAI, Ollama, Gemini), tool registry, skills
   memory/           Vector + FTS memory store, auto-extraction
-  store/            SQLite database, sessions, messages
+  store/            SQLite database, sessions, messages, agent-work ledger
+  observability/    Run verdicts (phantom-success detection), tool log, logger
   config/           Schema validation (Zod), config loader/writer
   auth/             Credential storage per provider
   cron/             Cron scheduler with expression parser
   heartbeat/        System health monitoring
-  security/         Access control, rate limiting
+  security/         Access control, rate limiting, untrusted tool-result framing
   mcp/              MCP client manager (stdio, SSE, HTTP)
   web/              Hono web server, JSX views, REST API
   tools/            Built-in file, exec, and canvas tools
