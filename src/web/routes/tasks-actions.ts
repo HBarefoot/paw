@@ -55,12 +55,21 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
 	// auto-advance subscriber routes the finished run to `blocked`. The preamble
 	// leads the turn (the delegate carries only a turn string, so this is the
 	// preamble channel) and interpolates the exact card id both paths must use.
-	const turnFor = (id: string, title: string, body: string | null): string => {
-		const card = body ? `${title}\n\n${body}` : title;
+	const turnFor = (
+		id: string,
+		title: string,
+		body: string | null,
+		operatorNote?: string | null,
+	): string => {
+		const cardBody = body ? `${title}\n\n${body}` : title;
+		// Operator feedback (the help-leash) leads the card body so the agent
+		// retries knowing what it was missing. Sits after the preamble `---`.
+		const note = operatorNote?.trim();
+		const card = note ? `Operator feedback: ${note}\n\n${cardBody}` : cardBody;
 		const preamble = [
 			`You are working board card ${id}. When you finish, you MUST record the outcome on the card with the task_update tool:`,
 			`- If you completed the work, call task_update { id: "${id}", status: "done", evidence: <proof> } where evidence is real proof it landed — a re-query result, a diff, or a URL. Do not write vague or fabricated evidence; if you can't prove it, you are not done.`,
-			`- If you could not finish or can't prove it, call task_update { id: "${id}", status: "blocked", error: <one line why> } and explain.`,
+			`- If you could not finish or can't prove it, call task_update { id: "${id}", status: "blocked", error: <one line why>, block_kind: <needs_feedback | needs_access | needs_capability> } and explain. Pick needs_feedback if operator feedback or a decision would unblock you, needs_access if you're missing a credential or permission, needs_capability if a required tool/feature doesn't exist.`,
 			"Never claim done without evidence — the system will refuse it.",
 		].join("\n");
 		return `${preamble}\n\n---\n\n${card}`;
@@ -84,7 +93,9 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
 		});
 		const agentName = delegate(
 			parentSessionId,
-			turnFor(id, card.title, card.body),
+			// card.operator_note is null for a normal Start; on a resume it carries
+			// the operator's feedback (persisted just before this call).
+			turnFor(id, card.title, card.body, card.operator_note),
 		);
 		if (!agentName) {
 			// No agent configured — undo the link so the card stays actionable.
@@ -175,9 +186,58 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
 			session_id: null,
 			agent_name: null,
 			error: null,
+			block_kind: null,
 		});
 		audit?.("task.retry", adminId(c), { id }, ip(c));
 		return c.json({ ok: true, task: updated });
+	});
+
+	// Resume a blocked card WITH operator feedback (the help-leash). The non-secret
+	// note is persisted and injected into the re-run so the agent retries knowing
+	// what it was missing. `needs_capability` blocks can't be unblocked by a note
+	// (no tool/feature exists) — they're refused here (real escalation is Phase 3).
+	app.post("/api/tasks/:id/resume", async (c) => {
+		if (adminId(c) === null) return c.json({ error: "Unauthorized" }, 401);
+		const id = c.req.param("id");
+		const body = await c.req
+			.json<{ note?: string }>()
+			.catch(() => ({}) as { note?: string });
+		const note = typeof body.note === "string" ? body.note.trim() : "";
+		const card = getTask(db, id);
+		if (!card) return c.json({ error: "task not found" }, 404);
+		if (card.status !== "blocked")
+			return c.json({ error: "only blocked tasks can be resumed" }, 409);
+		if (card.block_kind === "needs_capability")
+			return c.json(
+				{
+					error:
+						"needs_capability blocks need dev work, not operator feedback — an operator note can't add a missing capability",
+				},
+				409,
+			);
+
+		// Cron cards re-run on schedule (no delegation path): persist the note and
+		// unblock; the next scheduled fire reads operator_note via cronCardTurn.
+		const isCron = (card.created_by ?? "").startsWith("cron:");
+		if (isCron) {
+			updateTask(db, id, { operator_note: note || null, block_kind: null });
+			const updated = move(db, id, "queued", card.position);
+			audit?.("task.resume", adminId(c), { id, kind: "cron" }, ip(c));
+			return c.json({ ok: true, task: updated });
+		}
+
+		// Board cards: clear the prior run link (like Retry), queue, and re-delegate
+		// with the note. startCard reads card.operator_note and folds it into the turn.
+		updateTask(db, id, {
+			operator_note: note || null,
+			session_id: null,
+			agent_name: null,
+			error: null,
+			block_kind: null,
+		});
+		move(db, id, "queued", card.position);
+		audit?.("task.resume", adminId(c), { id, kind: "board" }, ip(c));
+		return startCard(c, id);
 	});
 
 	return app;

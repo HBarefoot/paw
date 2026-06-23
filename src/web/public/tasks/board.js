@@ -3,8 +3,9 @@
    Polls GET /api/tasks/feed every ~2.5s and renders the status columns from the
    REAL agent_work rows. Phase 2a adds: native HTML5 drag-and-drop (backlog⇄queued,
    blocked|failed→queued — dragging into `working` is refused), a Start button on
-   queued cards (delegates to an agent), a Retry button on blocked/failed cards,
-   and a minimal add-card input. After any mutation the board re-polls the feed
+   queued cards (delegates to an agent), a Retry button on failed cards, a
+   feedback→Resume form on blocked cards (the help-leash — Phase 1), and a minimal
+   add-card input. After any mutation the board re-polls the feed
    (server is the source of truth — no hand-mutated DOM state). Vanilla, no deps;
    exposes window.TasksBoard. DOM-built (no innerHTML of server strings).
    =========================================================================== */
@@ -22,6 +23,11 @@
 		{ key: "failed", label: "Failed" },
 	];
 	var PRIORITY_BADGE = { high: "error", normal: "neutral", low: "info" };
+	var BLOCK_KIND_LABEL = {
+		needs_feedback: "Needs feedback",
+		needs_access: "Needs access",
+		needs_capability: "Needs capability",
+	};
 
 	// Where a card may be DRAGGED. `working` is Start-only; done/needs_approval
 	// are not user-draggable. Mirrors the server transition guard.
@@ -169,14 +175,61 @@
 				}),
 			);
 			c.appendChild(actions);
-		} else if (card.status === "blocked" || card.status === "failed") {
-			var ra = el("div", "task-actions");
-			ra.appendChild(
+		} else if (card.status === "blocked") {
+			// Help-leash: show why it's blocked, then either a feedback→Resume form
+			// or a "needs dev work" hint when an operator note can't fix it.
+			if (card.block_kind) {
+				var kind = el("div", "task-meta");
+				kind.appendChild(
+					el(
+						"span",
+						"badge warning task-block-kind",
+						BLOCK_KIND_LABEL[card.block_kind] || card.block_kind,
+					),
+				);
+				c.appendChild(kind);
+			}
+			if (card.block_kind === "needs_capability") {
+				c.appendChild(
+					el(
+						"div",
+						"task-hint",
+						"Needs dev work — an operator note can't add a missing capability.",
+					),
+				);
+			} else {
+				var resume = el("div", "task-resume");
+				var noteInput = el("input", "task-resume-input");
+				noteInput.type = "text";
+				noteInput.placeholder = "Feedback to unblock…";
+				if (card.operator_note) noteInput.value = card.operator_note;
+				resume.appendChild(noteInput);
+				resume.appendChild(
+					el(
+						"div",
+						"task-resume-hint",
+						"Don't paste secrets — credentials go in the vault.",
+					),
+				);
+				var ra = el("div", "task-actions");
+				ra.appendChild(
+					actionButton("Resume", "primary", function () {
+						return postJSON("/api/tasks/" + card.id + "/resume", {
+							note: noteInput.value.trim(),
+						}).then(refresh);
+					}),
+				);
+				resume.appendChild(ra);
+				c.appendChild(resume);
+			}
+		} else if (card.status === "failed") {
+			var rf = el("div", "task-actions");
+			rf.appendChild(
 				actionButton("Retry", "", function () {
 					return postJSON("/api/tasks/" + card.id + "/retry", {}).then(refresh);
 				}),
 			);
-			c.appendChild(ra);
+			c.appendChild(rf);
 		}
 		return c;
 	}
@@ -296,5 +349,9 @@
 			if (timer) clearTimeout(timer);
 			poll();
 		},
+		// Test seam: expose the pure card renderer so the blocked-card help-leash
+		// rules (Resume hidden for needs_capability) can be asserted under a fake
+		// DOM without standing up the poll loop. Mirrors window.CompanionInbox.
+		renderCard: renderCard,
 	};
 })();

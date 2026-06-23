@@ -6,7 +6,11 @@
 // rows into status columns and stamps each card with an `overdue` flag so the
 // view can badge past-deadline work without re-deriving "now" client-side.
 
-import type { AgentWork, TaskStatus } from "../../store/agent-work.js";
+import type {
+	AgentWork,
+	BlockKind,
+	TaskStatus,
+} from "../../store/agent-work.js";
 
 /** Column order on the board (matches the design doc's kanban lanes). */
 export const TASK_COLUMNS: TaskStatus[] = [
@@ -31,6 +35,10 @@ export interface TaskCard {
 	session_id: string | null;
 	agent_name: string | null;
 	error: string | null;
+	/** Why a blocked card is blocked — drives the help-leash UI. */
+	block_kind: BlockKind | null;
+	/** The operator feedback last attached to this card (the help-leash). */
+	operator_note: string | null;
 	updated_at: string;
 }
 
@@ -58,6 +66,8 @@ function toCard(row: AgentWork, nowMs: number): TaskCard {
 		session_id: row.session_id,
 		agent_name: row.agent_name,
 		error: row.error,
+		block_kind: row.block_kind,
+		operator_note: row.operator_note,
 		updated_at: row.updated_at,
 	};
 }
