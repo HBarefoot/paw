@@ -592,6 +592,18 @@ export function move(
 			"UPDATE agent_work SET status = ?, position = ?, operator_note = NULL, updated_at = datetime('now') WHERE id = ?",
 			[status, position, id],
 		);
+	} else if (status === "queued") {
+		// Re-queueing RESETS the prior run link so a fresh Start works. A blocked/
+		// failed card keeps its session_id/agent_name/error/block_kind from the run
+		// that left it there; without clearing them a drag→queued would land in
+		// `queued` still carrying a session_id, and startCard refuses any card that
+		// already has a run (→ permanent 409). Retry/Resume already clear these via
+		// updateTask; this makes the drag path match. `operator_note` is preserved
+		// (it's only consumed on `done`) so an operator's feedback survives a re-queue.
+		db.run(
+			"UPDATE agent_work SET status = ?, position = ?, session_id = NULL, agent_name = NULL, error = NULL, block_kind = NULL, updated_at = datetime('now') WHERE id = ?",
+			[status, position, id],
+		);
 	} else {
 		db.run(
 			"UPDATE agent_work SET status = ?, position = ?, updated_at = datetime('now') WHERE id = ?",

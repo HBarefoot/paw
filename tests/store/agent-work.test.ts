@@ -251,3 +251,38 @@ describe("help-leash: cron re-fire preserves operator feedback", () => {
 		expect(getTask(db, id)?.operator_note).toBeNull();
 	});
 });
+
+describe("move: re-queue clears the prior run link", () => {
+	test("blocked→queued clears session_id/agent_name/error/block_kind (so Start works)", () => {
+		const db = freshDb();
+		const t = createTask(db, { title: "Sweep" });
+		// Simulate a run that blocked: the card carries its run link + block kind.
+		updateTask(db, t.id, {
+			status: "blocked",
+			session_id: "task-abc",
+			agent_name: "default",
+			error: "could not finish",
+			block_kind: "needs_feedback",
+		});
+		const moved = move(db, t.id, "queued", 0);
+		expect(moved?.status).toBe("queued");
+		// The run link is gone — startCard's "already has a run" guard won't trip.
+		expect(moved?.session_id).toBeNull();
+		expect(moved?.agent_name).toBeNull();
+		expect(moved?.error).toBeNull();
+		expect(moved?.block_kind).toBeNull();
+	});
+
+	test("a re-queue preserves operator_note (only consumed on done)", () => {
+		const db = freshDb();
+		const t = createTask(db, { title: "Sweep" });
+		updateTask(db, t.id, {
+			status: "blocked",
+			session_id: "task-abc",
+			operator_note: "use the v2 endpoint",
+		});
+		const moved = move(db, t.id, "queued", 0);
+		expect(moved?.session_id).toBeNull();
+		expect(moved?.operator_note).toBe("use the v2 endpoint");
+	});
+});
