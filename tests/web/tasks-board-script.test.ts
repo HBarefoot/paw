@@ -98,3 +98,37 @@ describe("board.js renderCard — help-leash", () => {
 		expect(texts.some((t) => t.includes("Don't paste secrets"))).toBe(true);
 	});
 });
+
+describe("board.js renderCard — operator Close (stuck states)", () => {
+	test("a blocked card renders a Close action", () => {
+		const board = loadBoard();
+		const { texts } = walk(
+			board.renderCard(card({ block_kind: "needs_feedback" })),
+		);
+		expect(texts).toContain("Close");
+	});
+
+	test("a needs_capability blocked card renders Close (its only exit)", () => {
+		const board = loadBoard();
+		const { texts } = walk(
+			board.renderCard(card({ block_kind: "needs_capability" })),
+		);
+		expect(texts).toContain("Close");
+	});
+
+	test("a failed card renders a Close action", () => {
+		const board = loadBoard();
+		const { texts } = walk(board.renderCard(card({ status: "failed" })));
+		expect(texts).toContain("Close");
+	});
+
+	test("a done card renders NO Close action", () => {
+		const board = loadBoard();
+		const { texts } = walk(
+			board.renderCard(
+				card({ status: "done", evidence: "Closed by operator: x" }),
+			),
+		);
+		expect(texts).not.toContain("Close");
+	});
+});

@@ -240,5 +240,35 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
 		return startCard(c, id);
 	});
 
+	// Close a stuck card — the operator's own authority to END a task, no agent
+	// re-run (Resume = "re-run with my feedback"; Close = "I'm ending this myself").
+	// The operator's decision IS the proof, so this satisfies the evidence gate
+	// honestly via the gated updateTask (status:"done", evidence:<note>) rather
+	// than a raw write that skips it. Only the stuck states can be closed.
+	app.post("/api/tasks/:id/close", async (c) => {
+		if (adminId(c) === null) return c.json({ error: "Unauthorized" }, 401);
+		const id = c.req.param("id");
+		const body = await c.req
+			.json<{ note?: string }>()
+			.catch(() => ({}) as { note?: string });
+		const note = typeof body.note === "string" ? body.note.trim() : "";
+		const card = getTask(db, id);
+		if (!card) return c.json({ error: "task not found" }, 404);
+		if (card.status !== "blocked" && card.status !== "failed")
+			return c.json({ error: "only blocked/failed tasks can be closed" }, 409);
+
+		const ev = note ? `Closed by operator: ${note}` : "Closed by operator";
+		// No delegation/Start — Close is pure operator action. The evidence string
+		// marks operator-closed cards apart from agent-completed ones on the board.
+		const updated = updateTask(db, id, {
+			status: "done",
+			evidence: ev,
+			error: null,
+			block_kind: null,
+		});
+		audit?.("task.close", adminId(c), { id }, ip(c));
+		return c.json({ ok: true, task: updated });
+	});
+
 	return app;
 }
