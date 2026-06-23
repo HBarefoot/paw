@@ -652,6 +652,20 @@ function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_agent_work_status ON agent_work(status, position);
   `);
 
+	// Help-leash (operator unblock Phase 1): the agent categorizes a block, and the
+	// operator can attach non-secret feedback that's injected into the re-run.
+	// `operator_note` NEVER carries secrets (credentials go through the vault).
+	try {
+		db.exec("ALTER TABLE agent_work ADD COLUMN block_kind TEXT");
+	} catch {
+		// Column already exists
+	}
+	try {
+		db.exec("ALTER TABLE agent_work ADD COLUMN operator_note TEXT");
+	} catch {
+		// Column already exists
+	}
+
 	// Run ledger: one denormalized row per completed run holding a deterministic
 	// VERDICT (observability Phase 1). After each run the harness cross-references
 	// the agent's claim (final assistant text) against the tool log + task ledger

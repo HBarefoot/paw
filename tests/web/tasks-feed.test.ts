@@ -18,6 +18,8 @@ function row(over: Partial<AgentWork>): AgentWork {
 		session_id: null,
 		agent_name: null,
 		error: null,
+		block_kind: null,
+		operator_note: null,
 		position: 0,
 		last_escalated_at: null,
 		created_by: null,

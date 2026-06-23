@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import {
+	type BlockKind,
 	type CreateTaskInput,
 	TaskError,
 	type TaskPriority,
@@ -27,6 +28,11 @@ const STATUS_VALUES: TaskStatus[] = [
 	"failed",
 ];
 const PRIORITY_VALUES: TaskPriority[] = ["low", "normal", "high"];
+const BLOCK_KIND_VALUES: BlockKind[] = [
+	"needs_feedback",
+	"needs_access",
+	"needs_capability",
+];
 
 function ok(data: unknown): ToolResult {
 	return { content: JSON.stringify(data) };
@@ -147,7 +153,7 @@ export function createTaskTools(config: TaskToolsConfig): ToolDefinition[] {
 	const taskUpdate: ToolDefinition = {
 		name: "task_update",
 		description:
-			"Update a task: change status, set evidence, due_at, priority, error, title, or body. IMPORTANT: marking a task 'done' REQUIRES evidence — pass the proof the work landed (a re-query result, a diff, or a URL). A done with no evidence is refused.",
+			"Update a task: change status, set evidence, due_at, priority, error, title, or body. IMPORTANT: marking a task 'done' REQUIRES evidence — pass the proof the work landed (a re-query result, a diff, or a URL). A done with no evidence is refused. When you set status to 'blocked', ALSO pass block_kind so the operator knows how to help: 'needs_feedback' (a decision or non-secret detail would unblock you), 'needs_access' (you're missing a credential or permission), or 'needs_capability' (a required tool/feature doesn't exist).",
 		plugin: "kernel",
 		input_schema: {
 			type: "object",
@@ -162,6 +168,12 @@ export function createTaskTools(config: TaskToolsConfig): ToolDefinition[] {
 				due_at: { type: "string", description: "ISO deadline" },
 				priority: { type: "string", enum: PRIORITY_VALUES },
 				error: { type: "string", description: "Failure detail (for 'failed')" },
+				block_kind: {
+					type: "string",
+					enum: BLOCK_KIND_VALUES,
+					description:
+						"Why the task is blocked (set with status:'blocked'): needs_feedback | needs_access | needs_capability.",
+				},
 				title: { type: "string" },
 				body: { type: "string" },
 			},
@@ -175,6 +187,8 @@ export function createTaskTools(config: TaskToolsConfig): ToolDefinition[] {
 			if (input.priority !== undefined)
 				patch.priority = input.priority as TaskPriority;
 			if (input.error !== undefined) patch.error = String(input.error);
+			if (input.block_kind !== undefined)
+				patch.block_kind = input.block_kind as BlockKind;
 			if (input.title !== undefined) patch.title = String(input.title);
 			if (input.body !== undefined) patch.body = String(input.body);
 

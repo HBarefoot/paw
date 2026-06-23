@@ -27,6 +27,14 @@ export type TaskStatus =
 
 export type TaskPriority = "low" | "normal" | "high";
 
+/**
+ * Why a task is `blocked` — set by the agent when it blocks so the board can
+ * route it (Phase 1 "help-leash"). `needs_feedback` gets the operator
+ * feedback→resume loop; `needs_access` (a missing credential) and
+ * `needs_capability` (a missing tool/feature) are tagged now, handled later.
+ */
+export type BlockKind = "needs_feedback" | "needs_access" | "needs_capability";
+
 export interface AgentWork {
 	id: string;
 	title: string;
@@ -39,6 +47,13 @@ export interface AgentWork {
 	session_id: string | null;
 	agent_name: string | null;
 	error: string | null;
+	/** Why the task is blocked (set when status→blocked). NULL otherwise. */
+	block_kind: BlockKind | null;
+	/**
+	 * Non-secret operator feedback injected into the re-run (the help-leash).
+	 * NEVER carries secrets — credentials go through the vault (Phase 2).
+	 */
+	operator_note: string | null;
 	position: number;
 	last_escalated_at: string | null;
 	created_by: string | null;
@@ -395,12 +410,16 @@ export function upsertCronCard(
 	try {
 		const existing = getCronCard(db, input.jobId);
 		if (existing) {
+			// A re-fire resets the run state but PRESERVES `operator_note` — the
+			// next run must see the operator's feedback (the help-leash). The note
+			// is dropped only once the card reaches `done` (see updateTask/move).
 			updateTask(db, existing.id, {
 				session_id: input.sessionId,
 				status: "working",
 				evidence: null,
 				error: null,
 				approval_id: null,
+				block_kind: null,
 			});
 			return existing.id;
 		}
@@ -495,6 +514,8 @@ export interface UpdateTaskInput {
 	session_id?: string | null;
 	agent_name?: string | null;
 	approval_id?: string | null;
+	block_kind?: BlockKind | null;
+	operator_note?: string | null;
 }
 
 /**
@@ -532,6 +553,16 @@ export function updateTask(
 	if (patch.session_id !== undefined) set("session_id", patch.session_id);
 	if (patch.agent_name !== undefined) set("agent_name", patch.agent_name);
 	if (patch.approval_id !== undefined) set("approval_id", patch.approval_id);
+	if (patch.block_kind !== undefined) set("block_kind", patch.block_kind);
+	if (patch.operator_note !== undefined)
+		set("operator_note", patch.operator_note);
+
+	// Consumed-feedback hygiene: a card that reaches `done` drops its operator
+	// note so the next run (esp. a cron re-fire that reuses the card) never
+	// replays stale feedback. Explicit patch wins.
+	if (nextStatus === "done" && patch.operator_note === undefined) {
+		set("operator_note", null);
+	}
 
 	if (sets.length === 0) return current;
 
@@ -554,10 +585,19 @@ export function move(
 	// the evidence gate for done. Both throw; callers map to 400.
 	assertLegalTransition(current.status, status);
 	assertDoneHasEvidence(status, current.evidence);
-	db.run(
-		"UPDATE agent_work SET status = ?, position = ?, updated_at = datetime('now') WHERE id = ?",
-		[status, position, id],
-	);
+	// A move to `done` also drops the operator note (consumed-feedback hygiene —
+	// mirrors updateTask; covers the reactor done-paths that go through move()).
+	if (status === "done") {
+		db.run(
+			"UPDATE agent_work SET status = ?, position = ?, operator_note = NULL, updated_at = datetime('now') WHERE id = ?",
+			[status, position, id],
+		);
+	} else {
+		db.run(
+			"UPDATE agent_work SET status = ?, position = ?, updated_at = datetime('now') WHERE id = ?",
+			[status, position, id],
+		);
+	}
 	return getTask(db, id);
 }
 

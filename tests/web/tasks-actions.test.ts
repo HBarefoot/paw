@@ -32,7 +32,7 @@ describe("task board mutation routes", () => {
 					CHECK(status IN ('backlog','queued','working','needs_approval','blocked','done','failed')),
 				priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high')),
 				due_at TEXT, evidence TEXT, approval_id TEXT, session_id TEXT,
-				agent_name TEXT, error TEXT, position INTEGER NOT NULL DEFAULT 0,
+				agent_name TEXT, error TEXT, block_kind TEXT, operator_note TEXT, position INTEGER NOT NULL DEFAULT 0,
 				last_escalated_at TEXT, created_by TEXT,
 				created_at TEXT NOT NULL DEFAULT (datetime('now')),
 				updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -203,6 +203,101 @@ describe("task board mutation routes", () => {
 			const app = appWith({ id: 1 });
 			const t = createTask(db, { title: "x" }); // backlog
 			expect((await post(app, `/api/tasks/${t.id}/retry`)).status).toBe(409);
+		});
+	});
+
+	describe("resume (help-leash)", () => {
+		it("refuses anonymous resume with 401", async () => {
+			const anon = appWith(null);
+			const t = createTask(db, { title: "x" });
+			updateTask(db, t.id, { status: "blocked", block_kind: "needs_feedback" });
+			const res = await post(anon, `/api/tasks/${t.id}/resume`, { note: "hi" });
+			expect(res.status).toBe(401);
+		});
+
+		it("404s an unknown card", async () => {
+			const app = appWith({ id: 1 });
+			expect(
+				(await post(app, "/api/tasks/nope/resume", { note: "x" })).status,
+			).toBe(404);
+		});
+
+		it("refuses resuming a non-blocked card (409)", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "x" }); // backlog
+			expect(
+				(await post(app, `/api/tasks/${t.id}/resume`, { note: "x" })).status,
+			).toBe(409);
+		});
+
+		it("refuses a needs_capability block — a note can't add a capability (409)", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "x" });
+			updateTask(db, t.id, {
+				status: "blocked",
+				block_kind: "needs_capability",
+			});
+			const res = await post(app, `/api/tasks/${t.id}/resume`, { note: "x" });
+			expect(res.status).toBe(409);
+			// Untouched: still blocked, no note stored.
+			const card = getTask(db, t.id);
+			expect(card?.status).toBe("blocked");
+			expect(card?.operator_note).toBeNull();
+		});
+
+		it("board card: persists the note, re-delegates, and folds it into the turn", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "ship it" });
+			updateTask(db, t.id, {
+				status: "blocked",
+				block_kind: "needs_feedback",
+				session_id: "task-old",
+				agent_name: "default",
+				error: "which region?",
+			});
+			const res = await post(app, `/api/tasks/${t.id}/resume`, {
+				note: "use the us-east region",
+			});
+			expect(res.status).toBe(200);
+			// Re-delegated like Start, with the operator feedback in the turn.
+			expect(delegateCalls.length).toBe(1);
+			expect(delegateCalls[0]?.turn).toContain(
+				"Operator feedback: use the us-east region",
+			);
+			expect(delegateCalls[0]?.turn).toContain("ship it");
+			const card = getTask(db, t.id);
+			expect(card?.status).toBe("working");
+			expect(card?.operator_note).toBe("use the us-east region");
+			expect(card?.block_kind).toBeNull();
+			expect(card?.error).toBeNull();
+		});
+
+		it("cron card: persists the note and queues WITHOUT delegating", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, {
+				title: "Daily sweep",
+				created_by: "cron:job-1",
+			});
+			updateTask(db, t.id, { status: "blocked", block_kind: "needs_feedback" });
+			const res = await post(app, `/api/tasks/${t.id}/resume`, {
+				note: "use v2",
+			});
+			expect(res.status).toBe(200);
+			// Cron cards re-run on schedule — no delegation here.
+			expect(delegateCalls.length).toBe(0);
+			const card = getTask(db, t.id);
+			expect(card?.status).toBe("queued");
+			expect(card?.operator_note).toBe("use v2");
+			expect(card?.block_kind).toBeNull();
+		});
+
+		it("an empty note resumes too (note stored as null)", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "x" });
+			updateTask(db, t.id, { status: "blocked", block_kind: "needs_feedback" });
+			const res = await post(app, `/api/tasks/${t.id}/resume`, { note: "  " });
+			expect(res.status).toBe(200);
+			expect(getTask(db, t.id)?.operator_note).toBeNull();
 		});
 	});
 });
