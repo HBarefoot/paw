@@ -75,6 +75,7 @@ describe("task board mutation routes", () => {
 				[`/api/tasks/${t.id}/start`, {}],
 				[`/api/tasks/${t.id}/move`, { status: "queued" }],
 				[`/api/tasks/${t.id}/retry`, {}],
+				[`/api/tasks/${t.id}/close`, {}],
 			] as const) {
 				const res = await post(anon, p[0], p[1]);
 				expect(res.status).toBe(401);
@@ -322,6 +323,61 @@ describe("task board mutation routes", () => {
 			const res = await post(app, `/api/tasks/${t.id}/resume`, { note: "  " });
 			expect(res.status).toBe(200);
 			expect(getTask(db, t.id)?.operator_note).toBeNull();
+		});
+	});
+
+	describe("close (operator ends a stuck task)", () => {
+		it("closes a blocked card to done with the note as evidence — NO agent run", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "test card" });
+			updateTask(db, t.id, {
+				status: "blocked",
+				block_kind: "needs_access",
+				error: "missing token",
+			});
+			const res = await post(app, `/api/tasks/${t.id}/close`, {
+				note: "it was a test",
+			});
+			expect(res.status).toBe(200);
+			const card = getTask(db, t.id);
+			expect(card?.status).toBe("done");
+			expect(card?.evidence).toBe("Closed by operator: it was a test");
+			expect(card?.block_kind).toBeNull();
+			expect(card?.error).toBeNull();
+			// Close is pure operator action — it must not delegate to an agent.
+			expect(delegateCalls.length).toBe(0);
+		});
+
+		it("an empty note still closes — evidence falls back to 'Closed by operator'", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "x" });
+			updateTask(db, t.id, {
+				status: "blocked",
+				block_kind: "needs_capability",
+			});
+			const res = await post(app, `/api/tasks/${t.id}/close`, { note: "  " });
+			expect(res.status).toBe(200);
+			const card = getTask(db, t.id);
+			expect(card?.status).toBe("done");
+			expect(card?.evidence).toBe("Closed by operator");
+		});
+
+		it("closes a failed card too", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "x" });
+			updateTask(db, t.id, { status: "failed", error: "boom" });
+			const res = await post(app, `/api/tasks/${t.id}/close`, {});
+			expect(res.status).toBe(200);
+			expect(getTask(db, t.id)?.status).toBe("done");
+		});
+
+		it("refuses closing a non-stuck card (409) and 404s an unknown card", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "x" }); // backlog
+			expect((await post(app, `/api/tasks/${t.id}/close`, {})).status).toBe(
+				409,
+			);
+			expect((await post(app, "/api/tasks/nope/close", {})).status).toBe(404);
 		});
 	});
 });

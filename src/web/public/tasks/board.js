@@ -101,6 +101,17 @@
 		return b;
 	}
 
+	// Operator Close — end a stuck card directly (no agent re-run). The note (if
+	// any) becomes the evidence server-side. getNote returns "" when the branch has
+	// no note field (needs_capability / failed) → server writes "Closed by operator".
+	function closeButton(id, getNote) {
+		return actionButton("Close", "", function () {
+			return postJSON("/api/tasks/" + id + "/close", {
+				note: getNote ? getNote() : "",
+			}).then(refresh);
+		});
+	}
+
 	function renderCard(card) {
 		var c = el("div", "task-card" + (card.overdue ? " overdue" : ""));
 		c.setAttribute("data-id", card.id);
@@ -197,6 +208,10 @@
 						"Needs dev work — an operator note can't add a missing capability.",
 					),
 				);
+				// Close is the only exit for a capability-block (it can't Resume).
+				var capActions = el("div", "task-actions");
+				capActions.appendChild(closeButton(card.id, null));
+				c.appendChild(capActions);
 			} else {
 				var resume = el("div", "task-resume");
 				var noteInput = el("input", "task-resume-input");
@@ -219,6 +234,12 @@
 						}).then(refresh);
 					}),
 				);
+				// Close beside Resume — the note field doubles as the close reason.
+				ra.appendChild(
+					closeButton(card.id, function () {
+						return noteInput.value.trim();
+					}),
+				);
 				resume.appendChild(ra);
 				c.appendChild(resume);
 			}
@@ -229,6 +250,7 @@
 					return postJSON("/api/tasks/" + card.id + "/retry", {}).then(refresh);
 				}),
 			);
+			rf.appendChild(closeButton(card.id, null));
 			c.appendChild(rf);
 		}
 		return c;

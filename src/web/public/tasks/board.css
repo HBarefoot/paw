@@ -8,7 +8,14 @@
    Without this, `.content` (a topbar page) is unbounded — a tall column grows the
    page and the whole body scrolls. 58px = the sticky `.topbar` min-height. */
 .content {
+	/* HARD cap, not just height: .content inherits flex:1 (flex-basis 0%), and
+	   flex-basis overrides the height property for a flex item's main size — so a
+	   plain `height` is ignored and .content grows with the board, scrolling the
+	   page (the bug #196 shipped). max-height is applied AFTER flex sizing, so it
+	   can't be overridden — it physically caps .content at the viewport. Mirrors
+	   the chat page's `.no-topbar .content` fix. 58px = the sticky .topbar height. */
 	height: calc(100dvh - 58px);
+	max-height: calc(100dvh - 58px);
 	overflow: hidden;
 	display: flex;
 	flex-direction: column;
@@ -20,6 +27,7 @@
 .panel-bd.tight {
 	flex: 1;
 	min-height: 0;
+	min-width: 0; /* so the columns row can't force the panel wider than the viewport */
 	display: flex;
 }
 
