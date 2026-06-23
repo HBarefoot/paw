@@ -180,6 +180,30 @@ describe("task board mutation routes", () => {
 		});
 	});
 
+	describe("drag blocked→queued then Start (no stale-run 409)", () => {
+		it("a re-queued card starts cleanly — drag clears the prior run link", async () => {
+			const app = appWith({ id: 1 });
+			const t = createTask(db, { title: "ship it" });
+			// A prior run blocked the card, leaving its run link behind.
+			updateTask(db, t.id, {
+				status: "blocked",
+				session_id: "task-old",
+				agent_name: "default",
+				error: "could not finish",
+			});
+			// Drag it back to queued (the move route).
+			const moved = await post(app, `/api/tasks/${t.id}/move`, {
+				status: "queued",
+			});
+			expect(moved.status).toBe(200);
+			// Start must now succeed — pre-fix the stale session_id forced a 409.
+			const started = await post(app, `/api/tasks/${t.id}/start`);
+			expect(started.status).toBe(200);
+			expect(delegateCalls.length).toBe(1);
+			expect(getTask(db, t.id)?.status).toBe("working");
+		});
+	});
+
 	describe("retry", () => {
 		it("failed→queued clears session_id + agent_name", async () => {
 			const app = appWith({ id: 1 });
