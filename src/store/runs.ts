@@ -54,6 +54,28 @@ export function listRecentRuns(db: Database, limit = 100): Run[] {
 		.all(limit);
 }
 
+/**
+ * Runs within a time window for the /runs board. `sinceIso` is an ISO cutoff
+ * (e.g. now-7d) — pass `null` for "all" (still capped by `limit`). Newest first.
+ * Filtering by verdict/type/search is done client-side over this window.
+ */
+export function listRunsSince(
+	db: Database,
+	sinceIso: string | null,
+	limit = 500,
+): Run[] {
+	if (sinceIso) {
+		return db
+			.query<Run, [string, number]>(
+				"SELECT * FROM runs WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+			)
+			.all(sinceIso, limit);
+	}
+	return db
+		.query<Run, [number]>("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?")
+		.all(limit);
+}
+
 export function listRunsByVerdict(
 	db: Database,
 	verdict: Verdict,

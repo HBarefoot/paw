@@ -5,6 +5,7 @@ import {
 	getRun,
 	listRecentRuns,
 	listRunsByVerdict,
+	listRunsSince,
 	recordRun,
 } from "../../src/store/runs.js";
 
@@ -73,5 +74,36 @@ describe("runs store round-trip", () => {
 		expect(suspect.map((r) => r.id).sort()).toEqual(["b", "c"]);
 		expect(listRunsByVerdict(db, "error").map((r) => r.id)).toEqual(["d"]);
 		expect(listRecentRuns(db).length).toBe(4);
+	});
+});
+
+describe("listRunsSince (time window)", () => {
+	// Insert with an explicit created_at (recordRun defaults it to now).
+	function insertAt(db: Database, id: string, createdAt: string): void {
+		db.run(
+			"INSERT INTO runs (id, session_id, verdict, created_at) VALUES (?, 's1', 'ok', ?)",
+			[id, createdAt],
+		);
+	}
+
+	test("a cutoff returns only rows at/after it; null returns all (capped)", () => {
+		const db = freshDb();
+		insertAt(db, "old", "2026-06-01T00:00:00.000Z");
+		insertAt(db, "mid", "2026-06-20T00:00:00.000Z");
+		insertAt(db, "new", "2026-06-23T00:00:00.000Z");
+
+		const since = listRunsSince(db, "2026-06-15T00:00:00.000Z");
+		expect(since.map((r) => r.id).sort()).toEqual(["mid", "new"]);
+		// Newest-first ordering.
+		expect(since[0]?.id).toBe("new");
+		// null cutoff → all rows.
+		expect(listRunsSince(db, null).length).toBe(3);
+	});
+
+	test("limit caps the result set", () => {
+		const db = freshDb();
+		for (let i = 0; i < 5; i++)
+			insertAt(db, `r${i}`, `2026-06-2${i}T00:00:00.000Z`);
+		expect(listRunsSince(db, null, 2).length).toBe(2);
 	});
 });
