@@ -118,7 +118,7 @@ import { buildOpsFeed } from "./routes/ops-feed.js";
 import { buildTasksFeed } from "./routes/tasks-feed.js";
 import { listAll as listAllTasks } from "../store/agent-work.js";
 import { buildRunsFeed } from "./routes/runs-feed.js";
-import { listRecentRuns } from "../store/runs.js";
+import { listRunsSince } from "../store/runs.js";
 import { AccessPage, recognizedIds } from "./views/access-page.js";
 import { AuditPage, type AuditRow } from "./views/audit-page.js";
 import { ChatPage, getChatScript } from "./views/chat.js";
@@ -1012,7 +1012,16 @@ export function createWebApp(
 		return c.html((node ?? "").toString());
 	});
 	app.get("/api/runs/feed", (c) => {
-		return c.json(buildRunsFeed(listRecentRuns(kernel.database, 100)));
+		// Time window: 24h | 7d | all (default 7d). Verdict/type/search are applied
+		// client-side over this window. `all` is capped to bound the payload.
+		const win = c.req.query("window");
+		const dayMs = 86_400_000;
+		let sinceIso: string | null;
+		if (win === "all") sinceIso = null;
+		else if (win === "24h")
+			sinceIso = new Date(Date.now() - dayMs).toISOString();
+		else sinceIso = new Date(Date.now() - 7 * dayMs).toISOString();
+		return c.json(buildRunsFeed(listRunsSince(kernel.database, sinceIso, 500)));
 	});
 
 	// Live feed for the Dashboard agent-ops scene. Returns tool calls newer than

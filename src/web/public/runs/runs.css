@@ -1,96 +1,118 @@
-/* Run verdicts board (read-only). Uses DS tokens so it themes with the active
-   brand. A simple vertical list of cards; verdict drives the left accent + badge
-   color. Verdict colors are semantic (fixed), not brand-tinted. */
+/* Run verdicts board (read-only). Dense .tbl table + KPI strip + filter toolbar.
+   Reuses DS components (.kpi/.tbl/.seg/.pill-badge/.search-box/.led); only the
+   page-scoped layout (scroll containment, toolbar, claim truncation, detail row)
+   lives here. runs.css loads only on /runs, so the `.content` rules are scoped. */
 
-.runs-list {
+/* ── Scroll containment ──────────────────────────────────────────────────────
+   Bound .content to the viewport so the KPI strip + toolbar stay pinned and only
+   the table body scrolls (the .tbl <th> is already position:sticky). max-height
+   (not height) — .content inherits flex:1, and flex-basis overrides height. */
+.content {
+	max-height: calc(100dvh - 58px);
+	overflow: hidden;
 	display: flex;
 	flex-direction: column;
-	gap: 9px;
-	padding: 14px 15px;
+	gap: 14px;
+}
+.runs-kpis {
+	flex: none;
+}
+.content > .panel {
+	flex: 1;
+	min-height: 0;
+}
+.runs-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
 }
 
-.runs-empty {
-	color: var(--ink-dim, #8a978f);
-	font-size: 13px;
-	padding: 10px 0;
-	opacity: 0.6;
-}
-
-.run-card {
-	background: var(--panel, rgba(255, 255, 255, 0.03));
-	border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
-	border-left-width: 3px;
-	border-radius: 8px;
-	padding: 9px 11px;
+/* ── Filter toolbar (pinned above the table) ─────────────────────────────── */
+.runs-toolbar {
 	display: flex;
-	flex-direction: column;
-	gap: 6px;
-}
-
-.run-card.verdict-ok {
-	border-left-color: var(--success, #3fe08f);
-}
-.run-card.verdict-suspect {
-	border-left-color: var(--warning, #e0a13f);
-}
-.run-card.verdict-error {
-	border-left-color: var(--error, #e0556a);
-}
-
-.run-card-head {
-	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px;
+	gap: 10px;
+	padding: 10px 15px;
+	border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+}
+.runs-search {
+	flex: 1 1 200px;
+	min-width: 160px;
+	padding: 6px 11px;
+}
+.runs-window {
+	margin-left: auto;
 }
 
-.run-verdict.badge {
+/* ── Table cells ─────────────────────────────────────────────────────────── */
+.runs-tbl {
+	table-layout: fixed;
+}
+.runs-tbl th:nth-child(1),
+.runs-tbl td:nth-child(1) {
+	width: 116px;
+}
+.runs-tbl th:nth-child(2),
+.runs-tbl td:nth-child(2) {
+	width: 92px;
+}
+.runs-tbl th:nth-child(4),
+.runs-tbl td:nth-child(4) {
+	width: 96px;
+}
+.runs-tbl th:nth-child(5),
+.runs-tbl td:nth-child(5) {
+	width: 72px;
+}
+
+.run-row {
+	cursor: pointer;
+}
+.run-row.open {
+	background: var(--panel-2, rgba(255, 255, 255, 0.03));
+}
+
+/* Verdict pill casing (DS .pill-badge already colors green/amber/red). */
+.run-row .pill-badge {
 	text-transform: uppercase;
-	font-size: 10px;
-	letter-spacing: 0.06em;
 }
-.verdict-ok .run-verdict.badge {
-	background: var(--success-bg, rgba(63, 224, 143, 0.12));
-	color: var(--success, #3fe08f);
+
+.run-claim-cell {
+	color: var(--ink-bright, #e6ece8);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 0; /* with table-layout:fixed, lets the cell ellipsize */
 }
-.verdict-suspect .run-verdict.badge {
-	background: var(--warning-bg, rgba(224, 161, 63, 0.12));
-	color: var(--warning, #e0a13f);
+
+.run-when {
+	color: var(--ink-dim, #8a978f);
+	white-space: nowrap;
 }
-.verdict-error .run-verdict.badge {
-	background: var(--error-bg, rgba(224, 85, 106, 0.12));
+.run-errcount {
 	color: var(--error, #e0556a);
 }
 
-.run-channel {
-	font-size: 11px;
-	color: var(--ink-dim, #8a978f);
-	background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
-	border-radius: 999px;
-	padding: 1px 8px;
+/* ── Inline detail row (revealed on click) ───────────────────────────────── */
+.run-detail td {
+	background: var(--panel-2, rgba(255, 255, 255, 0.03));
+	padding: 10px 16px 14px;
 }
-
-.run-time {
-	margin-left: auto;
-	font-size: 11px;
-	color: var(--ink-dim, #8a978f);
-}
-
-.run-claim {
+.run-detail-claim {
 	font-size: 13px;
-	line-height: 1.4;
+	line-height: 1.5;
 	color: var(--ink-bright, #e6ece8);
-	display: -webkit-box;
-	-webkit-line-clamp: 3;
-	-webkit-box-orient: vertical;
-	overflow: hidden;
+	white-space: pre-wrap;
+	word-break: break-word;
+	margin-bottom: 8px;
 }
-
 .run-flags {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 5px;
+	margin-bottom: 8px;
 }
-
 .run-flag {
 	font-size: 11px;
 	font-family: var(--mono, ui-monospace, monospace);
@@ -99,14 +121,23 @@
 	border-radius: 4px;
 	padding: 1px 6px;
 }
-
-.run-meta {
+.run-detail-foot {
 	display: flex;
 	gap: 12px;
-	font-size: 11.5px;
-	color: var(--ink-dim, #8a978f);
+}
+.run-session-link {
+	font-size: 12px;
+	color: var(--accent-bright, #3fe08f);
+	text-decoration: none;
+}
+.run-session-link:hover {
+	text-decoration: underline;
 }
 
-.run-errcount {
-	color: var(--error, #e0556a);
+.runs-empty {
+	color: var(--ink-dim, #8a978f);
+	font-size: 13px;
+	text-align: center;
+	padding: 18px 0;
+	opacity: 0.6;
 }
