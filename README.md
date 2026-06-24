@@ -239,3 +239,16 @@ tests/              Test suite (Bun test runner)
 
 - [Bun](https://bun.sh) v1.0+
 - An AI provider API key (Anthropic, OpenAI, or Gemini) or a local Ollama instance
+
+## License
+
+Paw is licensed under the Apache License 2.0 — see [LICENSE](./LICENSE) for the full text.
+
+### Commercial use
+Apache 2.0 explicitly grants commercial use. No additional license is required for companies adopting Paw in production.
+
+### Enterprise support
+For organizations that need dedicated support, custom integration help, indemnification, or a commercial-license override, contact hb@barefootdigital.dev or see [Polar.sh](https://polar.sh/barefoot-digital).
+
+### Contributing
+External contributions are welcome. By submitting a pull request, you agree to the terms in [CLA.md](./CLA.md), which grants Barefoot Digital the right to relicense future versions of contributed code. This protects the project's ability to evolve its business model over time without orphaning past contributors' work.
