@@ -7,6 +7,21 @@ export interface ChatMessage {
 	attachments?: Attachment[];
 }
 
+/**
+ * System prompt passed to a provider. Either a plain string, or a
+ * stable/volatile split so the Claude provider can place the Anthropic
+ * prompt-cache breakpoint after the STABLE prefix only — keeping the cached
+ * bytes identical across turns while per-turn memory/feedback/brand still
+ * reach the model (after the breakpoint, uncached). Non-Claude providers
+ * simply concatenate the two halves.
+ */
+export type SystemPromptInput = string | { stable: string; volatile: string };
+
+/** Normalize a {@link SystemPromptInput} to a single string (non-Claude path). */
+export function systemPromptToString(sp: SystemPromptInput): string {
+	return typeof sp === "string" ? sp : sp.stable + sp.volatile;
+}
+
 export interface ChatResponse {
 	text: string;
 	images?: ToolResultImage[];
@@ -65,13 +80,13 @@ export interface AIProvider {
 	readonly toolRegistry: ToolRegistry;
 	chat(
 		messages: ChatMessage[],
-		systemPrompt?: string,
+		systemPrompt?: SystemPromptInput,
 		sessionId?: string,
 		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse>;
 	chatStream?(
 		messages: ChatMessage[],
-		systemPrompt?: string,
+		systemPrompt?: SystemPromptInput,
 		sessionId?: string,
 		opts?: { signal?: AbortSignal },
 	): AsyncGenerator<StreamChunk>;

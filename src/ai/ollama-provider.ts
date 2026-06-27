@@ -7,7 +7,9 @@ import type {
 	ChatMessage,
 	ChatResponse,
 	StreamChunk,
+	SystemPromptInput,
 } from "./base-provider.js";
+import { systemPromptToString } from "./base-provider.js";
 import { FRAME_CLOSE, FRAME_OPEN } from "../security/untrusted.js";
 import { summarizeToolInput } from "./tool-summary.js";
 import {
@@ -175,7 +177,7 @@ export class OllamaProvider implements AIProvider {
 
 	async chat(
 		messages: ChatMessage[],
-		systemPrompt?: string,
+		systemPrompt?: SystemPromptInput,
 		sessionId?: string,
 		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
@@ -183,7 +185,9 @@ export class OllamaProvider implements AIProvider {
 		const collectedImages: ToolResultImage[] = [];
 		const signal = opts?.signal;
 
-		const actualSystemPrompt = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+		const actualSystemPrompt = systemPrompt
+			? systemPromptToString(systemPrompt)
+			: DEFAULT_SYSTEM_PROMPT;
 		const conversation: OllamaMessage[] = [
 			{ role: "system", content: actualSystemPrompt },
 			...messages.map((m) => {
@@ -351,7 +355,7 @@ export class OllamaProvider implements AIProvider {
 
 	async *chatStream(
 		messages: ChatMessage[],
-		systemPrompt?: string,
+		systemPrompt?: SystemPromptInput,
 		sessionId?: string,
 		opts?: { signal?: AbortSignal },
 	): AsyncGenerator<StreamChunk> {
@@ -359,7 +363,9 @@ export class OllamaProvider implements AIProvider {
 		const signal = opts?.signal;
 		const collectedImages: ToolResultImage[] = [];
 
-		const actualSystemPrompt = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+		const actualSystemPrompt = systemPrompt
+			? systemPromptToString(systemPrompt)
+			: DEFAULT_SYSTEM_PROMPT;
 		const conversation: OllamaMessage[] = [
 			{ role: "system", content: actualSystemPrompt },
 			...messages.map((m) => {

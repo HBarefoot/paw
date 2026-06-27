@@ -9,6 +9,7 @@ import type {
 	ChatMessage,
 	ChatResponse,
 	StreamChunk,
+	SystemPromptInput,
 } from "../ai/base-provider.js";
 import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
 import { GeminiProvider } from "../ai/gemini-provider.js";
@@ -37,7 +38,7 @@ import { SkillManager } from "../ai/skills.js";
 import type { DraftPlaybook } from "../playbooks/manager.js";
 import { PlaybookManager } from "../playbooks/manager.js";
 import { createPlaybookTools } from "../tools/playbook-tools.js";
-import { buildSystemPrompt } from "../ai/system-prompt.js";
+import { buildSystemPrompt, buildSystemPromptParts } from "../ai/system-prompt.js";
 import { ToolRegistry } from "../ai/tools.js";
 import { readConfigOverrides } from "../config/writer.js";
 import { CronScheduler } from "../cron/scheduler.js";
@@ -2011,7 +2012,9 @@ export class Kernel {
 			/* use boot-time config */
 		}
 
-		const systemPrompt = buildSystemPrompt({
+		// Split form: stable prefix is cached, volatile (memory/feedback/brand)
+		// rides after the breakpoint so it no longer busts the prompt cache.
+		const systemPrompt = buildSystemPromptParts({
 			agentName,
 			customPrompt: agentPrompt || undefined,
 			memoryContext,
@@ -2020,11 +2023,12 @@ export class Kernel {
 			playbookCatalog: this.playbookManager.getCatalogPrompt(),
 			brandBrief: compileBrandBrief(getActiveBrand(this.database)),
 		});
+		const systemPromptText = systemPrompt.stable + systemPrompt.volatile;
 
 		this.logger.info("System prompt built", {
 			agentName,
 			hasCustomPrompt: !!agentPrompt,
-			promptLength: systemPrompt.length,
+			promptLength: systemPromptText.length,
 		});
 
 		// Pre-activate canvas skill so canvas tools are available from roundtrip 1
@@ -2128,7 +2132,7 @@ export class Kernel {
 				const usageIn = response.usage?.inputTokens;
 				const usageOut = response.usage?.outputTokens;
 				const inputTokens =
-					usageIn ?? estimateTokens(systemPrompt + "\n" + msg.content);
+					usageIn ?? estimateTokens(systemPromptText + "\n" + msg.content);
 				const outputTokens = usageOut ?? estimateTokens(replyText);
 				const model = usedModel;
 				this.costTracker.recordUsage({
@@ -2227,7 +2231,7 @@ export class Kernel {
 	private async prepareChat(msg: InboundMessage): Promise<
 		| {
 				messages: ChatMessage[];
-				systemPrompt: string;
+				systemPrompt: SystemPromptInput;
 		  }
 		| { denied: GateReason; retryAfterMs?: number }
 	> {
@@ -2376,7 +2380,9 @@ export class Kernel {
 			/* use boot-time config */
 		}
 
-		const systemPrompt = buildSystemPrompt({
+		// Split form (see handleInbound): cached stable prefix + uncached
+		// volatile suffix, so per-turn memory/feedback/brand don't bust the cache.
+		const systemPrompt = buildSystemPromptParts({
 			agentName,
 			customPrompt: agentPrompt || undefined,
 			memoryContext,
