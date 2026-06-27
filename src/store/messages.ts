@@ -27,16 +27,39 @@ export function appendMessage(
 		.get(id)!;
 }
 
+/**
+ * Return the most-recent `limit` messages for a session in chronological
+ * (ascending) order.
+ *
+ * The window must be the *newest* N — the model needs recent context, and once
+ * a session exceeds `limit` an `ORDER BY created_at ASC` window would feed it
+ * the OLDEST N (stale context) instead. We select newest-first then reverse.
+ *
+ * `created_at` is second-resolution (`datetime('now')`), so same-second inserts
+ * tie; the `rowid` tiebreaker (monotonic with insert order) keeps the ordering
+ * stable and matches true append order within a second.
+ */
 export function getSessionMessages(
 	db: Database,
 	sessionId: string,
 	limit = 50,
 ): StoredMessage[] {
-	return db
+	const rows = db
 		.query<StoredMessage, [string, number]>(
-			"SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?",
+			"SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
 		)
 		.all(sessionId, limit);
+	return rows.reverse();
+}
+
+/** Number of messages stored for a session (cheap; uses idx_messages_session). */
+export function countSessionMessages(db: Database, sessionId: string): number {
+	const row = db
+		.query<{ n: number }, [string]>(
+			"SELECT COUNT(*) AS n FROM messages WHERE session_id = ?",
+		)
+		.get(sessionId);
+	return row?.n ?? 0;
 }
 
 export function pruneOldMessages(
@@ -46,7 +69,7 @@ export function pruneOldMessages(
 ): void {
 	db.run(
 		`DELETE FROM messages WHERE session_id = ? AND id NOT IN (
-      SELECT id FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?
+      SELECT id FROM messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
     )`,
 		[sessionId, sessionId, keepLast],
 	);

@@ -246,6 +246,10 @@ export const configSchema = z.object({
 		dbPath: z.string().default("./data/paw.db"),
 		customSqlitePath: z.string().optional(),
 		messageHistoryLimit: z.number().int().positive().default(20),
+		// Cap on stored messages per session. Pruned on the inbound path once a
+		// session grows past 2x this. Kept well above messageHistoryLimit so
+		// recall (and message FTS search) over recent history isn't starved.
+		messagePruneKeepLast: z.number().int().positive().default(500),
 	}),
 	log: z.object({
 		level: z.enum(["debug", "info", "warn", "error"]).default("info"),

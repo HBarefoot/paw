@@ -69,6 +69,23 @@ export function getDb(dbPath: string, customSqlitePath?: string): Database {
 	db = new Database(dbPath, { create: true });
 	db.exec("PRAGMA journal_mode = WAL;");
 	db.exec("PRAGMA foreign_keys = ON;");
+	// WAL companions: cut write latency on the message/tool-log/usage hot paths
+	// and stop intermittent SQLITE_BUSY 500s when cron + web + plugin writers
+	// contend. Applied best-effort — a constrained filesystem (e.g. one that
+	// rejects mmap) shouldn't crash boot, so each is guarded like sqlite-vec.
+	for (const pragma of [
+		"PRAGMA synchronous = NORMAL;", // safe under WAL, far fewer fsyncs
+		"PRAGMA busy_timeout = 5000;", // wait, don't throw, under writer contention
+		"PRAGMA cache_size = -16000;", // ~16MB page cache
+		"PRAGMA temp_store = MEMORY;",
+		"PRAGMA mmap_size = 268435456;", // 256MB
+	]) {
+		try {
+			db.exec(pragma);
+		} catch {
+			// Pragma unsupported on this filesystem/build — skip it, keep booting.
+		}
+	}
 	try {
 		sqliteVec.load(db);
 	} catch {
