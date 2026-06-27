@@ -67,7 +67,12 @@ import { RateLimiter } from "../security/rate-limiter.js";
 import { VaultManager } from "../security/vault.js";
 import { compileBrandBrief, getActiveBrand } from "../store/brands.js";
 import { closeDb, getDb } from "../store/db.js";
-import { appendMessage, getSessionMessages } from "../store/messages.js";
+import {
+	appendMessage,
+	countSessionMessages,
+	getSessionMessages,
+	pruneOldMessages,
+} from "../store/messages.js";
 import { NotificationStore } from "../store/notifications.js";
 import { sessionTitleFromContent } from "../store/session-title.js";
 import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
@@ -1781,6 +1786,20 @@ export class Kernel {
 		}
 	}
 
+	/**
+	 * Bound a session's stored-message growth. Called once per inbound turn
+	 * (right after the user message is persisted). Gated on a count check so the
+	 * DELETE only runs once a session is well past the cap — cheap on the common
+	 * path. `messagePruneKeepLast` stays far above `messageHistoryLimit` so recall
+	 * and message FTS search over recent history aren't starved.
+	 */
+	private pruneSessionIfNeeded(sessionId: string): void {
+		const keepLast = this.config.store.messagePruneKeepLast;
+		if (countSessionMessages(this.db, sessionId) > keepLast * 2) {
+			pruneOldMessages(this.db, sessionId, keepLast);
+		}
+	}
+
 	private async handleInbound(msg: InboundMessage): Promise<void> {
 		// Run-window start: scopes the post-run verdict's tool/task lookups to
 		// THIS run (logs accumulate across a session's turns).
@@ -1888,6 +1907,7 @@ export class Kernel {
 			msg.user.id,
 		);
 		appendMessage(this.db, msg.sessionId, "user", msg.content);
+		this.pruneSessionIfNeeded(msg.sessionId);
 
 		// Auto-generate a clean, human session title from the first user message
 		// (canvas messages → the user's request, never the [CANVAS MODE] prompt).
@@ -2265,6 +2285,7 @@ export class Kernel {
 			msg.user.id,
 		);
 		appendMessage(this.db, msg.sessionId, "user", msg.content);
+		this.pruneSessionIfNeeded(msg.sessionId);
 
 		if (!session.title) {
 			updateSessionTitle(

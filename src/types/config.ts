@@ -169,6 +169,7 @@ export interface PawConfig {
 		dbPath: string;
 		customSqlitePath?: string;
 		messageHistoryLimit: number;
+		messagePruneKeepLast: number;
 	};
 	log: {
 		level: "debug" | "info" | "warn" | "error";

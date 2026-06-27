@@ -128,6 +128,7 @@ export const defaults: PawConfig = {
 	store: {
 		dbPath: "./data/paw.db",
 		messageHistoryLimit: 20,
+		messagePruneKeepLast: 500,
 	},
 	log: {
 		level: "info",
