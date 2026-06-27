@@ -55,13 +55,28 @@ const INVISIBLE_RE = new RegExp(
  * Wrap untrusted tool-result content in the data boundary, after stripping
  * invisible attack characters. Content is otherwise preserved verbatim.
  *
- * Safe on empty/whitespace input. Idempotent: already-framed content is
- * returned unchanged (avoids double-wrapping when, e.g., a sub-agent result
- * passes through a second time).
+ * Safe on empty/whitespace input. Idempotent *and unforgeable*: any frame
+ * markers already present in the body — whether from a legitimate second pass
+ * (e.g. a sub-agent result) or forged by an attacker — are removed before we
+ * wrap, so there is always exactly one real boundary pair and no double-wrap.
+ *
+ * We do NOT short-circuit on `text.startsWith(FRAME_OPEN)`: `FRAME_OPEN` is a
+ * public constant, so an attacker-controlled result beginning with it would
+ * otherwise pass through completely unprocessed (no invisible-stripping, no
+ * guaranteed close) and could embed a forged `FRAME_CLOSE` that escapes the
+ * data boundary.
+ *
+ * Order matters: strip invisibles FIRST, then remove markers. A zero-width
+ * char hidden inside a marker (`«u​ntrusted …»`) would survive a marker
+ * split but then be un-hidden by invisible-stripping, re-forming an exact
+ * marker inside the wrapped body. Cleaning first closes that gap.
  */
 export function frameUntrustedToolResult(content: string): string {
-	const text = content ?? "";
-	if (text.startsWith(FRAME_OPEN)) return text;
-	const cleaned = text.replace(INVISIBLE_RE, "");
-	return `${FRAME_OPEN}\n${cleaned}\n${FRAME_CLOSE}`;
+	const cleaned = (content ?? "").replace(INVISIBLE_RE, "");
+	const stripped = cleaned
+		.split(FRAME_OPEN)
+		.join("")
+		.split(FRAME_CLOSE)
+		.join("");
+	return `${FRAME_OPEN}\n${stripped}\n${FRAME_CLOSE}`;
 }
