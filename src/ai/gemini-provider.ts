@@ -2,7 +2,13 @@ import { ToolRegistry } from "./tools.js";
 import { needsSessionId } from "./tool-context.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
 import { withRetry } from "./retry.js";
-import type { AIProvider, ChatMessage, ChatResponse } from "./base-provider.js";
+import type {
+	AIProvider,
+	ChatMessage,
+	ChatResponse,
+	SystemPromptInput,
+} from "./base-provider.js";
+import { systemPromptToString } from "./base-provider.js";
 import { executeToolsParallel, type ToolCallRequest } from "./parallel-tools.js";
 import type { ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
@@ -93,13 +99,16 @@ export class GeminiProvider implements AIProvider {
 
 	async chat(
 		messages: ChatMessage[],
-		systemPrompt?: string,
+		systemPrompt?: SystemPromptInput,
 		sessionId?: string,
 		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
 		const collectedImages: ToolResultImage[] = [];
 		const signal = opts?.signal;
+		const systemText = systemPrompt
+			? systemPromptToString(systemPrompt)
+			: DEFAULT_SYSTEM_PROMPT;
 
 		const contents: GeminiContent[] = messages.map((m) => {
 			const parts: GeminiPart[] = [];
@@ -139,9 +148,9 @@ export class GeminiProvider implements AIProvider {
 				},
 			};
 
-			if (systemPrompt ?? DEFAULT_SYSTEM_PROMPT) {
+			if (systemText) {
 				body.systemInstruction = {
-					parts: [{ text: systemPrompt ?? DEFAULT_SYSTEM_PROMPT }],
+					parts: [{ text: systemText }],
 				};
 			}
 

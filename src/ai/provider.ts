@@ -22,6 +22,7 @@ import type {
 	ChatMessage,
 	ChatResponse,
 	StreamChunk,
+	SystemPromptInput,
 } from "./base-provider.js";
 import type { ToolResult, ToolResultImage } from "../types/message.js";
 import type { SkillManager } from "./skills.js";
@@ -44,19 +45,24 @@ export interface ClaudeProviderConfig {
  *
  * When `promptCache` is on we mark the stable prefix with `cache_control:
  * ephemeral` so Anthropic bills it once per ~5-min window instead of every turn:
- *   - the system prompt becomes a single cached text block, and
+ *   - the system prompt's STABLE half becomes a cached text block, and any
+ *     VOLATILE half (per-turn memory/feedback/brand) follows it as a second,
+ *     uncached block — so volatile content reaches the model every turn without
+ *     invalidating the cached prefix, and
  *   - the LAST tool carries the breakpoint (one breakpoint covers the whole
  *     tool-definitions prefix).
  * The moving conversation history is intentionally left uncached — it changes
  * every turn, and the system + tools prefix is the bulk of the win.
  *
- * When `promptCache` is off the returned object is byte-identical to the legacy
- * shape (string `system`, untouched tools) so disabling it is a true no-op.
+ * `systemPrompt` may be a plain string (whole thing cached / concatenated) or a
+ * `{ stable, volatile }` split. When `promptCache` is off the returned object is
+ * byte-identical to the legacy shape (string `system`, untouched tools) so
+ * disabling it is a true no-op.
  */
 export function buildClaudeRequest(opts: {
 	model: string;
 	maxTokens: number;
-	systemPrompt: string;
+	systemPrompt: SystemPromptInput;
 	tools: Tool[];
 	conversation: MessageParam[];
 	promptCache: boolean;
@@ -64,15 +70,24 @@ export function buildClaudeRequest(opts: {
 	const { model, maxTokens, systemPrompt, tools, conversation, promptCache } =
 		opts;
 
-	const system: string | TextBlockParam[] = promptCache
-		? [
-				{
-					type: "text",
-					text: systemPrompt,
-					cache_control: { type: "ephemeral" },
-				},
-			]
-		: systemPrompt;
+	const stable =
+		typeof systemPrompt === "string" ? systemPrompt : systemPrompt.stable;
+	const volatile =
+		typeof systemPrompt === "string" ? "" : systemPrompt.volatile;
+
+	let system: string | TextBlockParam[];
+	if (promptCache) {
+		const blocks: TextBlockParam[] = [
+			{ type: "text", text: stable, cache_control: { type: "ephemeral" } },
+		];
+		// Volatile context after the breakpoint: still sent every turn, but it
+		// no longer changes the cached prefix bytes.
+		if (volatile) blocks.push({ type: "text", text: volatile });
+		system = blocks;
+	} else {
+		// Legacy shape: a string `system` is byte-identical to pre-cache builds.
+		system = volatile ? `${stable}${volatile}` : stable;
+	}
 
 	let toolsField: Tool[] | undefined;
 	if (tools.length > 0) {
@@ -147,7 +162,7 @@ export class ClaudeProvider implements AIProvider {
 
 	async chat(
 		messages: ChatMessage[],
-		systemPrompt?: string,
+		systemPrompt?: SystemPromptInput,
 		sessionId?: string,
 		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
@@ -188,8 +203,18 @@ export class ClaudeProvider implements AIProvider {
 			return { role: m.role, content: m.content };
 		});
 
+		// Hoisted out of the loop: the tool list is stable across roundtrips, so
+		// computing it once keeps the cached tool prefix byte-identical (and skips
+		// re-running the full registry filter up to maxToolRoundtrips times). Only
+		// an activate_skill in this turn flips `toolsDirty` to force a recompute.
+		let tools = this.getTools(sessionId);
+		let toolsDirty = false;
+
 		while (roundtrips < this.maxToolRoundtrips) {
-			const tools = this.getTools(sessionId);
+			if (toolsDirty) {
+				tools = this.getTools(sessionId);
+				toolsDirty = false;
+			}
 			this.logger.debug("Sending request to Claude", {
 				roundtrip: roundtrips,
 				messageCount: conversation.length,
@@ -253,6 +278,8 @@ export class ClaudeProvider implements AIProvider {
 						.skill as string;
 					const entry = this.skillManager.activateSkill(sessionId, skillName);
 					if (entry) {
+						// New tools become available next roundtrip — recompute then.
+						toolsDirty = true;
 						this.logger.info("Skill activated", {
 							skill: skillName,
 							tools: entry.toolNames,
@@ -366,7 +393,7 @@ export class ClaudeProvider implements AIProvider {
 
 	async *chatStream(
 		messages: ChatMessage[],
-		systemPrompt?: string,
+		systemPrompt?: SystemPromptInput,
 		sessionId?: string,
 		opts?: { signal?: AbortSignal },
 	): AsyncGenerator<StreamChunk> {
@@ -375,10 +402,18 @@ export class ClaudeProvider implements AIProvider {
 		const collectedImages: ToolResultImage[] = [];
 		const conversation: MessageParam[] = this.buildConversation(messages);
 
+		// Hoisted out of the loop (see chat()): stable across roundtrips, recomputed
+		// only when an activate_skill in this turn flips `toolsDirty`.
+		let tools = this.getTools(sessionId);
+		let toolsDirty = false;
+
 		while (roundtrips < this.maxToolRoundtrips) {
 			yield { type: "roundtrip_start", roundtrip: roundtrips };
 
-			const tools = this.getTools(sessionId);
+			if (toolsDirty) {
+				tools = this.getTools(sessionId);
+				toolsDirty = false;
+			}
 			this.logger.debug("Streaming request to Claude", {
 				roundtrip: roundtrips,
 				messageCount: conversation.length,
@@ -476,6 +511,8 @@ export class ClaudeProvider implements AIProvider {
 					const skillName = toolInput.skill as string;
 					const entry = this.skillManager.activateSkill(sessionId, skillName);
 					if (entry) {
+						// New tools become available next roundtrip — recompute then.
+						toolsDirty = true;
 						this.logger.info("Skill activated (stream)", {
 							skill: skillName,
 							tools: entry.toolNames,
