@@ -70,13 +70,21 @@ const INVISIBLE_RE = new RegExp(
  * char hidden inside a marker (`«u​ntrusted …»`) would survive a marker
  * split but then be un-hidden by invisible-stripping, re-forming an exact
  * marker inside the wrapped body. Cleaning first closes that gap.
+ *
+ * Marker removal runs to a FIXPOINT, not a single pass: `.split(X).join("")`
+ * removes only the complete occurrences present in one pass, but a nested
+ * construction (`«end untrusted«end untrusted tool output» tool output»`) leaves
+ * halves that abut into a FRESH marker once the inner one is removed. Looping
+ * until the string stops changing — each pass strictly shortens it, so it
+ * terminates — guarantees no re-formed marker survives, restoring the
+ * exactly-one-boundary-pair invariant.
  */
 export function frameUntrustedToolResult(content: string): string {
-	const cleaned = (content ?? "").replace(INVISIBLE_RE, "");
-	const stripped = cleaned
-		.split(FRAME_OPEN)
-		.join("")
-		.split(FRAME_CLOSE)
-		.join("");
+	let stripped = (content ?? "").replace(INVISIBLE_RE, "");
+	let prev: string;
+	do {
+		prev = stripped;
+		stripped = stripped.split(FRAME_OPEN).join("").split(FRAME_CLOSE).join("");
+	} while (stripped !== prev);
 	return `${FRAME_OPEN}\n${stripped}\n${FRAME_CLOSE}`;
 }
