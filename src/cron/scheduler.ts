@@ -13,10 +13,12 @@ export interface CronAction {
 	tool?: string;
 	input?: Record<string, unknown>;
 	/**
-	 * The plugin that owns the tool (H-NEW-2). When set, the scheduler
-	 * refuses to execute the action if the tool belongs to a different
-	 * plugin. Prevents an attacker from running a kernel tool under
-	 * the guise of a cron action.
+	 * The plugin that owns the tool (H-NEW-2). REQUIRED for `type: "tool"`
+	 * actions (optional in the type only because prompt/event actions don't
+	 * carry it). The scheduler refuses — at both addJob and executeAction — to
+	 * run a tool action whose `plugin` is missing or doesn't own the registered
+	 * tool, so a plugin-less job can't run a kernel tool (e.g. `exec_command`,
+	 * which the sandbox would otherwise permit via the kernel `exec` grant).
 	 */
 	plugin?: string;
 	event?: string;
@@ -267,13 +269,22 @@ export class CronScheduler {
 			if (!input.action.tool) {
 				throw new Error("Cron tool action refused: empty tool name");
 			}
-			if (input.action.plugin) {
-				const def = this.toolRegistry.get(input.action.tool);
-				if (def && def.plugin !== input.action.plugin) {
-					throw new Error(
-						`Cron tool action refused: tool "${input.action.tool}" belongs to plugin "${def.plugin}", not "${input.action.plugin}"`,
-					);
-				}
+			// H-NEW-2: a tool action MUST declare its owning plugin (previously
+			// this was opt-in — `if (input.action.plugin)` — so a plugin-less
+			// programmatic addJob caller could schedule e.g. `exec_command` with
+			// no gate, since the sandbox grants the kernel `exec`). When the tool
+			// is registered, the declared plugin must match its owner.
+			// `executeAction` re-checks both at run time (defense in depth).
+			if (!input.action.plugin) {
+				throw new Error(
+					`Cron tool action refused: tool "${input.action.tool}" must declare its owning plugin`,
+				);
+			}
+			const def = this.toolRegistry.get(input.action.tool);
+			if (def && def.plugin !== input.action.plugin) {
+				throw new Error(
+					`Cron tool action refused: tool "${input.action.tool}" belongs to plugin "${def.plugin}", not "${input.action.plugin}"`,
+				);
 			}
 		}
 		const id = crypto.randomUUID();
@@ -568,19 +579,29 @@ export class CronScheduler {
 					});
 					break;
 				}
-				// H-NEW-2: cron tool actions must carry an explicit
-				// `allowedTools` (or a single `plugin`) field. Without this
-				// gate, any admin (or AI caller) can register a cron that
-				// runs `exec_command` or other dangerous tools regardless of
-				// the current session's skills. We check both the web form
-				// (which has a single `plugin`) and API callers (which send
-				// an array) at job creation time, and double-check here.
+				// H-NEW-2: cron tool actions are plugin-gated. Without it, any
+				// admin (or AI caller, or a row that bypassed addJob validation)
+				// could run `exec_command` or other dangerous tools regardless of
+				// the current session's skills — gated only by the sandbox, which
+				// grants the kernel `exec`. The action MUST carry a `plugin`, and
+				// that plugin MUST own the registered tool. This is the
+				// execution-time re-validation backing the addJob check.
 				const cronTool = this.toolRegistry.get(action.tool);
 				if (!cronTool) {
 					this.logger.warn("Cron tool action references unknown tool", {
 						jobId,
 						jobName,
 						tool: action.tool,
+					});
+					break;
+				}
+				if (!action.plugin || cronTool.plugin !== action.plugin) {
+					this.logger.warn("Cron tool action blocked: plugin gate", {
+						jobId,
+						jobName,
+						tool: action.tool,
+						declaredPlugin: action.plugin ?? null,
+						actualPlugin: cronTool.plugin,
 					});
 					break;
 				}
