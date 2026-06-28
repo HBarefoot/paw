@@ -247,4 +247,84 @@ describe("scheduler defense in depth", () => {
 		await tick(sched);
 		expect(emitted).toEqual([]);
 	});
+
+	// --- H-NEW-2 completion: the tool plugin gate is mandatory + enforced at
+	// execution time (was opt-in at addJob with no run-time check). ---
+
+	test("addJob refuses a tool action with NO plugin (was opt-in)", () => {
+		const sched = new CronScheduler(
+			db,
+			new EventBus(),
+			registryWith(),
+			createLogger("t"),
+		);
+		expect(() =>
+			sched.addJob({
+				name: "no-plugin",
+				expression: "0 0 * * *",
+				// plugin omitted — pre-fix this persisted and ran at exec time.
+				action: { type: "tool", tool: "check_system_health" },
+			}),
+		).toThrow(/must declare its owning plugin/);
+	});
+
+	// Insert a tool job directly, bypassing addJob (simulates a programmatic
+	// caller, a future job-scheduling tool, or a row that reached the DB another
+	// way), forced due so tick() runs it.
+	function insertDueToolJob(action: Record<string, unknown>): void {
+		db.run(
+			`INSERT INTO cron_jobs (id, name, expression, timezone, action_type, action_payload, enabled, next_run)
+       VALUES (?, 'evil', '0 0 * * *', 'UTC', 'tool', ?, 1, '2000-01-01T00:00:00.000Z')`,
+			[crypto.randomUUID(), JSON.stringify(action)],
+		);
+	}
+
+	test("execute refuses a plugin-LESS tool job even if it bypassed addJob", async () => {
+		const calls: Array<{ name: string; input: Record<string, unknown> }> = [];
+		const sched = new CronScheduler(
+			db,
+			new EventBus(),
+			registryWith(calls),
+			createLogger("t"),
+		);
+		// No `plugin` — pre-fix executeAction ran check_system_health regardless.
+		insertDueToolJob({ type: "tool", tool: "check_system_health" });
+		await tick(sched);
+		expect(calls).toEqual([]);
+	});
+
+	test("execute refuses a tool job whose plugin does NOT own the tool", async () => {
+		const calls: Array<{ name: string; input: Record<string, unknown> }> = [];
+		const sched = new CronScheduler(
+			db,
+			new EventBus(),
+			registryWith(calls),
+			createLogger("t"),
+		);
+		// check_system_health is owned by "kernel", not "mail".
+		insertDueToolJob({
+			type: "tool",
+			tool: "check_system_health",
+			plugin: "mail",
+		});
+		await tick(sched);
+		expect(calls).toEqual([]);
+	});
+
+	test("execute runs a correctly plugin-tagged tool job (no regression)", async () => {
+		const calls: Array<{ name: string; input: Record<string, unknown> }> = [];
+		const sched = new CronScheduler(
+			db,
+			new EventBus(),
+			registryWith(calls),
+			createLogger("t"),
+		);
+		insertDueToolJob({
+			type: "tool",
+			tool: "check_system_health",
+			plugin: "kernel",
+		});
+		await tick(sched);
+		expect(calls).toEqual([{ name: "check_system_health", input: {} }]);
+	});
 });
