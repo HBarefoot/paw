@@ -5,8 +5,10 @@ import {
 	getSessionOwnedBy,
 	getSessionVisibleTo,
 	deleteSessionOwnedBy,
+	deleteSessionVisibleTo,
 	updateSessionTitleOwnedBy,
-	forkSessionOwnedBy,
+	updateSessionTitleVisibleTo,
+	forkSessionVisibleTo,
 } from "../../src/store/sessions.js";
 import { getSessionMessages } from "../../src/store/messages.js";
 import { MemoryStore } from "../../src/memory/store.js";
@@ -103,12 +105,7 @@ describe("Per-admin isolation (C-NEW-1)", () => {
 			"INSERT OR REPLACE INTO sessions (id, channel, user_id, title) VALUES (?, ?, ?, ?)",
 			["s-a-2", "web", "web-1", "Original"],
 		);
-		const denied = updateSessionTitleOwnedBy(
-			db,
-			"s-a-2",
-			"Hacked",
-			"web-2",
-		);
+		const denied = updateSessionTitleOwnedBy(db, "s-a-2", "Hacked", "web-2");
 		expect(denied).toBe(false);
 
 		const stillOriginal = getSessionOwnedBy(db, "s-a-2", "web-1");
@@ -118,7 +115,7 @@ describe("Per-admin isolation (C-NEW-1)", () => {
 		expect(ok).toBe(true);
 	});
 
-	test("forkSessionOwnedBy refuses to fork another user's session", () => {
+	test("forkSessionVisibleTo refuses to fork another user's PRIVATE (web) session", () => {
 		db.run(
 			"INSERT OR REPLACE INTO sessions (id, channel, user_id) VALUES (?, ?, ?)",
 			["s-b-2", "web", "web-2"],
@@ -135,25 +132,48 @@ describe("Per-admin isolation (C-NEW-1)", () => {
 			.get();
 		expect(msg).not.toBeNull();
 
-		const denied = forkSessionOwnedBy(
-			db,
-			"s-b-2",
-			msg!.id,
-			"web-1",
-			{ newSessionId: "s-forked-evil" },
-		);
+		// web is private → not visible to web-1 → fork refused (C-NEW-1).
+		const denied = forkSessionVisibleTo(db, "s-b-2", msg!.id, "web-1", {
+			newSessionId: "s-forked-evil",
+		});
 		expect(denied).toBeNull();
 
 		// Owner can fork
-		const ok = forkSessionOwnedBy(
-			db,
-			"s-b-2",
-			msg!.id,
-			"web-2",
-			{ newSessionId: "s-forked-ok" },
-		);
+		const ok = forkSessionVisibleTo(db, "s-b-2", msg!.id, "web-2", {
+			newSessionId: "s-forked-ok",
+		});
 		expect(ok).not.toBeNull();
 		expect(ok?.newSessionId).toBe("s-forked-ok");
+	});
+
+	test("forkSessionVisibleTo lets any admin fork a SHARED-channel source", () => {
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id) VALUES (?, ?, ?)",
+			["s-cron-fork", "cron", "system"],
+		);
+		db.run(
+			"INSERT OR REPLACE INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)",
+			["m-cron-f", "s-cron-fork", "assistant", "cron output"],
+		);
+		const msg = db
+			.query<{ id: string }, []>(
+				"SELECT id FROM messages WHERE session_id = 's-cron-fork'",
+			)
+			.get();
+		expect(msg).not.toBeNull();
+		// A web admin who doesn't "own" the cron session can still fork it — the
+		// new session is theirs. (Pre-fix forkSessionOwnedBy returned null here.)
+		const forked = forkSessionVisibleTo(
+			db,
+			"s-cron-fork",
+			msg?.id ?? "",
+			"web-1",
+			{
+				newSessionId: "s-cron-forked",
+			},
+		);
+		expect(forked).not.toBeNull();
+		expect(forked?.newSessionId).toBe("s-cron-forked");
 	});
 
 	// Regression: shared-channel sessions (cron/slack/system) are LISTED for every
@@ -200,21 +220,58 @@ describe("Per-admin isolation (C-NEW-1)", () => {
 		expect(own?.user_id).toBe("web-2");
 	});
 
-	test("mutations on a shared-channel session stay refused for a non-owner", () => {
+	// Regression: shared-channel sessions are LISTED for every admin but the
+	// mutation routes used strict getSessionOwnedBy, so they were visible but
+	// undeletable/un-renamable (delete 404'd). The *VisibleTo mutations mirror the
+	// list's visibility so any admin can delete/rename a shared session.
+	test("any admin can DELETE a shared-channel (cron) session it can see", () => {
 		db.run(
 			"INSERT OR REPLACE INTO sessions (id, channel, user_id, title) VALUES (?, ?, ?, ?)",
-			["s-cron-mut", "cron", "system", "Original"],
+			["s-cron-del", "cron", "system", "Briefing"],
 		);
-		// A web admin is NOT the owner ("system"), so delete/rename stay refused...
-		expect(deleteSessionOwnedBy(db, "s-cron-mut", "web-1")).toBe(false);
-		expect(updateSessionTitleOwnedBy(db, "s-cron-mut", "Hacked", "web-1")).toBe(
+		db.run(
+			"INSERT OR REPLACE INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)",
+			["m-cron-del", "s-cron-del", "assistant", "output"],
+		);
+		// Pre-fix: strict ownership ("system" ≠ "web-1") refused this — the bug.
+		expect(deleteSessionOwnedBy(db, "s-cron-del", "web-1")).toBe(false);
+		// Fix: a web admin can delete the shared session it sees in its list.
+		expect(deleteSessionVisibleTo(db, "s-cron-del", "web-1")).toBe(true);
+		// Row (and its messages) are gone.
+		expect(getSessionVisibleTo(db, "s-cron-del", "web-1")).toBeNull();
+		expect(getSessionMessages(db, "s-cron-del", 100_000)).toHaveLength(0);
+	});
+
+	test("any admin can RENAME a shared-channel (slack) session it can see", () => {
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id, title) VALUES (?, ?, ?, ?)",
+			["s-slack-ren", "slack", "U12345678", "Original"],
+		);
+		expect(updateSessionTitleOwnedBy(db, "s-slack-ren", "x", "web-1")).toBe(
 			false,
 		);
-		// ...even though the session is openable.
-		expect(getSessionVisibleTo(db, "s-cron-mut", "web-1")).not.toBeNull();
-		// And it's untouched.
-		expect(getSessionOwnedBy(db, "s-cron-mut", "system")?.title).toBe(
-			"Original",
+		expect(
+			updateSessionTitleVisibleTo(db, "s-slack-ren", "Renamed", "web-1"),
+		).toBe(true);
+		expect(getSessionVisibleTo(db, "s-slack-ren", "web-1")?.title).toBe(
+			"Renamed",
+		);
+	});
+
+	test("C-NEW-1 preserved: a non-owner still can't delete/rename another admin's PRIVATE web session", () => {
+		db.run(
+			"INSERT OR REPLACE INTO sessions (id, channel, user_id, title) VALUES (?, ?, ?, ?)",
+			["s-priv-mut", "web", "web-2", "Alice private"],
+		);
+		// web is NOT a shared channel, so the visibility-scoped mutations still
+		// require ownership — web-1 is refused on web-2's private session.
+		expect(deleteSessionVisibleTo(db, "s-priv-mut", "web-1")).toBe(false);
+		expect(
+			updateSessionTitleVisibleTo(db, "s-priv-mut", "Hacked", "web-1"),
+		).toBe(false);
+		// Untouched and intact for the owner.
+		expect(getSessionOwnedBy(db, "s-priv-mut", "web-2")?.title).toBe(
+			"Alice private",
 		);
 	});
 

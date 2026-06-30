@@ -75,15 +75,15 @@ import {
 import {
 	countAllSessions,
 	deleteSession,
-	deleteSessionOwnedBy,
+	deleteSessionVisibleTo,
 	forkSessionAtMessage,
-	forkSessionOwnedBy,
+	forkSessionVisibleTo,
 	getSessionVisibleTo,
 	getSessionWithMessages,
 	listRecentSessions,
 	listRecentSessionsForUser,
 	updateSessionTitle,
-	updateSessionTitleOwnedBy,
+	updateSessionTitleVisibleTo,
 } from "../store/sessions.js";
 import type { PawConfig } from "../types/config.js";
 import { APP_NAMESPACE, clearCanvasPreservingApps } from "./app-spaces.js";
@@ -5270,7 +5270,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		const id = c.req.param("id");
 		const userId = getRequestUserId(c);
 		if (!userId) return c.json({ error: "Unauthorized" }, 401);
-		const deleted = deleteSessionOwnedBy(kernel.database, id, userId);
+		const deleted = deleteSessionVisibleTo(kernel.database, id, userId);
 		if (!deleted) return c.json({ error: "Session not found" }, 404);
 		return c.json({ deleted: true });
 	});
@@ -5281,7 +5281,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 		if (!userId) return c.json({ error: "Unauthorized" }, 401);
 		const body = await c.req.json<{ title: string }>();
 		if (!body.title?.trim()) return c.json({ error: "Title is required" }, 400);
-		const updated = updateSessionTitleOwnedBy(
+		const updated = updateSessionTitleVisibleTo(
 			kernel.database,
 			id,
 			body.title.trim(),
@@ -5315,7 +5315,7 @@ window.Companion.mount(document.getElementById("companion-root"),window.__COMPAN
 			return c.json({ error: "messageId is required" }, 400);
 		}
 		const newId = `web-${Date.now()}-fork`;
-		const result = forkSessionOwnedBy(kernel.database, id, messageId, userId, {
+		const result = forkSessionVisibleTo(kernel.database, id, messageId, userId, {
 			newSessionId: newId,
 		});
 		if (!result) {

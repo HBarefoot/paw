@@ -243,6 +243,32 @@ export function deleteSessionOwnedBy(
 	});
 }
 
+/**
+ * Delete a session the caller can SEE — owned by them OR in a shared channel
+ * (slack/cron/system). Mirrors getSessionVisibleTo's predicate so the web UI
+ * can delete the same shared-channel sessions it lists (they're non-private by
+ * definition — already visible to every admin). Private web/canvas sessions
+ * stay owner-strict, so this does NOT let one admin delete another's private
+ * session (C-NEW-1). Uses the single SHARED_SESSION_CHANNELS source of truth.
+ */
+export function deleteSessionVisibleTo(
+	db: Database,
+	id: string,
+	userId: string,
+): boolean {
+	return withFtsHeal(db, () => {
+		const placeholders = SHARED_SESSION_CHANNELS.map(() => "?").join(", ");
+		const guard = `id = ? AND (user_id = ? OR channel IN (${placeholders}))`;
+		const params = [id, userId, ...SHARED_SESSION_CHANNELS];
+		db.run(
+			`DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE ${guard})`,
+			params,
+		);
+		const sessionResult = db.run(`DELETE FROM sessions WHERE ${guard}`, params);
+		return sessionResult.changes > 0;
+	});
+}
+
 export function updateSessionTitle(
 	db: Database,
 	id: string,
@@ -264,6 +290,26 @@ export function updateSessionTitleOwnedBy(
 	const result = db.run(
 		"UPDATE sessions SET title = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?",
 		[title, id, userId],
+	);
+	return result.changes > 0;
+}
+
+/**
+ * Rename a session the caller can SEE — owned by them OR in a shared channel
+ * (slack/cron/system). Visibility-scoped counterpart to
+ * updateSessionTitleOwnedBy; see deleteSessionVisibleTo for the rationale.
+ * Private web/canvas sessions stay owner-strict (C-NEW-1 preserved).
+ */
+export function updateSessionTitleVisibleTo(
+	db: Database,
+	id: string,
+	title: string,
+	userId: string,
+): boolean {
+	const placeholders = SHARED_SESSION_CHANNELS.map(() => "?").join(", ");
+	const result = db.run(
+		`UPDATE sessions SET title = ?, updated_at = datetime('now') WHERE id = ? AND (user_id = ? OR channel IN (${placeholders}))`,
+		[title, id, userId, ...SHARED_SESSION_CHANNELS],
 	);
 	return result.changes > 0;
 }
@@ -358,17 +404,20 @@ export function forkSessionAtMessage(
 }
 
 /**
- * Owner-checked fork. Returns null when the source session is not owned by
- * the given user. The new session inherits the same owner.
+ * Visibility-checked fork. Returns null when the source session is not VISIBLE
+ * to the given user (not owned by them and not a shared channel). The fork
+ * creates a NEW caller-owned session, so forking from a shared slack/cron/system
+ * source is safe; a non-owner still can't fork another admin's private
+ * web/canvas session (visibility returns null). C-NEW-1 preserved.
  */
-export function forkSessionOwnedBy(
+export function forkSessionVisibleTo(
 	db: Database,
 	sourceSessionId: string,
 	anchorMessageId: string,
 	userId: string,
 	opts: { newSessionId: string; titleSuffix?: string },
 ): { newSessionId: string; copiedMessages: number } | null {
-	const source = getSessionOwnedBy(db, sourceSessionId, userId);
+	const source = getSessionVisibleTo(db, sourceSessionId, userId);
 	if (!source) return null;
 	return forkSessionAtMessage(db, sourceSessionId, anchorMessageId, opts);
 }
