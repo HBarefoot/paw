@@ -1,18 +1,25 @@
-import { ToolRegistry } from "./tools.js";
-import { needsSessionId } from "./tool-context.js";
-import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
-import { withRetry } from "./retry.js";
+import type { ToolResultImage } from "../types/message.js";
+import type { Logger } from "../types/plugin.js";
 import type {
 	AIProvider,
 	ChatMessage,
 	ChatResponse,
 	SystemPromptInput,
 } from "./base-provider.js";
-import { systemPromptToString } from "./base-provider.js";
-import { executeToolsParallel, type ToolCallRequest } from "./parallel-tools.js";
-import type { ToolResultImage } from "../types/message.js";
+import {
+	CHECKPOINT_PROMPT,
+	maxRoundtripsResponse,
+	systemPromptToString,
+} from "./base-provider.js";
+import {
+	type ToolCallRequest,
+	executeToolsParallel,
+} from "./parallel-tools.js";
+import { withRetry } from "./retry.js";
 import type { SkillManager } from "./skills.js";
-import type { Logger } from "../types/plugin.js";
+import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import { needsSessionId } from "./tool-context.js";
+import type { ToolRegistry } from "./tools.js";
 
 export interface GeminiProviderConfig {
 	apiKey: string;
@@ -97,6 +104,55 @@ export class GeminiProvider implements AIProvider {
 		return [{ functionDeclarations: declarations }];
 	}
 
+	/**
+	 * One extra, tool-less request to distill the in-turn transcript into a
+	 * compact checkpoint when the roundtrip budget is exhausted. Runs at most
+	 * once per turn; returns undefined on any failure/abort.
+	 */
+	private async generateCheckpoint(
+		contents: GeminiContent[],
+		systemText: string,
+		signal?: AbortSignal,
+	): Promise<string | undefined> {
+		try {
+			const cpContents: GeminiContent[] = [
+				...contents,
+				{ role: "user", parts: [{ text: CHECKPOINT_PROMPT }] },
+			];
+			const body: Record<string, unknown> = {
+				contents: cpContents,
+				generationConfig: { maxOutputTokens: this.maxTokens },
+				// tools intentionally omitted — the checkpoint is text-only.
+			};
+			if (systemText) {
+				body.systemInstruction = { parts: [{ text: systemText }] };
+			}
+			const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+			const data = await withRetry(async () => {
+				const res = await fetch(url, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(body),
+					signal,
+				});
+				if (!res.ok) {
+					throw new Error(`Gemini error (${res.status}): ${await res.text()}`);
+				}
+				return (await res.json()) as GeminiResponse;
+			}, this.logger);
+			const parts = data.candidates?.[0]?.content.parts ?? [];
+			const text = parts
+				.filter((p): p is { text: string } => "text" in p)
+				.map((p) => p.text)
+				.join("\n")
+				.trim();
+			return text || undefined;
+		} catch (err) {
+			this.logger.warn("Checkpoint generation failed", { error: String(err) });
+			return undefined;
+		}
+	}
+
 	async chat(
 		messages: ChatMessage[],
 		systemPrompt?: SystemPromptInput,
@@ -104,6 +160,7 @@ export class GeminiProvider implements AIProvider {
 		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
+		let lastText = "";
 		const collectedImages: ToolResultImage[] = [];
 		const signal = opts?.signal;
 		const systemText = systemPrompt
@@ -188,6 +245,11 @@ export class GeminiProvider implements AIProvider {
 				} => "functionCall" in p,
 			);
 
+			lastText = parts
+				.filter((p): p is { text: string } => "text" in p)
+				.map((p) => p.text)
+				.join("\n");
+
 			// No function calls — return text
 			if (functionCalls.length === 0) {
 				const textParts = parts
@@ -250,7 +312,11 @@ export class GeminiProvider implements AIProvider {
 			// Phase 2: Execute remaining tools in parallel
 			if (regularCalls.length > 0) {
 				const results = await executeToolsParallel(
-					regularCalls, this.toolRegistry, this.logger, undefined, sessionId,
+					regularCalls,
+					this.toolRegistry,
+					this.logger,
+					undefined,
+					sessionId,
 				);
 				for (const r of results) {
 					if (r.images) collectedImages.push(...r.images);
@@ -271,9 +337,16 @@ export class GeminiProvider implements AIProvider {
 			roundtrips++;
 		}
 
-		return {
-			text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
-			images: collectedImages.length > 0 ? collectedImages : undefined,
-		};
+		const checkpoint = await this.generateCheckpoint(
+			contents,
+			systemText,
+			signal,
+		);
+		return maxRoundtripsResponse(
+			lastText,
+			roundtrips,
+			checkpoint,
+			collectedImages,
+		);
 	}
 }

@@ -1,33 +1,35 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type {
-	MessageParam,
 	ContentBlockParam,
-	ToolUseBlock,
-	ToolResultBlockParam,
 	MessageCreateParamsBase,
+	MessageParam,
 	TextBlockParam,
 	Tool,
+	ToolResultBlockParam,
+	ToolUseBlock,
 } from "@anthropic-ai/sdk/resources/messages";
-import { ToolRegistry } from "./tools.js";
-import { needsSessionId } from "./tool-context.js";
-import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
-import { withRetry } from "./retry.js";
+import type { ToolResult, ToolResultImage } from "../types/message.js";
+import type { Logger } from "../types/plugin.js";
 import {
+	type AIProvider,
+	CHECKPOINT_PROMPT,
+	type ChatMessage,
+	type ChatResponse,
+	type StreamChunk,
+	type SystemPromptInput,
+	maxRoundtripsResponse,
+} from "./base-provider.js";
+import {
+	type ToolCallRequest,
 	executeToolsParallel,
 	executeToolsParallelStreaming,
-	type ToolCallRequest,
 } from "./parallel-tools.js";
-import type {
-	AIProvider,
-	ChatMessage,
-	ChatResponse,
-	StreamChunk,
-	SystemPromptInput,
-} from "./base-provider.js";
-import type { ToolResult, ToolResultImage } from "../types/message.js";
+import { withRetry } from "./retry.js";
 import type { SkillManager } from "./skills.js";
-import type { Logger } from "../types/plugin.js";
+import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import { needsSessionId } from "./tool-context.js";
 import { summarizeToolInput } from "./tool-summary.js";
+import type { ToolRegistry } from "./tools.js";
 
 export interface ClaudeProviderConfig {
 	apiKey: string;
@@ -160,6 +162,51 @@ export class ClaudeProvider implements AIProvider {
 		return this.toolRegistry.toAnthropicToolsFiltered(allowed);
 	}
 
+	/**
+	 * One extra, tool-less model call to distill the in-turn transcript into a
+	 * compact checkpoint when the roundtrip budget is exhausted. Runs at most
+	 * once per turn; never loops. Returns undefined on any failure/abort so the
+	 * caller can degrade gracefully.
+	 */
+	private async generateCheckpoint(
+		conversation: MessageParam[],
+		systemPrompt: SystemPromptInput | undefined,
+		signal?: AbortSignal,
+	): Promise<string | undefined> {
+		try {
+			const cpConversation: MessageParam[] = [
+				...conversation,
+				{ role: "user", content: CHECKPOINT_PROMPT },
+			];
+			const response = await withRetry(
+				() =>
+					this.client.messages
+						.stream(
+							buildClaudeRequest({
+								model: this.model,
+								maxTokens: this.maxTokens,
+								systemPrompt: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+								tools: [],
+								conversation: cpConversation,
+								promptCache: this.promptCache,
+							}),
+						)
+						.finalMessage(),
+				this.logger,
+				{ signal },
+			);
+			const text = response.content
+				.filter((b) => b.type === "text")
+				.map((b) => (b as { type: "text"; text: string }).text)
+				.join("\n")
+				.trim();
+			return text || undefined;
+		} catch (err) {
+			this.logger.warn("Checkpoint generation failed", { error: String(err) });
+			return undefined;
+		}
+	}
+
 	async chat(
 		messages: ChatMessage[],
 		systemPrompt?: SystemPromptInput,
@@ -167,6 +214,7 @@ export class ClaudeProvider implements AIProvider {
 		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
+		let lastText = "";
 		const collectedImages: ToolResultImage[] = [];
 		const signal = opts?.signal;
 		const conversation: MessageParam[] = messages.map((m) => {
@@ -243,6 +291,13 @@ export class ClaudeProvider implements AIProvider {
 				(b): b is ToolUseBlock => b.type === "tool_use",
 			);
 
+			// Track the latest assistant prose so a `max_roundtrips` stop can
+			// surface partial work (the last block is often a tool_use → may be "").
+			lastText = response.content
+				.filter((b) => b.type === "text")
+				.map((b) => (b as { type: "text"; text: string }).text)
+				.join("\n");
+
 			if (response.stop_reason === "end_turn" || toolUseBlocks.length === 0) {
 				const textParts = response.content
 					.filter((b) => b.type === "text")
@@ -303,7 +358,11 @@ export class ClaudeProvider implements AIProvider {
 			// Phase 2: Execute remaining tools in parallel
 			if (regularCalls.length > 0) {
 				const results = await executeToolsParallel(
-					regularCalls, this.toolRegistry, this.logger, undefined, sessionId,
+					regularCalls,
+					this.toolRegistry,
+					this.logger,
+					undefined,
+					sessionId,
 				);
 				for (const r of results) {
 					if (r.images && r.images.length > 0) {
@@ -349,10 +408,20 @@ export class ClaudeProvider implements AIProvider {
 			roundtrips++;
 		}
 
-		return {
-			text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
-			images: collectedImages.length > 0 ? collectedImages : undefined,
-		};
+		// Roundtrip budget exhausted mid-task: distill a checkpoint and report a
+		// structured stop. No user-facing string here — the kernel owns what
+		// happens next (auto-continue, then a checkpoint summary if still stuck).
+		const checkpoint = await this.generateCheckpoint(
+			conversation,
+			systemPrompt,
+			signal,
+		);
+		return maxRoundtripsResponse(
+			lastText,
+			roundtrips,
+			checkpoint,
+			collectedImages,
+		);
 	}
 
 	private buildConversation(messages: ChatMessage[]): MessageParam[] {
@@ -440,11 +509,9 @@ export class ClaudeProvider implements AIProvider {
 				if (signal.aborted) {
 					stream.controller.abort();
 				} else {
-					signal.addEventListener(
-						"abort",
-						() => stream.controller.abort(),
-						{ once: true },
-					);
+					signal.addEventListener("abort", () => stream.controller.abort(), {
+						once: true,
+					});
 				}
 			}
 
@@ -543,13 +610,22 @@ export class ClaudeProvider implements AIProvider {
 					}
 				}
 
-				streamRegularCalls.push({ id: block.id, name: block.name, input: toolInput });
+				streamRegularCalls.push({
+					id: block.id,
+					name: block.name,
+					input: toolInput,
+				});
 			}
 
 			// Phase 2: Execute remaining tools in parallel with streaming
 			if (streamRegularCalls.length > 0) {
 				const gen = executeToolsParallelStreaming(
-					streamRegularCalls, this.toolRegistry, this.logger, roundtrips, undefined, sessionId,
+					streamRegularCalls,
+					this.toolRegistry,
+					this.logger,
+					roundtrips,
+					undefined,
+					sessionId,
 				);
 				let next = await gen.next();
 				while (!next.done) {
@@ -602,9 +678,18 @@ export class ClaudeProvider implements AIProvider {
 			yield { type: "thinking" };
 		}
 
+		// Budget exhausted: emit a provider→kernel-only checkpoint chunk (never
+		// forwarded to the browser). The kernel drives the continuation leg.
+		const checkpoint = await this.generateCheckpoint(
+			conversation,
+			systemPrompt,
+			signal,
+		);
 		yield {
-			type: "text_delta",
-			text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
+			type: "checkpoint",
+			stopReason: "max_roundtrips",
+			roundtripsUsed: roundtrips,
+			checkpoint,
 		};
 	}
 }
