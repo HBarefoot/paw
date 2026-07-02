@@ -1,18 +1,25 @@
-import { ToolRegistry } from "./tools.js";
-import { needsSessionId } from "./tool-context.js";
-import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
-import { withRetry } from "./retry.js";
+import type { ToolResultImage } from "../types/message.js";
+import type { Logger } from "../types/plugin.js";
 import type {
 	AIProvider,
 	ChatMessage,
 	ChatResponse,
 	SystemPromptInput,
 } from "./base-provider.js";
-import { systemPromptToString } from "./base-provider.js";
-import { executeToolsParallel, type ToolCallRequest } from "./parallel-tools.js";
-import type { ToolResultImage } from "../types/message.js";
+import {
+	CHECKPOINT_PROMPT,
+	maxRoundtripsResponse,
+	systemPromptToString,
+} from "./base-provider.js";
+import {
+	type ToolCallRequest,
+	executeToolsParallel,
+} from "./parallel-tools.js";
+import { withRetry } from "./retry.js";
 import type { SkillManager } from "./skills.js";
-import type { Logger } from "../types/plugin.js";
+import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import { needsSessionId } from "./tool-context.js";
+import type { ToolRegistry } from "./tools.js";
 
 export interface OpenAIProviderConfig {
 	apiKey: string;
@@ -122,6 +129,47 @@ export class OpenAIProvider implements AIProvider {
 		}));
 	}
 
+	/**
+	 * One extra, tool-less request to distill the in-turn transcript into a
+	 * compact checkpoint when the roundtrip budget is exhausted. Runs at most
+	 * once per turn; returns undefined on any failure/abort.
+	 */
+	private async generateCheckpoint(
+		conversation: OpenAIMessage[],
+		signal?: AbortSignal,
+	): Promise<string | undefined> {
+		try {
+			const cpConversation: OpenAIMessage[] = [
+				...conversation,
+				{ role: "user", content: CHECKPOINT_PROMPT },
+			];
+			const data = await withRetry(async () => {
+				const res = await fetch(`${this.baseUrl}/chat/completions`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${this.apiKey}`,
+					},
+					body: JSON.stringify({
+						model: this.model,
+						messages: cpConversation,
+						max_tokens: this.maxTokens,
+						// tools intentionally omitted — the checkpoint is text-only.
+					}),
+					signal,
+				});
+				if (!res.ok) {
+					throw new Error(`OpenAI error (${res.status}): ${await res.text()}`);
+				}
+				return (await res.json()) as OpenAIResponse;
+			}, this.logger);
+			return data.choices[0]?.message.content?.trim() || undefined;
+		} catch (err) {
+			this.logger.warn("Checkpoint generation failed", { error: String(err) });
+			return undefined;
+		}
+	}
+
 	async chat(
 		messages: ChatMessage[],
 		systemPrompt?: SystemPromptInput,
@@ -129,6 +177,7 @@ export class OpenAIProvider implements AIProvider {
 		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
+		let lastText = "";
 		const collectedImages: ToolResultImage[] = [];
 		const signal = opts?.signal;
 		const systemText = systemPrompt
@@ -204,6 +253,7 @@ export class OpenAIProvider implements AIProvider {
 			}, this.logger);
 			const choice = data.choices[0];
 			if (!choice) throw new Error("OpenAI returned no choices");
+			lastText = choice.message.content ?? "";
 
 			const toolCalls = choice.message.tool_calls;
 
@@ -245,8 +295,7 @@ export class OpenAIProvider implements AIProvider {
 					// instead of silently coercing to `{}` and re-asking
 					// forever. We feed the error back as a tool result so
 					// the model sees the malformed call and can self-correct.
-					const msg =
-						err instanceof Error ? err.message : String(err);
+					const msg = err instanceof Error ? err.message : String(err);
 					conversation.push({
 						role: "tool",
 						content: `Tool "${call.function.name}" arguments are not valid JSON: ${msg}. Fix the arguments and call again.`,
@@ -279,13 +328,21 @@ export class OpenAIProvider implements AIProvider {
 				if (needsSessionId(call.function.name) && sessionId) {
 					args.__sessionId = sessionId;
 				}
-				regularCalls.push({ id: call.id, name: call.function.name, input: args });
+				regularCalls.push({
+					id: call.id,
+					name: call.function.name,
+					input: args,
+				});
 			}
 
 			// Phase 2: Execute remaining tools in parallel
 			if (regularCalls.length > 0) {
 				const results = await executeToolsParallel(
-					regularCalls, this.toolRegistry, this.logger, undefined, sessionId,
+					regularCalls,
+					this.toolRegistry,
+					this.logger,
+					undefined,
+					sessionId,
 				);
 				for (const r of results) {
 					if (r.images) collectedImages.push(...r.images);
@@ -306,9 +363,12 @@ export class OpenAIProvider implements AIProvider {
 			roundtrips++;
 		}
 
-		return {
-			text: "I've reached the maximum number of tool-use steps. Here's what I've done so far - please let me know if you'd like me to continue.",
-			images: collectedImages.length > 0 ? collectedImages : undefined,
-		};
+		const checkpoint = await this.generateCheckpoint(conversation, signal);
+		return maxRoundtripsResponse(
+			lastText,
+			roundtrips,
+			checkpoint,
+			collectedImages,
+		);
 	}
 }

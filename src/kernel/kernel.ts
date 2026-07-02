@@ -4,12 +4,15 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { AgentRegistry } from "../agents/registry.js";
 import { createSpawnAgentTool } from "../agents/spawn-agent-tool.js";
 import type { AgentDefinition, AgentRunResult } from "../agents/types.js";
-import type {
-	AIProvider,
-	ChatMessage,
-	ChatResponse,
-	StreamChunk,
-	SystemPromptInput,
+import {
+	type AIProvider,
+	type ChatMessage,
+	type ChatResponse,
+	type StreamChunk,
+	type SystemPromptInput,
+	checkpointProgressLine,
+	composeStopMessage,
+	continuationNote,
 } from "../ai/base-provider.js";
 import { CostTracker, estimateTokens } from "../ai/cost-tracker.js";
 import { GeminiProvider } from "../ai/gemini-provider.js";
@@ -35,10 +38,10 @@ import {
 	withVisionFallback,
 } from "../ai/router.js";
 import { SkillManager } from "../ai/skills.js";
-import type { DraftPlaybook } from "../playbooks/manager.js";
-import { PlaybookManager } from "../playbooks/manager.js";
-import { createPlaybookTools } from "../tools/playbook-tools.js";
-import { buildSystemPrompt, buildSystemPromptParts } from "../ai/system-prompt.js";
+import {
+	buildSystemPrompt,
+	buildSystemPromptParts,
+} from "../ai/system-prompt.js";
 import { ToolRegistry } from "../ai/tools.js";
 import { readConfigOverrides } from "../config/writer.js";
 import { CronScheduler } from "../cron/scheduler.js";
@@ -56,8 +59,11 @@ import { preloadEmbedder } from "../memory/embeddings.js";
 import { MemoryStore } from "../memory/store.js";
 import { createMemoryTools } from "../memory/tools.js";
 import { createLogger, setLogLevel } from "../observability/logger.js";
+import { recordRunVerdict, sqliteStamp } from "../observability/run-verdict.js";
 import { ToolLog } from "../observability/tool-log.js";
 import { resolveProjectPath } from "../paths.js";
+import type { DraftPlaybook } from "../playbooks/manager.js";
+import { PlaybookManager } from "../playbooks/manager.js";
 import {
 	AccessController,
 	unrecognizedUserMessage,
@@ -65,24 +71,6 @@ import {
 import { AuditLogger } from "../security/audit-log.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import { VaultManager } from "../security/vault.js";
-import { compileBrandBrief, getActiveBrand } from "../store/brands.js";
-import { closeDb, getDb } from "../store/db.js";
-import {
-	appendMessage,
-	countSessionMessages,
-	getSessionMessages,
-	pruneOldMessages,
-} from "../store/messages.js";
-import { NotificationStore } from "../store/notifications.js";
-import { sessionTitleFromContent } from "../store/session-title.js";
-import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
-import { createActionTools } from "../tools/action-tools.js";
-import {
-	type ApplyEditParams,
-	applyCanvasEdit,
-	createCanvasBridgeTools,
-} from "../tools/canvas-bridge-tools.js";
-import { createCanvasTools } from "../tools/canvas-tools.js";
 import {
 	advanceCardOnApproval,
 	advanceCardOnCompletion,
@@ -94,12 +82,30 @@ import {
 	markEscalated,
 	parkCardForApproval,
 } from "../store/agent-work.js";
-import { createTaskTools } from "../tools/task-tools.js";
-import { recordRunVerdict, sqliteStamp } from "../observability/run-verdict.js";
+import { compileBrandBrief, getActiveBrand } from "../store/brands.js";
+import { closeDb, getDb } from "../store/db.js";
+import {
+	appendMessage,
+	countSessionMessages,
+	getSessionMessages,
+	pruneOldMessages,
+} from "../store/messages.js";
+import { NotificationStore } from "../store/notifications.js";
 import { recordRun } from "../store/runs.js";
+import { sessionTitleFromContent } from "../store/session-title.js";
+import { getOrCreateSession, updateSessionTitle } from "../store/sessions.js";
+import { createActionTools } from "../tools/action-tools.js";
+import {
+	type ApplyEditParams,
+	applyCanvasEdit,
+	createCanvasBridgeTools,
+} from "../tools/canvas-bridge-tools.js";
+import { createCanvasTools } from "../tools/canvas-tools.js";
 import { createCodeTools } from "../tools/code-tools.js";
 import { createExecTools } from "../tools/exec-tools.js";
 import { createFileTools } from "../tools/file-tools.js";
+import { createPlaybookTools } from "../tools/playbook-tools.js";
+import { createTaskTools } from "../tools/task-tools.js";
 import type { PawConfig } from "../types/config.js";
 import type { ToolDefinition } from "../types/message.js";
 import type { InboundMessage } from "../types/message.js";
@@ -533,7 +539,10 @@ export class Kernel {
 		// persistent writable root (PAW_PLAYBOOKS_ROOT → workspace.playbooksRoot,
 		// e.g. /data/playbooks on Railway) where authored playbooks are written so
 		// they survive redeploys. Unset = both collapse to the bundled dir (dev).
-		const bundledPlaybooksDir = resolve(config.workspace.path || ".", "playbooks");
+		const bundledPlaybooksDir = resolve(
+			config.workspace.path || ".",
+			"playbooks",
+		);
 		const writablePlaybooksDir = config.workspace.playbooksRoot
 			? resolve(config.workspace.playbooksRoot)
 			: bundledPlaybooksDir;
@@ -1426,7 +1435,10 @@ export class Kernel {
 			if (res.is_error) return { ok: false, error: res.content };
 			return { ok: true, result: res.content };
 		} catch (err) {
-			return { ok: false, error: err instanceof Error ? err.message : String(err) };
+			return {
+				ok: false,
+				error: err instanceof Error ? err.message : String(err),
+			};
 		}
 	}
 
@@ -2067,109 +2079,145 @@ export class Kernel {
 			// configured; text turns are untouched. On a vision-provider error we
 			// degrade to the default and keep the user's message (with a note).
 			const route = this.routeInboundTurn(messages);
-			// Inner layer (unchanged): the vision route degrades to the default
-			// provider if the vision model errors. Outer layer: the configured
-			// main-chat fallback chain (config.ai.fallback), tried only on transient
-			// errors. The two compose — a vision degrade that still fails flows on
-			// into the fallback chain.
-			let visionFellBack = false;
-			const primaryAttempt: FallbackAttempt<ChatResponse> = {
-				providerName: route.provider.name,
-				model: route.model,
-				run: async () => {
-					const { value, usedFallback } = await withVisionFallback({
-						isVision: route.isVision,
-						primary: () =>
-							route.provider.chat(messages, systemPrompt, msg.sessionId, {
+
+			// One "leg" = a full provider turn with its own vision-degrade +
+			// fallback-chain wrapping, and its own per-leg cost recording (tagged
+			// with the provider that actually served it). A leg that stops with
+			// `max_roundtrips` is continued once (below) from a compacted
+			// checkpoint, so a long task glides past the cap instead of dead-ending.
+			const runLeg = async (
+				legMessages: ChatMessage[],
+			): Promise<{
+				response: ChatResponse;
+				note: string | null | undefined;
+			}> => {
+				// Inner layer: the vision route degrades to the default provider if
+				// the vision model errors. Outer layer: the configured main-chat
+				// fallback chain (transient errors only). The two compose.
+				let visionFellBack = false;
+				const primaryAttempt: FallbackAttempt<ChatResponse> = {
+					providerName: route.provider.name,
+					model: route.model,
+					run: async () => {
+						const { value, usedFallback } = await withVisionFallback({
+							isVision: route.isVision,
+							primary: () =>
+								route.provider.chat(legMessages, systemPrompt, msg.sessionId, {
+									signal: controller.signal,
+								}),
+							onFallback: () => {
+								this.logger.warn(
+									"Vision provider failed; falling back to default",
+									{},
+								);
+								return this.provider.chat(
+									legMessages,
+									systemPrompt,
+									msg.sessionId,
+									{ signal: controller.signal },
+								);
+							},
+						});
+						visionFellBack = usedFallback;
+						return value;
+					},
+				};
+				const fallbackAttempts: FallbackAttempt<ChatResponse>[] =
+					this.fallbackChain.map((fb) => ({
+						providerName: fb.name,
+						model: fb.model,
+						run: () =>
+							fb.provider.chat(legMessages, systemPrompt, msg.sessionId, {
 								signal: controller.signal,
 							}),
-						onFallback: () => {
-							this.logger.warn(
-								"Vision provider failed; falling back to default",
-								{},
-							);
-							return this.provider.chat(messages, systemPrompt, msg.sessionId, {
-								signal: controller.signal,
-							});
-						},
-					});
-					visionFellBack = usedFallback;
-					return value;
-				},
-			};
-			const fallbackAttempts: FallbackAttempt<ChatResponse>[] =
-				this.fallbackChain.map((fb) => ({
-					providerName: fb.name,
-					model: fb.model,
-					run: () =>
-						fb.provider.chat(messages, systemPrompt, msg.sessionId, {
-							signal: controller.signal,
-						}),
-				}));
-			const {
-				value: response,
-				used,
-				usedFallback: providerFellBack,
-			} = await withProviderFallback({
-				primary: primaryAttempt,
-				fallbacks: fallbackAttempts,
-				signal: controller.signal,
-				logger: this.logger,
-			});
-			// Resolve which provider/model actually served the turn (for cost tags)
-			// and the single note to prepend, in priority order.
-			let usedProviderName: string;
-			let usedModel: string;
-			let note: string | null | undefined;
-			if (providerFellBack) {
-				usedProviderName = used.providerName;
-				usedModel = used.model;
-				note = PROVIDER_FALLBACK_NOTE;
-			} else if (visionFellBack) {
-				usedProviderName = this.provider.name;
-				usedModel = this.config.ai.model;
-				note = VISION_ERROR_NOTE;
-			} else {
-				usedProviderName = route.provider.name;
-				usedModel = route.model;
-				note = route.note;
-			}
-			// B6.4: don't fabricate "Done — canvas updated." for an empty
-			// canvas reply — we can't confirm a canvas_write actually ran here,
-			// and asserting success on a no-op is exactly the hallucination we
-			// want to avoid. (The streaming canvas path already uses the raw
-			// reply text; this keeps both paths honest.)
-			let replyText = response.text || "";
-			if (note) replyText = `${note}\n\n${replyText}`;
-			appendMessage(this.db, msg.sessionId, "assistant", replyText);
-
-			// M-NEW-12: record cost in the non-stream path too. If the
-			// provider returned usage, use it; otherwise fall back to a
-			// rough char-based estimate so cost data is non-zero for
-			// non-Claude providers. Tagged with the provider/model that served
-			// the turn (vision model on the vision route, default after fallback).
-			if (this.costTracker) {
-				const usageIn = response.usage?.inputTokens;
-				const usageOut = response.usage?.outputTokens;
-				const inputTokens =
-					usageIn ?? estimateTokens(systemPromptText + "\n" + msg.content);
-				const outputTokens = usageOut ?? estimateTokens(replyText);
-				const model = usedModel;
-				this.costTracker.recordUsage({
-					sessionId: msg.sessionId,
-					provider: usedProviderName ?? this.config.provider,
-					model,
-					inputTokens,
-					outputTokens,
-					estimatedCostUsd: CostTracker.estimateCost(
-						model,
+					}));
+				const {
+					value: response,
+					used,
+					usedFallback: providerFellBack,
+				} = await withProviderFallback({
+					primary: primaryAttempt,
+					fallbacks: fallbackAttempts,
+					signal: controller.signal,
+					logger: this.logger,
+				});
+				// Resolve which provider/model actually served the leg and the note.
+				let usedProviderName: string;
+				let usedModel: string;
+				let note: string | null | undefined;
+				if (providerFellBack) {
+					usedProviderName = used.providerName;
+					usedModel = used.model;
+					note = PROVIDER_FALLBACK_NOTE;
+				} else if (visionFellBack) {
+					usedProviderName = this.provider.name;
+					usedModel = this.config.ai.model;
+					note = VISION_ERROR_NOTE;
+				} else {
+					usedProviderName = route.provider.name;
+					usedModel = route.model;
+					note = route.note;
+				}
+				// M-NEW-12: record cost per leg. Real usage when the provider gives
+				// it; otherwise a rough char-based estimate so non-Claude cost data
+				// is non-zero. Tagged with the serving provider/model.
+				if (this.costTracker) {
+					const inputTokens =
+						response.usage?.inputTokens ??
+						estimateTokens(systemPromptText + "\n" + msg.content);
+					const outputTokens =
+						response.usage?.outputTokens ?? estimateTokens(response.text || "");
+					this.costTracker.recordUsage({
+						sessionId: msg.sessionId,
+						provider: usedProviderName ?? this.config.provider,
+						model: usedModel,
 						inputTokens,
 						outputTokens,
-					),
-					cacheCreationInputTokens: response.usage?.cacheCreationInputTokens,
-					cacheReadInputTokens: response.usage?.cacheReadInputTokens,
-				});
+						estimatedCostUsd: CostTracker.estimateCost(
+							usedModel,
+							inputTokens,
+							outputTokens,
+						),
+						cacheCreationInputTokens: response.usage?.cacheCreationInputTokens,
+						cacheReadInputTokens: response.usage?.cacheReadInputTokens,
+					});
+				}
+				return { response, note };
+			};
+
+			let leg = await runLeg(messages);
+			let progressPrefix = "";
+			// L2: exactly one automatic checkpointed continuation before we ever
+			// show a stop message. The continuation runs on the SAME route/provider
+			// that served leg 1 (a checkpoint is meaningless to a different one).
+			if (leg.response.stopReason === "max_roundtrips") {
+				const checkpoint = leg.response.checkpoint;
+				progressPrefix = `${checkpointProgressLine(checkpoint)}\n\n`;
+				const partial = leg.response.text || checkpoint || "";
+				const msgs2: ChatMessage[] = [
+					...messages,
+					{ role: "assistant", content: partial },
+					{ role: "user", content: continuationNote(checkpoint) },
+				];
+				const leg1Images = leg.response.images;
+				leg = await runLeg(msgs2);
+				if (leg1Images && leg1Images.length > 0) {
+					leg.response.images = [...leg1Images, ...(leg.response.images ?? [])];
+				}
 			}
+
+			const response = leg.response;
+			const note = leg.note;
+			// B6.4: don't fabricate success text for an empty reply. If the
+			// continuation leg ALSO hit the cap, stop with a checkpoint summary
+			// that names what's done / what's left (never the old generic string).
+			let replyText =
+				response.stopReason === "max_roundtrips"
+					? composeStopMessage(response.checkpoint)
+					: response.text || "";
+			replyText = `${progressPrefix}${replyText}`;
+			if (note) replyText = `${note}\n\n${replyText}`;
+			appendMessage(this.db, msg.sessionId, "assistant", replyText);
 
 			await this.bus.emit("message:outbound", {
 				sessionId: msg.sessionId,
@@ -2456,6 +2504,9 @@ export class Kernel {
 		const { messages, systemPrompt } = prepared;
 		let fullText = "";
 		let cancelled = false;
+		// Set by streamWith when a leg stops with `max_roundtrips`; drives the
+		// single continuation leg below. Reset before leg 2 to detect a re-cap.
+		let capCheckpoint: string | undefined;
 
 		// Register an abort controller so the /api/chat/cancel endpoint can
 		// signal this stream. One per session; a new message replaces the
@@ -2481,10 +2532,11 @@ export class Kernel {
 		let producedModelText = false;
 		const streamWith = async function* (
 			provider: AIProvider,
+			msgs: ChatMessage[],
 		): AsyncGenerator<StreamChunk> {
 			if (provider.chatStream) {
 				for await (const chunk of provider.chatStream(
-					messages,
+					msgs,
 					systemPrompt,
 					msg.sessionId,
 					{ signal: controller.signal },
@@ -2492,6 +2544,13 @@ export class Kernel {
 					if (controller.signal.aborted) {
 						cancelled = true;
 						break;
+					}
+					// Provider→kernel only: a `max_roundtrips` checkpoint. Capture it
+					// and end this leg; the kernel drives continuation. Never yielded
+					// to the browser.
+					if (chunk.type === "checkpoint") {
+						capCheckpoint = chunk.checkpoint;
+						return;
 					}
 					if (chunk.type === "text_delta" && chunk.text) {
 						fullText += chunk.text;
@@ -2522,19 +2581,29 @@ export class Kernel {
 					yield chunk;
 				}
 			} else {
+				// No streaming API (OpenAI/Gemini): run the whole turn and wrap the
+				// result in a single text_delta. A `max_roundtrips` stop surfaces on
+				// the ChatResponse — capture the checkpoint the same way.
 				yield { type: "thinking" } as StreamChunk;
 				const response = await provider.chat(
-					messages,
+					msgs,
 					systemPrompt,
 					msg.sessionId,
-					{ signal: controller.signal },
+					{
+						signal: controller.signal,
+					},
 				);
-				fullText += response.text;
-				producedModelText = true;
-				yield { type: "text_delta", text: response.text };
+				if (response.text) {
+					fullText += response.text;
+					producedModelText = true;
+					yield { type: "text_delta", text: response.text };
+				}
 				if (response.usage) {
 					inputTokensTotal += response.usage.inputTokens;
 					outputTokensTotal += response.usage.outputTokens;
+				}
+				if (response.stopReason === "max_roundtrips") {
+					capCheckpoint = response.checkpoint;
 				}
 			}
 		};
@@ -2581,7 +2650,7 @@ export class Kernel {
 			let attemptIdx = 0;
 			while (true) {
 				try {
-					yield* streamWith(streamAttempts[attemptIdx].provider);
+					yield* streamWith(streamAttempts[attemptIdx].provider, messages);
 					break;
 				} catch (streamErr) {
 					const next = streamAttempts[attemptIdx + 1];
@@ -2620,6 +2689,31 @@ export class Kernel {
 				yield { type: "error", error: "Generation stopped by user" };
 				yield { type: "done" };
 				return;
+			}
+
+			// L2: exactly one automatic checkpointed continuation. Runs on the
+			// provider that actually served leg 1 (a checkpoint is meaningless to a
+			// different provider); the "▸ Checkpoint …" line persists in the stored
+			// message. If the continuation ALSO caps, close with a summary.
+			if (capCheckpoint !== undefined && !controller.signal.aborted) {
+				const servingProvider = streamAttempts[attemptIdx].provider;
+				const checkpoint = capCheckpoint;
+				capCheckpoint = undefined;
+				const leg1Assistant = fullText;
+				const progress = `${checkpointProgressLine(checkpoint)}\n\n`;
+				yield { type: "text_delta", text: progress };
+				fullText += progress;
+				const msgs2: ChatMessage[] = [
+					...messages,
+					{ role: "assistant", content: leg1Assistant || checkpoint },
+					{ role: "user", content: continuationNote(checkpoint) },
+				];
+				yield* streamWith(servingProvider, msgs2);
+				if (!cancelled && capCheckpoint !== undefined) {
+					const stop = `\n\n${composeStopMessage(capCheckpoint)}`;
+					yield { type: "text_delta", text: stop };
+					fullText += stop;
+				}
 			}
 
 			const replyText = fullText || "";

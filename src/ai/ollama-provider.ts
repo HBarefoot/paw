@@ -1,7 +1,6 @@
-import { ToolRegistry } from "./tools.js";
-import { needsSessionId } from "./tool-context.js";
-import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
-import { withRetry } from "./retry.js";
+import { FRAME_CLOSE, FRAME_OPEN } from "../security/untrusted.js";
+import type { ToolResultImage } from "../types/message.js";
+import type { Logger } from "../types/plugin.js";
 import type {
 	AIProvider,
 	ChatMessage,
@@ -9,17 +8,22 @@ import type {
 	StreamChunk,
 	SystemPromptInput,
 } from "./base-provider.js";
-import { systemPromptToString } from "./base-provider.js";
-import { FRAME_CLOSE, FRAME_OPEN } from "../security/untrusted.js";
-import { summarizeToolInput } from "./tool-summary.js";
 import {
+	CHECKPOINT_PROMPT,
+	maxRoundtripsResponse,
+	systemPromptToString,
+} from "./base-provider.js";
+import {
+	type ToolCallRequest,
 	executeToolsParallel,
 	executeToolsParallelStreaming,
-	type ToolCallRequest,
 } from "./parallel-tools.js";
-import type { ToolResultImage } from "../types/message.js";
+import { withRetry } from "./retry.js";
 import type { SkillManager } from "./skills.js";
-import type { Logger } from "../types/plugin.js";
+import { DEFAULT_SYSTEM_PROMPT } from "./system-prompt.js";
+import { needsSessionId } from "./tool-context.js";
+import { summarizeToolInput } from "./tool-summary.js";
+import type { ToolRegistry } from "./tools.js";
 
 export interface OllamaProviderConfig {
 	baseUrl: string;
@@ -175,6 +179,50 @@ export class OllamaProvider implements AIProvider {
 		}));
 	}
 
+	/**
+	 * One extra, tool-less request to distill the in-turn transcript into a
+	 * compact checkpoint when the roundtrip budget is exhausted. Runs at most
+	 * once per turn; returns undefined on any failure/abort.
+	 */
+	private async generateCheckpoint(
+		conversation: OllamaMessage[],
+		signal?: AbortSignal,
+	): Promise<string | undefined> {
+		try {
+			const cpConversation: OllamaMessage[] = [
+				...conversation,
+				{ role: "user", content: CHECKPOINT_PROMPT },
+			];
+			const data = await withRetry(async () => {
+				const res = await fetch(`${this.baseUrl}/api/chat`, {
+					method: "POST",
+					headers: this.headers,
+					body: JSON.stringify({
+						model: this.model,
+						messages: cpConversation,
+						stream: false,
+						options: { num_predict: this.numPredict },
+						// tools intentionally omitted — the checkpoint is text-only.
+					}),
+					signal: signal
+						? AbortSignal.any([
+								signal,
+								AbortSignal.timeout(this.requestTimeoutMs),
+							])
+						: AbortSignal.timeout(this.requestTimeoutMs),
+				});
+				if (!res.ok) {
+					throw new Error(`Ollama error (${res.status}): ${await res.text()}`);
+				}
+				return (await res.json()) as OllamaResponse;
+			}, this.logger);
+			return data.message.content?.trim() || undefined;
+		} catch (err) {
+			this.logger.warn("Checkpoint generation failed", { error: String(err) });
+			return undefined;
+		}
+	}
+
 	async chat(
 		messages: ChatMessage[],
 		systemPrompt?: SystemPromptInput,
@@ -182,6 +230,7 @@ export class OllamaProvider implements AIProvider {
 		opts?: { signal?: AbortSignal },
 	): Promise<ChatResponse> {
 		let roundtrips = 0;
+		let lastText = "";
 		const collectedImages: ToolResultImage[] = [];
 		const signal = opts?.signal;
 
@@ -264,6 +313,7 @@ export class OllamaProvider implements AIProvider {
 				return (await res.json()) as OllamaResponse;
 			}, this.logger);
 			const toolCalls = data.message.tool_calls;
+			lastText = data.message.content || "";
 
 			// No tool calls — return the text response
 			if (!toolCalls || toolCalls.length === 0) {
@@ -347,10 +397,13 @@ export class OllamaProvider implements AIProvider {
 			roundtrips,
 			maxRoundtrips: this.maxToolRoundtrips,
 		});
-		return {
-			text: `I've reached the maximum number of tool-use steps (${roundtrips}/${this.maxToolRoundtrips}). Here's what I've done so far - please let me know if you'd like me to continue.`,
-			images: collectedImages.length > 0 ? collectedImages : undefined,
-		};
+		const checkpoint = await this.generateCheckpoint(conversation, signal);
+		return maxRoundtripsResponse(
+			lastText,
+			roundtrips,
+			checkpoint,
+			collectedImages,
+		);
 	}
 
 	async *chatStream(
@@ -711,9 +764,14 @@ export class OllamaProvider implements AIProvider {
 			yield { type: "thinking" };
 		}
 
+		// Budget exhausted: emit a provider→kernel-only checkpoint chunk (never
+		// forwarded to the browser). The kernel drives the continuation leg.
+		const checkpoint = await this.generateCheckpoint(conversation, signal);
 		yield {
-			type: "text_delta",
-			text: `I've reached the maximum number of tool-use steps (${roundtrips}/${this.maxToolRoundtrips}). Here's what I've done so far - please let me know if you'd like me to continue.`,
+			type: "checkpoint",
+			stopReason: "max_roundtrips",
+			roundtripsUsed: roundtrips,
+			checkpoint,
 		};
 		yield { type: "done" };
 	}
