@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Paw
 
-Paw is a personal AI assistant framework built with Bun. It supports multiple AI providers (Claude, OpenAI, Ollama, Gemini), a plugin system, MCP servers, memory with vector search, cron scheduling, and a web UI. The entry point is `bin/paw.ts`.
+Paw is a self-hosted AI agent platform built with Bun — it runs Barefoot Digital's day-to-day operations. It supports multiple AI providers (Claude, OpenAI, Ollama, Gemini), a plugin system, MCP servers, memory with vector search, cron scheduling, and a web UI. The entry point is `bin/paw.ts`.
 
 ## Commands
 

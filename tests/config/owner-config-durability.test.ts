@@ -65,9 +65,9 @@ describe("PAW_SECURITY_* env id lists union into the loaded config", () => {
 			JSON.stringify({ security: { ownerUserIds: ["U_CONFIG"] } }),
 			"utf-8",
 		);
-		process.env.PAW_SECURITY_OWNER_USER_IDS = "U03H65TPZ1N, U999";
+		process.env.PAW_SECURITY_OWNER_USER_IDS = "U0EXAMPLE01, U999";
 		const owners = loadConfig().security.ownerUserIds;
-		expect(owners).toContain("U03H65TPZ1N");
+		expect(owners).toContain("U0EXAMPLE01");
 		expect(owners).toContain("U999");
 		// unioned, not replaced
 		expect(owners).toContain("U_CONFIG");
@@ -79,8 +79,8 @@ describe("PAW_SECURITY_* env id lists union into the loaded config", () => {
 			JSON.stringify({ security: { ownerUserIds: [] } }),
 			"utf-8",
 		);
-		process.env.PAW_SECURITY_OWNER_USER_IDS = "U03H65TPZ1N";
-		expect(loadConfig().security.ownerUserIds).toContain("U03H65TPZ1N");
+		process.env.PAW_SECURITY_OWNER_USER_IDS = "U0EXAMPLE01";
+		expect(loadConfig().security.ownerUserIds).toContain("U0EXAMPLE01");
 	});
 
 	test("allowed + blocked env lists also load; dedupe across env+config", () => {
@@ -111,17 +111,17 @@ describe("PAW_SECURITY_* env id lists union into the loaded config", () => {
 	});
 
 	test("an env-only owner is recognized by AccessController with NO DB row", () => {
-		process.env.PAW_SECURITY_OWNER_USER_IDS = "U03H65TPZ1N";
+		process.env.PAW_SECURITY_OWNER_USER_IDS = "U0EXAMPLE01";
 		const cfg = loadConfig();
 		const db = newDb();
 		const ac = new AccessController(db, createLogger("test"), {
 			ownerUserIds: cfg.security.ownerUserIds,
 		});
-		expect(ac.isUserApproved("U03H65TPZ1N", "slack")).toBe(true);
+		expect(ac.isUserApproved("U0EXAMPLE01", "slack")).toBe(true);
 		expect(
 			db
 				.prepare("SELECT user_id FROM approved_users WHERE user_id = ?")
-				.get("U03H65TPZ1N"),
+				.get("U0EXAMPLE01"),
 		).toBeNull();
 		db.close();
 	});

@@ -298,8 +298,8 @@ describe("access controller — approvals survive a restart (same db file)", () 
 		db1.run(APPROVED_DDL);
 		db1.run(PAIRING_DDL);
 		const ac1 = new AccessController(db1, createLogger("test"));
-		ac1.approveUser("U03H65TPZ1N", "pairing_code", "all");
-		expect(ac1.isUserApproved("U03H65TPZ1N", "slack")).toBe(true);
+		ac1.approveUser("U0EXAMPLE01", "pairing_code", "all");
+		expect(ac1.isUserApproved("U0EXAMPLE01", "slack")).toBe(true);
 		db1.close();
 
 		// Second "process" (simulated restart): reopen the SAME file, no in-memory
@@ -308,7 +308,7 @@ describe("access controller — approvals survive a restart (same db file)", () 
 		db2.run(APPROVED_DDL); // CREATE TABLE IF NOT EXISTS — must not wipe the row
 		db2.run(PAIRING_DDL);
 		const ac2 = new AccessController(db2, createLogger("test"));
-		expect(ac2.isUserApproved("U03H65TPZ1N", "slack")).toBe(true);
+		expect(ac2.isUserApproved("U0EXAMPLE01", "slack")).toBe(true);
 		db2.close();
 	});
 });
