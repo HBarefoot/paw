@@ -6,7 +6,7 @@
 
 ---
 
-You are working in the **Paw** repository — a personal AI assistant framework built with Bun. Read `CLAUDE.md` first for architecture, commands, and conventions, and skim `REVIEW-2026-06-09.md` so you don't reintroduce fixed vulnerabilities. Your task is to implement **three features** that prepare Paw for acquisition: a document knowledge base, human-in-the-loop tool approvals, and an ops dashboard.
+You are working in the **Paw** repository — a personal AI assistant framework built with Bun. Read `CLAUDE.md` first for architecture, commands, and conventions, and skim `docs/internal/REVIEW-2026-06-09.md` so you don't reintroduce fixed vulnerabilities. Your task is to implement **three features** that prepare Paw for acquisition: a document knowledge base, human-in-the-loop tool approvals, and an ops dashboard.
 
 ## Ground rules (non-negotiable)
 
@@ -122,6 +122,6 @@ You are working in the **Paw** repository — a personal AI assistant framework 
 
 Order: **Feature 2 → Feature 1 → Feature 3** (approvals is smallest and de-risks the others; the dashboard wants approvals data to exist).
 
-Each PR description must include: what was built, schema changes, security considerations (what untrusted input is handled and how), test counts before/after, and any config additions with defaults. If you complete items that overlap `REVIEW-2026-06-09.md` Phase 5, update its checkboxes and `## Changelog`.
+Each PR description must include: what was built, schema changes, security considerations (what untrusted input is handled and how), test counts before/after, and any config additions with defaults. If you complete items that overlap `docs/internal/REVIEW-2026-06-09.md` Phase 5, update its checkboxes and `## Changelog`.
 
 Definition of done for the whole task: all three PRs merged, `bun test` green, lint no worse than baseline, and a 10-line demo script in each PR description showing the feature working end-to-end.

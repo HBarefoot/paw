@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Security & Action Plan
 
-**See `REVIEW-2026-06-09.md` for the current security review and phased action plan.** It contains the active Critical/High/Medium findings and the Phase 0–5 implementation roadmap with status checkboxes. Update its `## Changelog` section when phases close. Sibling reports: `AUDIT-REPORT.md` (Feb 2026), `OPTIMIZATION-REPORT.md` (Feb 2026).
+**See `docs/internal/REVIEW-2026-06-09.md` for the current security review and phased action plan.** It contains the active Critical/High/Medium findings and the Phase 0–5 implementation roadmap with status checkboxes. Update its `## Changelog` section when phases close. Sibling reports: `docs/internal/AUDIT-REPORT.md` (Feb 2026), `docs/internal/OPTIMIZATION-REPORT.md` (Feb 2026).
 
 ## What is Paw
 
