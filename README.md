@@ -1,6 +1,14 @@
-# Paw
+# 🐾 Paw
 
-An AI assistant framework built with Bun, designed to run unattended *honestly*: it tracks its work on a ledger it can't fake, scores its own runs for phantom success, and asks a human before any consequential action. Multi-provider, with a plugin system, MCP servers, vector-search memory, cron scheduling, and a web console.
+**The self-hosted AI agent platform that runs Barefoot Digital's day-to-day operations** — CRM automation, scheduling, research, and client workflows, in production since 2025.
+
+Paw is proprietary, source-available software (see [LICENSE](LICENSE.md)): the code is public because we believe proof beats claims. It is built and operated by [Barefoot Digital](https://www.barefootdigital.dev), an AI adoption consultancy — the systems we recommend to clients are the kind we run ourselves.
+
+**What it does:** multi-provider LLM support, persistent memory (hybrid vector + full-text search), a sandboxed skill/plugin system, an MCP client over multiple transports, scheduled jobs, an encrypted credential vault, a white-label brand kit, and an operations console with a web UI.
+
+**Status:** active, in production. Not accepting external contributions at this time.
+
+> Interested in what a system like this could do inside your company? That's literally our job: [barefootdigital.dev/audit](https://www.barefootdigital.dev/audit)
 
 ## Trust & Autonomy
 
@@ -94,7 +102,7 @@ PAW_LOG_LEVEL=info
 # AFTER the file merge, so an env-declared owner is recognized on every boot
 # regardless of config.json or DB state — immune to the config writer. An owner
 # id needs no approved_users row or pairing code.
-PAW_SECURITY_OWNER_USER_IDS=U03H65TPZ1N
+PAW_SECURITY_OWNER_USER_IDS=U0XXXXXXXXX
 PAW_SECURITY_ALLOWED_USERS=
 PAW_SECURITY_BLOCKED_USERS=
 ```

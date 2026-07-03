@@ -39,9 +39,9 @@ beforeEach(() => {
 // is recognized even with no approved_users row (i.e. after an ephemeral-DB reset).
 describe("persist-to-config makes an approval survive a DB reset", () => {
 	test("replaceConfigOverride(security.allowedUsers) round-trips and is honored with no DB row", () => {
-		replaceConfigOverride("security.allowedUsers", ["U03H65TPZ1N"]);
+		replaceConfigOverride("security.allowedUsers", ["U0EXAMPLE01"]);
 		const cfg = loadConfig();
-		expect(cfg.security.allowedUsers).toContain("U03H65TPZ1N");
+		expect(cfg.security.allowedUsers).toContain("U0EXAMPLE01");
 
 		// Fresh kernel/AccessController built from the persisted config, EMPTY DB.
 		const db = new Database(":memory:");
@@ -52,12 +52,12 @@ describe("persist-to-config makes an approval survive a DB reset", () => {
 		const ac = new AccessController(db, createLogger("test"), {
 			allowedUsers: cfg.security.allowedUsers,
 		});
-		expect(ac.isUserApproved("U03H65TPZ1N", "slack")).toBe(true);
+		expect(ac.isUserApproved("U0EXAMPLE01", "slack")).toBe(true);
 		// ...with no approved_users row at all.
 		expect(
 			db
 				.prepare("SELECT user_id FROM approved_users WHERE user_id = ?")
-				.get("U03H65TPZ1N"),
+				.get("U0EXAMPLE01"),
 		).toBeNull();
 		db.close();
 	});

@@ -6,7 +6,7 @@
 
 ---
 
-You are working in the **Paw** repository — a personal AI assistant framework built with Bun. Read `CLAUDE.md` first for architecture, commands, and conventions, and skim `docs/internal/REVIEW-2026-06-09.md` so you don't reintroduce fixed vulnerabilities. Your task is to implement **three features** that prepare Paw for acquisition: a document knowledge base, human-in-the-loop tool approvals, and an ops dashboard.
+You are working in the **Paw** repository — a self-hosted AI agent platform built with Bun. Read `CLAUDE.md` first for architecture, commands, and conventions, and skim `docs/internal/REVIEW-2026-06-09.md` so you don't reintroduce fixed vulnerabilities. Your task is to implement **three features** that prepare Paw for acquisition: a document knowledge base, human-in-the-loop tool approvals, and an ops dashboard.
 
 ## Ground rules (non-negotiable)
 

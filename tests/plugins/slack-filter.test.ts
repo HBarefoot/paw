@@ -7,7 +7,7 @@ import {
 } from "../../plugins/slack/filter.js";
 
 const BOT = "UPAWBOT";
-const OWNER = "U03H65TPZ1N";
+const OWNER = "U0EXAMPLE01";
 
 describe("evaluateSlackMessage — channel @mention gating", () => {
 	test("DM is always handled, mention not required", () => {
