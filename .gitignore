@@ -22,7 +22,14 @@ llms-full.txt
 # design tool) — reference only; the shipped design notes live in docs/design/.
 Interactive Data Visualization/
 Skill Layout Design/
-docs/prompts/PROMPT-*
+
+# Internal working notes: task prompts + private business docs. The prompts dir
+# was once tracked (files predate the ignore rule) — untracked deliberately.
+docs/prompts/
+docs/internal/private/
+
+# Secret-scan output (Phase D) — the report must never be committed
+gitleaks-report.json
 
 # Agent-tooling state (added by `skills add`): local skill cache + symlinks +
 # lockfile. Machine-local — .claude/skills holds symlinks that break on other
