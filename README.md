@@ -242,13 +242,6 @@ tests/              Test suite (Bun test runner)
 
 ## License
 
-Paw is licensed under the Apache License 2.0 — see [LICENSE](./LICENSE) for the full text.
+Paw is proprietary, source-available software — © Astral Events Miami LLC d/b/a Barefoot Digital, all rights reserved. The source is published for transparency, evaluation, and educational reading; no use, deployment, or redistribution rights are granted. See [LICENSE.md](./LICENSE.md) for the full terms.
 
-### Commercial use
-Apache 2.0 explicitly grants commercial use. No additional license is required for companies adopting Paw in production.
-
-### Enterprise support
-For organizations that need dedicated support, custom integration help, indemnification, or a commercial-license override, contact hb@barefootdigital.dev or see [Polar.sh](https://polar.sh/barefoot-digital).
-
-### Contributing
-External contributions are welcome. By submitting a pull request, you agree to the terms in [CLA.md](./CLA.md), which grants Barefoot Digital the right to relicense future versions of contributed code. This protects the project's ability to evolve its business model over time without orphaning past contributors' work.
+For commercial licensing, partnership, or deployment inquiries: info@barefootdigital.dev · [barefootdigital.dev](https://www.barefootdigital.dev)

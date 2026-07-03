@@ -8,6 +8,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > and bumps `package.json`'s `version`. After the PR merges, tag from `main`:
 > `git tag vX.Y.Z && git push --tags` — never tag from the feature branch.
 
+## [Unreleased]
+
+### License
+- Relicensed from Apache 2.0 to proprietary, source-available (all rights reserved,
+  © Astral Events Miami LLC d/b/a Barefoot Digital). The code stays public to read;
+  use/deployment now requires written permission — see `LICENSE.md`. Versions
+  released under Apache 2.0 remain Apache 2.0. Removed `CLA.md` (external
+  contributions are closed) and marked the package `private` so it can never be
+  published to npm.
+
 ## [0.7.0] - 2026-06-14
 
 The Barefoot Console re-theme — the whole web console moves onto the design system,
